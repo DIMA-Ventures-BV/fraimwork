@@ -1,11 +1,17 @@
-// Tailscale access policy for fraimwork. Paste into https://login.tailscale.com/admin/acls
-// and replace the example addresses.
+// Tailscale access policy for fraimwork.
+//
+// IMPORTANT: this file REPLACES your tailnet's whole policy when you paste it.
+// If your tailnet already has rules you care about, merge the groups, tagOwners,
+// grants and ssh entries below into your existing policy instead.
+// `fraim tailscale policy --email you@example.com` prints this file filled in.
 //
 // Effect:
+//   - Your own devices (laptop, phone) can still reach each other.
 //   - People in group:fraim-users can reach fraim servers on the fraim ports.
 //   - fraim servers can reach NOTHING on the tailnet, so a server can never
 //     connect to a laptop or phone (there is no grant with tag:fraim as src).
-//   - Admins can open a root shell on servers with Tailscale SSH.
+//   - Admins get a root shell on servers with Tailscale SSH, without re-login
+//     prompts, so Claude can run admin commands unattended.
 {
   "groups": {
     "group:fraim-users": ["michael@example.com"],
@@ -18,6 +24,12 @@
 
   "grants": [
     {
+      // keep every member's own devices connected to each other
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
+      "ip": ["*"],
+    },
+    {
       // workspace SSH, mosh, noVNC, Syncthing GUI and sync
       "src": ["group:fraim-users"],
       "dst": ["tag:fraim"],
@@ -27,7 +39,7 @@
 
   "ssh": [
     {
-      "action": "check",
+      "action": "accept",
       "src": ["group:fraim-admins"],
       "dst": ["tag:fraim"],
       "users": ["root"],

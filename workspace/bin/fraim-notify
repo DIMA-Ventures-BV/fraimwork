@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Sends a WhatsApp message to the owner. Usage: fraim-notify "text"  or  echo text | fraim-notify
 set -euo pipefail
-
 # shellcheck source=/dev/null
 . /etc/fraim/runtime.env
 
@@ -12,8 +11,4 @@ case ",${FRAIM_MODULES:-}," in
   *) echo "fraim-notify: the whatsapp module is off, message not sent" >&2; exit 0 ;;
 esac
 
-jq -n --arg to "$WHATSAPP_OWNER" --arg text "$text" '{to: $to, text: $text}' \
-  | curl -fsS -X POST \
-      -H "Authorization: Bearer ${FRAIM_GATEWAY_TOKEN}" \
-      -H 'Content-Type: application/json' \
-      --data @- "${FRAIM_GATEWAY_URL}/send" >/dev/null
+fraim-gateway POST /send "$(jq -n --arg to "$WHATSAPP_OWNER" --arg text "$text" '{to: $to, text: $text}')" >/dev/null

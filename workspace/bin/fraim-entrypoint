@@ -17,6 +17,7 @@ write_runtime_env() {
     printf 'BROWSER_CDP_URL=%q\n' "${BROWSER_CDP_URL:-}"
     printf 'FRAIM_BROWSER_VIEW_URL=%q\n' "${FRAIM_BROWSER_VIEW_URL:-}"
     printf 'TZ=%q\n' "${TZ:-UTC}"
+    printf 'FRAIM_AUTO_CONFIRM_CHANNEL=%q\n' "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}"
   } > /etc/fraim/runtime.env
   chown root:claude /etc/fraim/runtime.env
   chmod 0640 /etc/fraim/runtime.env
@@ -39,6 +40,20 @@ prepare_home() {
     fi
   done
   chown claude:claude "$home/.claude"
+
+  # Skip Claude Code's first-run theme picker and the folder trust prompt for ~/fraim,
+  # so the always-on session never waits for a human at those screens.
+  local state="$home/.claude.json" tmp
+  [ -s "$state" ] || echo '{}' > "$state"
+  tmp="$(mktemp)"
+  jq --arg dir "$home/fraim" '
+    .hasCompletedOnboarding = true
+    | .theme = (.theme // "dark")
+    | .projects[$dir].hasTrustDialogAccepted = true
+  ' "$state" > "$tmp" && cat "$tmp" > "$state"
+  rm -f "$tmp"
+  chown claude:claude "$state"
+  chmod 0600 "$state"
 }
 
 as_claude() {
@@ -65,10 +80,19 @@ case "$role" in
     done
 
     install -d -o claude -g claude -m 0700 "$home/.ssh"
+    rm -f "$home/.ssh/authorized_keys"
+    install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
     if [ -s /etc/fraim/authorized_keys ]; then
-      install -o claude -g claude -m 0600 /etc/fraim/authorized_keys "$home/.ssh/authorized_keys"
+      install -o root -g root -m 0644 /etc/fraim/authorized_keys /etc/ssh/authorized_keys/claude
     else
       echo "fraim: config/authorized_keys is empty, nobody can log in" >&2
+    fi
+
+    if command -v fraim-config >/dev/null; then
+      as_claude "fraim-config init --role server --quiet" || echo "fraim: fraim-config init failed" >&2
+    fi
+    if [ -d /opt/fraim/server-plugin ]; then
+      as_claude "mkdir -p ~/.claude/skills && ln -sfn /opt/fraim/server-plugin ~/.claude/skills/fraim-system"
     fi
 
     register_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"

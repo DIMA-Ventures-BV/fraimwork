@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Authenticated call to the WhatsApp gateway. Usage: fraim-gateway GET /status
+#                                                    fraim-gateway POST /send '{"to":"316...","text":"hi"}'
+set -euo pipefail
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env
+
+method="${1:?usage: fraim-gateway METHOD PATH [JSON]}"
+route="${2:?usage: fraim-gateway METHOD PATH [JSON]}"
+case ",${FRAIM_MODULES:-}," in
+  *,whatsapp,*) ;;
+  *) echo "fraim-gateway: the whatsapp module is off" >&2; exit 2 ;;
+esac
+
+args=(-fsS -X "$method" -H "Authorization: Bearer ${FRAIM_GATEWAY_TOKEN}")
+if [ $# -ge 3 ]; then args+=(-H 'Content-Type: application/json' --data "$3"); fi
+exec curl "${args[@]}" "${FRAIM_GATEWAY_URL}${route}"

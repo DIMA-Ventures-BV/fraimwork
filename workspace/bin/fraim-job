@@ -19,7 +19,7 @@ mkdir -p "$log_dir"
 log="$log_dir/$name-$(date +%Y%m%d-%H%M%S).md"
 
 cd "$HOME/fraim" || exit 1
-output="$(timeout "${FRAIM_JOB_TIMEOUT:-1800}" claude -p "$(cat "$prompt_file")" --allowedTools "$tools" 2>&1)"
+output="$(timeout "${FRAIM_JOB_TIMEOUT:-1800}" fraim-claude -p "$(cat "$prompt_file")" --allowedTools "$tools" 2>&1)"
 code=$?
 
 printf '%s\n' "$output" > "$log"

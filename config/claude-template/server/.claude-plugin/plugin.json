@@ -1,0 +1,5 @@
+{
+  "name": "fraim-server",
+  "version": "0.1.0",
+  "description": "Loaded only on the fraimwork server: scheduled-job skills and server-side integrations."
+}

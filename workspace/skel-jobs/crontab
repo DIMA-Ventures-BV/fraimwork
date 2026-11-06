@@ -4,8 +4,8 @@
 # Format: minute hour day-of-month month day-of-week command
 # Each job prompt lives in ~/fraim/jobs/<name>.md. Allowed tools go in <name>.tools (optional).
 
-# Health check every morning; sends a WhatsApp message only when something is broken.
-0 7 * * * fraim-doctor --notify
+# Health check every hour; sends a WhatsApp message only when something breaks or recovers.
+0 * * * * fraim-doctor --notify
 
 # Example, remove the # to enable:
 # 0 8 * * 1-5 fraim-job example

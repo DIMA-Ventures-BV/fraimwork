@@ -1,37 +1,59 @@
 #!/usr/bin/env bash
-# Checks every fraimwork part. With --notify, sends failures to WhatsApp.
+# Checks every fraimwork part. Exit code 1 when anything fails.
+#   --json    machine-readable output
+#   --notify  send failures to the owner on WhatsApp
 set -u
-
 # shellcheck source=/dev/null
 . /etc/fraim/runtime.env 2>/dev/null || true
 
-failures=()
+json=0 notify=0
+for arg in "$@"; do
+  case "$arg" in --json) json=1 ;; --notify) notify=1 ;; esac
+done
+
+names=() results=() failures=()
 check() {
   local label="$1"; shift
-  if "$@" >/dev/null 2>&1; then
-    printf 'OK    %s\n' "$label"
-  else
-    printf 'FAIL  %s\n' "$label"
-    failures+=("$label")
-  fi
+  if "$@" >/dev/null 2>&1; then results+=(true); else results+=(false); failures+=("$label"); fi
+  names+=("$label")
 }
 has_module() { case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+logged_in() { [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.config/fraim/claude-token" ]; }
 
-check "Claude login present" test -s "$HOME/.claude/.credentials.json"
-check "Disk below 90% full" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
+check "claude-login" logged_in
+check "disk-below-90-percent" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
+check "claude-session-running" pgrep -x claude
+has_module whatsapp && check "whatsapp-connected" sh -c "fraim-gateway GET /status | jq -e .connected"
+has_module browser && check "server-browser" curl -fsS "${BROWSER_CDP_URL}/json/version"
+has_module sync && check "syncthing" curl -fsS http://syncthing:8384/rest/noauth/health
 
-if has_module whatsapp; then
-  check "WhatsApp connected" sh -c "curl -fsS -H 'Authorization: Bearer ${FRAIM_GATEWAY_TOKEN}' ${FRAIM_GATEWAY_URL}/status | jq -e .connected"
-fi
-if has_module browser; then
-  check "Server browser reachable" curl -fsS "${BROWSER_CDP_URL}/json/version"
-fi
-if has_module sync; then
-  check "Syncthing healthy" curl -fsS http://syncthing:8384/rest/noauth/health
+if [ "$json" = 1 ]; then
+  out='[]'
+  for i in "${!names[@]}"; do
+    out="$(jq -c --arg n "${names[$i]}" --argjson ok "${results[$i]}" '. + [{name: $n, ok: $ok}]' <<<"$out")"
+  done
+  jq -n --argjson checks "$out" --arg modules "${FRAIM_MODULES:-}" \
+    '{ok: ($checks | all(.ok)), modules: ($modules | split(",") | map(select(. != ""))), checks: $checks}'
+else
+  for i in "${!names[@]}"; do
+    if [ "${results[$i]}" = true ]; then printf 'OK    %s\n' "${names[$i]}"; else printf 'FAIL  %s\n' "${names[$i]}"; fi
+  done
 fi
 
-if [ "${1:-}" = "--notify" ] && [ ${#failures[@]} -gt 0 ]; then
-  fraim-notify "fraim doctor: ${#failures[@]} problem(s): $(IFS=', '; echo "${failures[*]}"). Run 'fraim doctor' for details."
+# Notify only when the set of failures changes, so an hourly run never repeats itself.
+if [ "$notify" = 1 ]; then
+  state_dir="$HOME/.local/state/fraim"
+  mkdir -p "$state_dir"
+  now="$(IFS=,; echo "${failures[*]:-}")"
+  last="$(cat "$state_dir/doctor.last" 2>/dev/null || true)"
+  if [ "$now" != "$last" ]; then
+    if [ -n "$now" ]; then
+      fraim-notify "fraim: ${#failures[@]} problem(s) on your server: ${now//,/, }. Ask Claude on your laptop to fix fraim." || true
+    else
+      fraim-notify "fraim: all problems are fixed, your server is healthy again." || true
+    fi
+    printf '%s' "$now" > "$state_dir/doctor.last"
+  fi
 fi
 
 [ ${#failures[@]} -eq 0 ]

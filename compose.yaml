@@ -17,62 +17,74 @@ x-workspace-env: &workspace-env
   FRAIM_GATEWAY_URL: http://whatsapp:8080
   FRAIM_GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
   WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
-  BROWSER_CDP_URL: http://172.30.0.10:9223
+  BROWSER_CDP_URL: http://${BROWSER_IP:-172.30.0.10}:9223
   FRAIM_BROWSER_VIEW_URL: ${BROWSER_VIEW_URL:-http://localhost:6080/vnc.html}
+  FRAIM_AUTO_CONFIRM_CHANNEL: ${AUTO_CONFIRM_CHANNEL:-1}
 
 services:
   workspace:
     <<: *defaults
     build: ./workspace
-    image: fraimwork/workspace:local
+    image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     hostname: fraim
     environment: *workspace-env
     ports:
       - "${BIND_IP:?run install.sh first}:${SSH_PORT:-2222}:22"
-      - "${BIND_IP}:60000-60010:60000-60010/udp"
+      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:60000-60010/udp"
     volumes:
       - home:/home/claude
       - files:/home/claude/fraim
       - pc:/home/claude/pc:ro
+      - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
+      - ./config/claude-template:/opt/fraim/claude-template:ro
+      - ./server-plugin:/opt/fraim/server-plugin:ro
       - ssh-host-keys:/etc/ssh/keys
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
     networks: [fraim]
 
   scheduler:
     <<: *defaults
-    image: fraimwork/workspace:local
+    image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     profiles: [scheduler]
     command: ["scheduler"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "supercronic"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on: [workspace]
     environment: *workspace-env
     volumes:
       - home:/home/claude
       - files:/home/claude/fraim
       - pc:/home/claude/pc:ro
+      - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
+      - ./config/claude-template:/opt/fraim/claude-template:ro
+      - ./server-plugin:/opt/fraim/server-plugin:ro
     networks: [fraim]
 
   browser:
     <<: *defaults
     build: ./browser
-    image: fraimwork/browser:local
+    image: fraimwork/browser:${FRAIM_IMAGE_TAG:-local}
     profiles: [browser]
     environment:
       VNC_PASSWORD: ${VNC_PASSWORD:-}
       TZ: ${TZ:-Europe/Amsterdam}
     shm_size: 1gb
     ports:
-      - "${PRIVATE_BIND_IP:-127.0.0.1}:6080:6080"
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:${VNC_PORT:-6080}:6080"
     volumes:
       - browser-profile:/data
       - files:/fraim
     networks:
       fraim:
-        ipv4_address: 172.30.0.10
+        ipv4_address: ${BROWSER_IP:-172.30.0.10}
 
   whatsapp:
     <<: *defaults
     build: ./whatsapp
-    image: fraimwork/whatsapp:local
+    image: fraimwork/whatsapp:${FRAIM_IMAGE_TAG:-local}
     profiles: [whatsapp]
     environment:
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
@@ -96,9 +108,9 @@ services:
       STGUIADDRESS: 0.0.0.0:8384
       TZ: ${TZ:-Europe/Amsterdam}
     ports:
-      - "${PRIVATE_BIND_IP:-127.0.0.1}:8384:8384"
-      - "${BIND_IP}:22000:22000/tcp"
-      - "${BIND_IP}:22000:22000/udp"
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:${SYNC_GUI_PORT:-8384}:8384"
+      - "${BIND_IP}:${SYNC_PORT:-22000}:22000/tcp"
+      - "${BIND_IP}:${SYNC_PORT:-22000}:22000/udp"
     volumes:
       - syncthing-config:/var/syncthing
       - files:/var/syncthing/fraim
@@ -109,7 +121,7 @@ networks:
   fraim:
     ipam:
       config:
-        - subnet: 172.30.0.0/24
+        - subnet: ${FRAIM_SUBNET:-172.30.0.0/24}
 
 volumes:
   home:

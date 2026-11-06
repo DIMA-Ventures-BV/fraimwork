@@ -19,6 +19,14 @@ set_env() {
 has_module() { case ",$(get_env COMPOSE_PROFILES)," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 [ "$(id -u)" = 0 ] || die "run as root"
+
+# Second stage, run by `fraim deploy` only after the laptop reached the server over Tailscale.
+if [ "${1:-}" = --lock-public-ssh ]; then
+  ufw delete allow OpenSSH >/dev/null 2>&1 || true
+  touch .public-ssh-locked
+  echo "Public SSH closed. The server is reachable over Tailscale only."
+  exit 0
+fi
 # shellcheck source=/dev/null
 . /etc/os-release
 [ "${ID:-}" = ubuntu ] || die "Ubuntu 24.04 or newer is required (found ${ID:-unknown})"
@@ -39,7 +47,7 @@ say "Generating secrets"
 [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
 
 say "Installing system packages"
-export DEBIAN_FRONTEND=noninteractive
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 apt-get update -q
 apt-get install -y -q ca-certificates curl openssl jq ufw unattended-upgrades
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
@@ -85,24 +93,34 @@ EOF
   ufw default allow outgoing >/dev/null
   ufw allow in on tailscale0 >/dev/null
   ufw allow 41641/udp comment 'tailscale direct connections' >/dev/null
+  # Public SSH stays open until `fraim deploy` has proven it can reach the server over
+  # Tailscale; then it runs `install.sh --lock-public-ssh`. This prevents a lock-out.
+  [ -f .public-ssh-locked ] || ufw allow OpenSSH >/dev/null
   ufw --force enable >/dev/null
-  warn "public SSH is now closed. Reach this server with: ssh root@$(get_env FRAIM_HOSTNAME) (Tailscale SSH)"
 else
   set_env BIND_IP "0.0.0.0"
   set_env PRIVATE_BIND_IP "127.0.0.1"
   set_env BROWSER_VIEW_URL "http://localhost:6080/vnc.html (run 'fraim browser' to open the tunnel)"
 
+  # Note: ports Docker publishes on 0.0.0.0 bypass ufw. Only the workspace SSH, mosh and
+  # Syncthing sync ports are published publicly (see compose.yaml); never trust ufw to
+  # hide a Docker port. GUIs bind to 127.0.0.1 in this mode.
   say "Configuring the firewall: SSH keys only"
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
   ufw allow OpenSSH >/dev/null
-  ufw allow "$(get_env SSH_PORT)/tcp" comment 'fraim workspace' >/dev/null
-  ufw allow 60000:60010/udp comment 'mosh' >/dev/null
-  ufw allow 22000 comment 'syncthing' >/dev/null
   ufw --force enable >/dev/null
-  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-  systemctl reload ssh || systemctl reload sshd || true
 fi
+
+say "Hardening SSH: keys only"
+# sshd uses the first value it reads, and sshd_config.d is read first, so 00- wins over
+# cloud-init's 50-cloud-init.conf.
+cat > /etc/ssh/sshd_config.d/00-fraim.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+sshd -t && { systemctl reload ssh || systemctl reload sshd || true; }
 
 say "Building and starting fraimwork (first build takes a few minutes)"
 docker compose up -d --build --remove-orphans
@@ -126,19 +144,10 @@ host="$(get_env FRAIM_HOSTNAME)"
 
 cat <<EOF
 
-fraimwork is running.
-
-  Terminal:        fraim shell            (ssh -p $(get_env SSH_PORT) claude@${host})
-  First time:      log in to Claude inside that session (/login)
+fraimwork is running on ${host}. Secrets are in $(pwd)/.env (root only).
+Next steps are run from the laptop by Claude:
+  fraim login                   store the Claude login token on the server
 EOF
-has_module browser && cat <<EOF
-  Server browser:  fraim browser          (VNC password: $(get_env VNC_PASSWORD))
-EOF
-has_module sync && cat <<EOF
-  File sync:       fraim sync             (GUI user: fraim, password: $(get_env SYNCTHING_GUI_PASSWORD))
-EOF
-has_module whatsapp && cat <<EOF
-  WhatsApp:        fraim whatsapp         (scan the QR code with WhatsApp Business)
-EOF
-echo
-echo "Secrets are stored in $(pwd)/.env (root only)."
+has_module whatsapp && echo "  fraim whatsapp link --number  link the agent's WhatsApp number with a pairing code"
+has_module sync && echo "  fraim sync                    pair the laptop's Syncthing"
+true

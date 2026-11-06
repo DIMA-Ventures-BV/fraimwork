@@ -4,6 +4,10 @@
       "Read(**/.env)",
       "Read(**/.env.*)",
       "Read(//home/claude/.ssh/**)",
+      "Edit(//home/claude/.ssh/**)",
+      "Write(//home/claude/.ssh/**)",
+      "Edit(//home/claude/.claude/settings.json)",
+      "Write(//home/claude/.claude/settings.json)",
       "Bash(sudo:*)"
     ]
   },

@@ -1,0 +1,6 @@
+{
+  "name": "fraim",
+  "version": "0.1.0",
+  "description": "Your own always-on Claude server. Ask Claude to set up fraim; it builds, deploys and runs the server for you.",
+  "license": "MIT"
+}

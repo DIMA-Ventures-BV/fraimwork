@@ -3,3 +3,7 @@
 config/authorized_keys
 node_modules/
 .DS_Store
+.env.local
+.env.*
+!.env.example
+.claude/worktrees/
