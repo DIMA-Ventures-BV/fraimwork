@@ -1,0 +1,12 @@
+HostKey /etc/ssh/keys/ssh_host_ed25519_key
+HostKey /etc/ssh/keys/ssh_host_rsa_key
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers claude
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding yes
+GatewayPorts no
+ClientAliveInterval 30
+ClientAliveCountMax 4

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "mcp__whatsapp__reply",
+      "mcp__whatsapp__send_file",
+      "Bash(ls:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(fraim-notify:*)",
+      "Bash(fraim-doctor:*)"
+    ]
+  }
+}

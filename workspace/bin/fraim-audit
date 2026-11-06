@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# PostToolUse hook: appends one line per tool call to ~/.local/state/fraim/audit.jsonl.
+# Kept outside ~/fraim so it does not sync to the laptop. Not tamper-proof: Claude runs
+# as the same user. For a tamper-proof trail, ship it off the server.
+dir="$HOME/.local/state/fraim"
+mkdir -p "$dir" 2>/dev/null
+jq -c '{ts: (now | todate), session: .session_id, tool: .tool_name, input: (.tool_input | tostring | .[0:500])}' \
+  >> "$dir/audit.jsonl" 2>/dev/null
+exit 0

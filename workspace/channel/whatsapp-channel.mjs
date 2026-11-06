@@ -1,0 +1,224 @@
+#!/usr/bin/env node
+// Claude Code channel: forwards WhatsApp messages from the fraim gateway into the
+// Claude session, exposes reply tools, and relays permission prompts to the owner.
+import { readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
+import path from 'node:path'
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
+
+function loadEnvFile(file) {
+  const out = {}
+  try {
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const m = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line)
+      if (!m) continue
+      let value = m[2]
+      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1)
+      out[m[1]] = value.replace(/\\(.)/g, '$1')
+    }
+  } catch {}
+  return out
+}
+
+const env = { ...loadEnvFile('/etc/fraim/runtime.env'), ...process.env }
+const GATEWAY = env.FRAIM_GATEWAY_URL
+const TOKEN = env.FRAIM_GATEWAY_TOKEN
+const OWNER = (env.WHATSAPP_OWNER || '').replace(/\D/g, '')
+const VIEW_URL = env.FRAIM_BROWSER_VIEW_URL || 'the browser view'
+const HOME = homedir()
+const SHARED_ROOTS = { [path.join(HOME, 'fraim')]: 'fraim', [path.join(HOME, 'pc')]: 'pc' }
+const VERDICT_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
+
+const log = (...parts) => process.stderr.write(`[whatsapp-channel] ${parts.join(' ')}\n`)
+
+async function gateway(route, body) {
+  const res = await fetch(`${GATEWAY}${route}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`gateway ${route} failed (${res.status}): ${text}`)
+  return text
+}
+
+function toSharedPath(file) {
+  const absolute = realpathSync(path.resolve(HOME, 'fraim', file))
+  for (const [root, name] of Object.entries(SHARED_ROOTS)) {
+    if (absolute === root || absolute.startsWith(root + path.sep)) {
+      return `${name}/${path.relative(root, absolute)}`
+    }
+  }
+  throw new Error('only files under ~/fraim or ~/pc can be sent')
+}
+
+const mcp = new Server(
+  { name: 'whatsapp', version: '0.1.0' },
+  {
+    capabilities: {
+      experimental: { 'claude/channel': {}, 'claude/channel/permission': {} },
+      tools: {},
+    },
+    instructions: [
+      'WhatsApp messages arrive as <channel source="whatsapp" chat_id="..." sender="..." name="...">.',
+      'Senders are on the fraim allowlist. Answer with the reply tool and pass the chat_id from the tag.',
+      'Keep replies short plain text; WhatsApp only renders *bold* and _italic_.',
+      'To send a file, use send_file with a path under ~/fraim or ~/pc.',
+      'Files the sender attaches are saved under ~/fraim/inbox; the message text names the path.',
+      `If a website needs a login, ask the sender to log in at ${VIEW_URL} and wait. Never ask for passwords or codes.`,
+      'For long tasks, first reply that you started, then reply again with the result.',
+    ].join(' '),
+  },
+)
+
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'reply',
+      description: 'Send a WhatsApp text message to a chat',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string', description: 'chat_id from the incoming <channel> tag' },
+          text: { type: 'string', description: 'Message text' },
+        },
+        required: ['chat_id', 'text'],
+      },
+    },
+    {
+      name: 'send_file',
+      description: 'Send a file from ~/fraim or ~/pc to a WhatsApp chat',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chat_id: { type: 'string', description: 'chat_id from the incoming <channel> tag' },
+          path: { type: 'string', description: 'Absolute path, or a path relative to ~/fraim' },
+          caption: { type: 'string', description: 'Optional caption' },
+        },
+        required: ['chat_id', 'path'],
+      },
+    },
+  ],
+}))
+
+mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const args = req.params.arguments ?? {}
+  try {
+    if (req.params.name === 'reply') {
+      await gateway('/send', { chat_id: String(args.chat_id), text: String(args.text) })
+      return { content: [{ type: 'text', text: 'sent' }] }
+    }
+    if (req.params.name === 'send_file') {
+      const shared = toSharedPath(String(args.path))
+      await gateway('/send-file', { chat_id: String(args.chat_id), path: shared, caption: args.caption ?? '' })
+      return { content: [{ type: 'text', text: `sent ${shared}` }] }
+    }
+    throw new Error(`unknown tool: ${req.params.name}`)
+  } catch (err) {
+    return { isError: true, content: [{ type: 'text', text: String(err.message ?? err) }] }
+  }
+})
+
+const PermissionRequestSchema = z.object({
+  method: z.literal('notifications/claude/channel/permission_request'),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string(),
+    description: z.string(),
+    input_preview: z.string(),
+  }),
+})
+
+mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
+  if (!OWNER) return
+  // Never truncate: the approver must see the whole command. The gateway splits long text.
+  const text = [
+    `*Approval needed:* ${params.tool_name}`,
+    params.description,
+    '',
+    params.input_preview,
+    '',
+    `Reply *yes ${params.request_id}* or *no ${params.request_id}*`,
+  ].join('\n')
+  try {
+    await gateway('/send', { to: OWNER, text })
+  } catch (err) {
+    log('could not relay permission request:', err.message)
+  }
+})
+
+async function handleEvent(event) {
+  if (event.type !== 'message') return
+  const verdict = VERDICT_RE.exec(event.text ?? '')
+  if (verdict && event.sender === OWNER) {
+    await mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: {
+        request_id: verdict[2].toLowerCase(),
+        behavior: verdict[1].toLowerCase().startsWith('y') ? 'allow' : 'deny',
+      },
+    })
+    return
+  }
+  await mcp.notification({
+    method: 'notifications/claude/channel',
+    params: {
+      content: event.text || '(empty message)',
+      meta: {
+        chat_id: event.chat_id,
+        sender: event.sender,
+        name: event.name || '',
+        message_id: event.id,
+      },
+    },
+  })
+}
+
+async function listen() {
+  let delay = 1000
+  for (;;) {
+    try {
+      const res = await fetch(`${GATEWAY}/events`, { headers: { Authorization: `Bearer ${TOKEN}` } })
+      if (!res.ok || !res.body) throw new Error(`events stream returned ${res.status}`)
+      log('connected to gateway')
+      delay = 1000
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true })
+        let end
+        while ((end = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, end)
+          buffer = buffer.slice(end + 2)
+          const data = frame
+            .split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart())
+            .join('\n')
+          if (!data) continue
+          try {
+            await handleEvent(JSON.parse(data))
+          } catch (err) {
+            log('could not handle event:', err.message)
+          }
+        }
+      }
+      throw new Error('events stream closed')
+    } catch (err) {
+      log(`${err.message}; retrying in ${Math.round(delay / 1000)}s`)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      delay = Math.min(delay * 2, 30000)
+    }
+  }
+}
+
+await mcp.connect(new StdioServerTransport())
+
+if (!GATEWAY || !TOKEN) {
+  log('FRAIM_GATEWAY_URL or FRAIM_GATEWAY_TOKEN is missing; channel is idle')
+} else {
+  listen()
+}

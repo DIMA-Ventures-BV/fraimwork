@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Checks every fraimwork part. With --notify, sends failures to WhatsApp.
+set -u
+
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env 2>/dev/null || true
+
+failures=()
+check() {
+  local label="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    printf 'OK    %s\n' "$label"
+  else
+    printf 'FAIL  %s\n' "$label"
+    failures+=("$label")
+  fi
+}
+has_module() { case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+check "Claude login present" test -s "$HOME/.claude/.credentials.json"
+check "Disk below 90% full" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
+
+if has_module whatsapp; then
+  check "WhatsApp connected" sh -c "curl -fsS -H 'Authorization: Bearer ${FRAIM_GATEWAY_TOKEN}' ${FRAIM_GATEWAY_URL}/status | jq -e .connected"
+fi
+if has_module browser; then
+  check "Server browser reachable" curl -fsS "${BROWSER_CDP_URL}/json/version"
+fi
+if has_module sync; then
+  check "Syncthing healthy" curl -fsS http://syncthing:8384/rest/noauth/health
+fi
+
+if [ "${1:-}" = "--notify" ] && [ ${#failures[@]} -gt 0 ]; then
+  fraim-notify "fraim doctor: ${#failures[@]} problem(s): $(IFS=', '; echo "${failures[*]}"). Run 'fraim doctor' for details."
+fi
+
+[ ${#failures[@]} -eq 0 ]

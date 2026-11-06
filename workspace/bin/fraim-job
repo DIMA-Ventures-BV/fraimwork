@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Runs one scheduled job: ~/fraim/jobs/<name>.md is the prompt,
+# ~/fraim/jobs/<name>.tools (optional) lists allowed tools, one per line.
+# If Claude's answer is exactly SILENT, no notification is sent.
+set -uo pipefail
+
+name="${1:?usage: fraim-job <name>}"
+jobs="$HOME/fraim/jobs"
+prompt_file="$jobs/$name.md"
+[ -f "$prompt_file" ] || { echo "fraim-job: $prompt_file not found" >&2; exit 1; }
+
+tools="Read,Glob,Grep,WebSearch,WebFetch"
+if [ -f "$jobs/$name.tools" ]; then
+  tools="$(grep -v '^\s*#' "$jobs/$name.tools" | grep -v '^\s*$' | paste -sd, -)"
+fi
+
+log_dir="$HOME/fraim/logs/jobs"
+mkdir -p "$log_dir"
+log="$log_dir/$name-$(date +%Y%m%d-%H%M%S).md"
+
+cd "$HOME/fraim" || exit 1
+output="$(timeout "${FRAIM_JOB_TIMEOUT:-1800}" claude -p "$(cat "$prompt_file")" --allowedTools "$tools" 2>&1)"
+code=$?
+
+printf '%s\n' "$output" > "$log"
+
+if [ "$code" -eq 0 ]; then
+  [ "$(printf '%s' "$output" | tr -d '[:space:]')" = "SILENT" ] && exit 0
+  fraim-notify "Job $name finished:
+
+${output:0:3500}"
+else
+  fraim-notify "Job $name FAILED (exit $code). Log: ${log#"$HOME"/}
+
+${output:0:1500}"
+fi
+exit "$code"

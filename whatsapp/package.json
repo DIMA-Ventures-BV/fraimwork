@@ -1,0 +1,14 @@
+{
+  "name": "fraim-whatsapp-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Holds the WhatsApp linked-device session and serves an authenticated local API to fraim",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node gateway.mjs" },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "10.4.0",
+    "qrcode-terminal": "0.12.0"
+  }
+}

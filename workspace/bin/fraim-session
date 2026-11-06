@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs the always-on Claude session inside tmux and restarts it when it exits.
+set -u
+
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env 2>/dev/null || true
+cd "$HOME/fraim" || exit 1
+
+args=()
+case ",${FRAIM_MODULES:-}," in
+  *,whatsapp,*) args+=(--dangerously-load-development-channels server:whatsapp) ;;
+esac
+
+while true; do
+  claude --continue "${args[@]}" || claude "${args[@]}"
+  echo
+  echo "fraim: Claude stopped. It restarts in 5 seconds. Press Ctrl-C to get a plain shell."
+  sleep 5 || break
+done
+
+exec bash -l

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Container entrypoint. Roles: "workspace" (SSH + Claude session) or "scheduler" (cron jobs).
+set -euo pipefail
+
+role="${1:-workspace}"
+home=/home/claude
+
+write_runtime_env() {
+  install -d -m 0755 /etc/fraim
+  umask 027
+  {
+    printf 'FRAIM_MODULES=%q\n' "${FRAIM_MODULES:-}"
+    printf 'FRAIM_HOSTNAME=%q\n' "${FRAIM_HOSTNAME:-fraim}"
+    printf 'FRAIM_GATEWAY_URL=%q\n' "${FRAIM_GATEWAY_URL:-}"
+    printf 'FRAIM_GATEWAY_TOKEN=%q\n' "${FRAIM_GATEWAY_TOKEN:-}"
+    printf 'WHATSAPP_OWNER=%q\n' "${WHATSAPP_OWNER:-}"
+    printf 'BROWSER_CDP_URL=%q\n' "${BROWSER_CDP_URL:-}"
+    printf 'FRAIM_BROWSER_VIEW_URL=%q\n' "${FRAIM_BROWSER_VIEW_URL:-}"
+    printf 'TZ=%q\n' "${TZ:-UTC}"
+  } > /etc/fraim/runtime.env
+  chown root:claude /etc/fraim/runtime.env
+  chmod 0640 /etc/fraim/runtime.env
+  umask 022
+}
+
+has_module() {
+  case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+prepare_home() {
+  chown claude:claude "$home" "$home/fraim"
+  install -d -o claude -g claude "$home/fraim/downloads" "$home/fraim/inbox" \
+    "$home/fraim/jobs" "$home/fraim/logs" "$home/fraim/logs/jobs"
+
+  (cd /etc/fraim/skel && find . -type f) | while read -r file; do
+    target="$home/${file#./}"
+    if [ ! -e "$target" ]; then
+      install -D -o claude -g claude -m 0644 "/etc/fraim/skel/${file#./}" "$target"
+    fi
+  done
+  chown claude:claude "$home/.claude"
+}
+
+as_claude() {
+  su - claude -c "$1"
+}
+
+register_mcp() {
+  local name="$1" command="$2"
+  if ! as_claude "claude mcp get $name >/dev/null 2>&1"; then
+    as_claude "claude mcp add --scope user $name -- $command" >/dev/null \
+      || echo "fraim: could not register MCP server '$name'" >&2
+  fi
+}
+
+case "$role" in
+  workspace)
+    write_runtime_env
+    prepare_home
+
+    install -d -m 0755 /etc/ssh/keys /run/sshd
+    for type in ed25519 rsa; do
+      key="/etc/ssh/keys/ssh_host_${type}_key"
+      [ -f "$key" ] || ssh-keygen -q -N "" -t "$type" -f "$key"
+    done
+
+    install -d -o claude -g claude -m 0700 "$home/.ssh"
+    if [ -s /etc/fraim/authorized_keys ]; then
+      install -o claude -g claude -m 0600 /etc/fraim/authorized_keys "$home/.ssh/authorized_keys"
+    else
+      echo "fraim: config/authorized_keys is empty, nobody can log in" >&2
+    fi
+
+    register_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"
+    if has_module browser; then
+      register_mcp browser "chrome-devtools-mcp --browser-url ${BROWSER_CDP_URL}"
+    fi
+    if has_module whatsapp; then
+      register_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
+    fi
+
+    as_claude "tmux has-session -t main 2>/dev/null || tmux new-session -d -s main fraim-session"
+
+    exec /usr/sbin/sshd -D -e
+    ;;
+
+  scheduler)
+    write_runtime_env
+    prepare_home
+    crontab="$home/fraim/jobs/crontab"
+    if [ ! -f "$crontab" ]; then
+      install -o claude -g claude -m 0644 /etc/fraim/skel-jobs/crontab "$crontab"
+      install -o claude -g claude -m 0644 /etc/fraim/skel-jobs/example.md "$home/fraim/jobs/example.md"
+    fi
+    exec su claude -s /bin/bash -c "cd ~ && exec supercronic -inotify '$crontab'"
+    ;;
+
+  *)
+    exec "$@"
+    ;;
+esac

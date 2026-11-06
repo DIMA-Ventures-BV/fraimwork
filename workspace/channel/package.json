@@ -1,0 +1,12 @@
+{
+  "name": "fraim-whatsapp-channel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code channel that connects the fraim WhatsApp gateway to the Claude session",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  }
+}

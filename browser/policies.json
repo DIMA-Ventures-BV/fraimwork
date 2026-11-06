@@ -1,0 +1,9 @@
+{
+  "DownloadDirectory": "/fraim/downloads",
+  "PromptForDownloadLocation": false,
+  "PasswordManagerEnabled": true,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "DefaultBrowserSettingEnabled": false,
+  "MetricsReportingEnabled": false
+}
