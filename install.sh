@@ -71,10 +71,55 @@ start_space() {
   if has_module whatsapp && [ -z "$(get_env WHATSAPP_OWNER)" ]; then
     die "space $name has the whatsapp module but no WHATSAPP_OWNER"
   fi
+  # `fraim space rm` (without --wipe) stops a space until `fraim space up`, also across updates.
+  if [ "$(get_env STOPPED)" = 1 ]; then
+    say "Space $name is stopped (fraim space up $name starts it)"
+    ENV_FILE=.env
+    return 0
+  fi
   say "Starting space $name"
   space_compose up -d --build --remove-orphans
   if has_module sync; then secure_syncthing; fi
   ENV_FILE=.env
+}
+
+# Containers have their own networks per space, but every port the server publishes on its
+# own address (another space's previews, browser view, Syncthing GUI, SSH) would still be
+# reachable from any container through that address. These rules drop container traffic to
+# the server's own fraim ports. A systemd unit puts them back after a reboot or Docker restart.
+isolate_spaces() {
+  command -v iptables >/dev/null || return 1
+  cat > /usr/local/sbin/fraim-isolation <<'EOF'
+#!/bin/sh
+# Installed by fraimwork install.sh: containers may not reach the server's own fraim ports.
+for _ in $(seq 60); do iptables -L DOCKER-USER -n >/dev/null 2>&1 && break; sleep 1; done
+rule() { iptables -C "$@" 2>/dev/null || iptables -I "$@"; }
+for src in 172.29.0.0/16 172.30.0.0/16 172.31.0.0/16; do
+  rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p tcp -m multiport --dports 22,2222:2226,3100:3149,6080:6084,8384:8388,22000:22004 -j DROP
+  rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p udp -m multiport --dports 22000:22004,60000:60090 -j DROP
+  # Published ports reached by DNAT pass FORWARD, where Docker lets DOCKER-USER decide first.
+  if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT -j DROP
+  fi
+done
+EOF
+  chmod 0755 /usr/local/sbin/fraim-isolation
+  cat > /etc/systemd/system/fraim-isolation.service <<'EOF'
+[Unit]
+Description=fraimwork: keep spaces from reaching each other's published ports
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fraim-isolation
+
+[Install]
+WantedBy=multi-user.target docker.service
+EOF
+  systemctl daemon-reload
+  systemctl enable fraim-isolation.service >/dev/null 2>&1 || true
+  /usr/local/sbin/fraim-isolation
 }
 
 [ "$(id -u)" = 0 ] || die "run as root"
@@ -98,6 +143,7 @@ if [ "${1:-}" = --space ]; then
   [ ! -d .update-lock ] || [ "${FRAIM_LOCK_HELD:-}" = 1 ] || die "an update is running or did not finish ($(cat .update-lock/info 2>/dev/null)); try again after it"
   printf '%s' "$2" | grep -Eq '^[a-z][a-z0-9-]{0,15}$' || die "invalid space name $2"
   start_space "$2"
+  isolate_spaces || warn "could not add the firewall rules that keep spaces apart"
   echo "Space $2 is running."
   exit 0
 fi
@@ -223,11 +269,21 @@ if has_module sync; then
   secure_syncthing
 fi
 
-# Every other space (work, personal, ...) runs the same code with its own env file.
+# Every other space (work, personal, ...) runs the same code with its own env file. A space
+# that fails to start is reported, but never stops the main space's install or update.
+failed_spaces=""
 for space_env in .env.space-*; do
   [ -f "$space_env" ] || continue
-  start_space "${space_env#.env.space-}"
+  space_name="${space_env#.env.space-}"
+  if ! printf '%s' "$space_name" | grep -Eq '^[a-z][a-z0-9-]{0,15}$'; then
+    warn "ignoring $space_env: not a valid space name"
+    continue
+  fi
+  ( start_space "$space_name" ) || { warn "space $space_name did not start; see the lines above"; failed_spaces="$failed_spaces $space_name"; }
 done
+
+say "Isolating spaces from each other's published ports"
+isolate_spaces || warn "could not add the firewall rules that keep spaces apart; spaces still have separate networks"
 
 cat <<EOF
 
@@ -237,4 +293,5 @@ Next steps are run from the laptop by Claude:
 EOF
 has_module whatsapp && echo "  fraim whatsapp link --number  link the agent's WhatsApp number with a pairing code"
 has_module sync && echo "  fraim sync                    pair the laptop's Syncthing"
+[ -z "$failed_spaces" ] || warn "these spaces did not start:$failed_spaces (the main space runs; fix them with fraim space up NAME)"
 true

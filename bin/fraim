@@ -332,11 +332,14 @@ list_spaces() {
   admin "ls -1 .env.space-* 2>/dev/null | sed 's/^[.]env[.]space-//' || true"
 }
 
+local_space_stopped() { grep -qx 'STOPPED=1' "$(space_env_local "$1")" 2>/dev/null; }
+
 # Sets KEY=VALUE in the selected space's env file (on the server or the laptop).
 put_env() {
   case "$2" in *[\\\|$'\n']*) usage "the value for $1 may not contain backslashes, | or line breaks" ;; esac
   if [ "$FRAIM_ACCESS" = local ]; then env_set "$1" "$2"; return; fi
-  admin "awk -v k=$(printf '%q' "$1") -v v=$(printf '%q' "$2") 'BEGIN { done = 0 } index(\$0, k \"=\") == 1 { print k \"=\" v; done = 1; next } { print } END { if (!done) print k \"=\" v }' $REMOTE_ENV > $REMOTE_ENV.tmp && cat $REMOTE_ENV.tmp > $REMOTE_ENV && rm -f $REMOTE_ENV.tmp"
+  # The temp copy holds tokens: private (umask 077) and named outside the .env.space-* glob.
+  admin "umask 077 && t=\$(mktemp .fraim-put-env.XXXXXX) && awk -v k=$(printf '%q' "$1") -v v=$(printf '%q' "$2") 'BEGIN { done = 0 } index(\$0, k \"=\") == 1 { print k \"=\" v; done = 1; next } { print } END { if (!done) print k \"=\" v }' $REMOTE_ENV > \"\$t\" && cat \"\$t\" > $REMOTE_ENV; rc=\$?; rm -f \"\$t\"; exit \$rc"
 }
 
 # Starts (or restarts with new settings) the selected space and waits for its workspace.
@@ -478,6 +481,8 @@ space_rm() {
   FRAIM_SPACE="$name"
   apply_space
   if [ -z "$(flag wipe)" ]; then
+    # STOPPED=1 keeps it stopped through updates and installs, until `fraim space up`.
+    put_env STOPPED 1
     ADMIN_TIMEOUT=300 admin "docker compose down"
     say "Space $name is stopped; its files, logins and keys are kept. Start it again with: fraim space up $name"
     return
@@ -552,7 +557,7 @@ cmd_space() {
     add) space_add "$name" ;;
     up)
       [ -n "$name" ] || usage "fraim space up NAME"
-      FRAIM_SPACE="$name"; apply_space; space_up; say "Space $name is running."
+      FRAIM_SPACE="$name"; apply_space; put_env STOPPED 0; space_up; say "Space $name is running."
       ;;
     rm) space_rm "$name" ;;
     policy) space_policy "$name" ;;
@@ -620,7 +625,7 @@ pick_offset() {
   for o in 0 100 200 300 400 500 600 700 800 900; do
     printf '%s\n' "$claimed" | grep -qx "$o" && continue
     printf '%s\n' "$subnets" | grep -qx "172.30.$((o / 100)).0/24\|172.31.$((o / 100)).0/24\|172.31.$((128 + o / 100)).0/24\|172.31.$((64 + o / 100)).0/24\|172.31.$((192 + o / 100)).0/24" && continue
-    { port_free $((2299 + o)) && port_free $((6080 + o)) && port_free $((60000 + o)); } || continue
+    { port_free $((2299 + o)) && port_free $((6080 + o)) && port_free $((60000 + o)) && port_free $((3100 + o)); } || continue
     printf '%s' "$o"
     return
   done
@@ -675,6 +680,8 @@ cmd_local() {
       o="$(env_get PORT_OFFSET | grep . || echo 0)"
       [ -n "$(env_get FRAIM_SUBNET_SECRETS)" ] || env_set FRAIM_SUBNET_SECRETS "172.31.$((64 + o / 100)).0/24"
       [ -n "$(env_get FRAIM_SUBNET_SECRETS_OUT)" ] || env_set FRAIM_SUBNET_SECRETS_OUT "172.31.$((192 + o / 100)).0/24"
+      # Preview ports per instance (spaces of the instance add 10 per space, up to +49).
+      [ -n "$(env_get PREVIEW_PORTS)" ] || env_set PREVIEW_PORTS "$((3100 + o))-$((3109 + o))"
       local new_owner="" new_allow=""
       if [ -n "$(flag whatsapp-owner)" ]; then new_owner="$(normalize_phone "$(flag whatsapp-owner)")" || exit 2; fi
       if [ -n "$(flag whatsapp-allow)" ]; then new_allow="$(normalize_phone_list "$(flag whatsapp-allow)")" || exit 2; fi
@@ -714,8 +721,9 @@ cmd_local() {
       say "Local fraim is running (instance $FRAIM_INSTANCE, modules: $(env_get COMPOSE_PROFILES))."
       local s
       for s in $(list_spaces); do
+        if local_space_stopped "$s"; then say "Space $s is stopped (fraim space up $s starts it)."; continue; fi
         docker compose -p "$LOCAL_PROJECT-$s" --env-file "$(space_env_local "$s")" up -d --build --remove-orphans --quiet-pull >/dev/null 2>&1 \
-          || die "space $s did not start; check: fraim logs --space $s"
+          || { say "Space $s did not start; check: fraim logs --space $s"; continue; }
         say "Space $s is running."
       done
       ;;
@@ -883,7 +891,9 @@ push_and_rebuild() {
     ADMIN_TIMEOUT=3600 admin "docker compose up -d --build --remove-orphans" || return 1
     local s
     for s in $(list_spaces); do
-      docker compose -p "fraim$FRAIM_INSTANCE-$s" --env-file "$(space_env_local "$s")" up -d --build --remove-orphans >/dev/null 2>&1 || return 1
+      local_space_stopped "$s" && continue
+      docker compose -p "fraim$FRAIM_INSTANCE-$s" --env-file "$(space_env_local "$s")" up -d --build --remove-orphans >/dev/null 2>&1 \
+        || say "Space $s did not start; check: fraim logs --space $s"
     done
     return 0
   fi
@@ -1039,7 +1049,7 @@ cmd_login() {
   if [ -n "$(flag full)" ]; then login_full_start; return; fi
   if [ -n "$(flag code)" ]; then login_full_code; return; fi
   if [ -n "$(flag status)" ]; then
-    workspace_ssh 'full=false; token=false; test -s ~/.claude/.credentials.json && full=true; test -s ~/.config/fraim/claude-token && token=true; jq -n --argjson full $full --argjson token $token "{full_login: \$full, setup_token: \$token, remote_control: \$full, claudeai_connectors: \$full}"'
+    workspace_ssh 'full=false; token=false; test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json && full=true; test -s ~/.config/fraim/claude-token && token=true; jq -n --argjson full $full --argjson token $token "{full_login: \$full, setup_token: \$token, remote_control: \$full, claudeai_connectors: \$full}"'
     return
   fi
   if [ -n "$(flag token-stdin)" ]; then
@@ -1066,10 +1076,12 @@ cmd_login() {
 login_full_start() {
   local link space_flag=""
   [ "$FRAIM_SPACE" = main ] || space_flag=" --space $FRAIM_SPACE"
-  if workspace_ssh 'test -s ~/.claude/.credentials.json'; then
+  if workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; then
     say "Space $FRAIM_SPACE already has a full Claude login (Remote Control and claude.ai connectors work)."
     return
   fi
+  # A credentials file from an old manual /login would look like success at once: set it aside.
+  workspace_ssh 'f=~/.claude/.credentials.json; if [ -s "$f" ]; then mv "$f" "$f.before-fraim-login"; fi' || true
   link="$(workspace_ssh 'fraim-tty start login -- claude auth login')" || die "could not start the Claude sign-in on the server"
   human "Open this link on your phone or computer and sign in with your Claude account: $link  If the page then shows a code, run in your own Terminal app (not in the Claude chat): fraim login --code$space_flag  and paste the code. Then tell Claude 'done'."
 }
@@ -1096,7 +1108,7 @@ login_full_code() {
     fi
     sleep 2
   done
-  workspace_ssh 'fraim-tty stop login; pkill -x claude || true'
+  workspace_ssh 'mkdir -p ~/.config/fraim && date -u +%FT%TZ > ~/.config/fraim/full-login && fraim-tty stop login; pkill -x claude || true'
   say "Space $FRAIM_SPACE has a full Claude login. The Claude session restarts with Remote Control and the claude.ai connectors."
 }
 
@@ -1275,7 +1287,8 @@ cmd_host() {
         local keypart
         keypart="$(printf '%s' "$pub" | awk '{print $2}')"
         # shellcheck disable=SC2029
-        ssh -o BatchMode=yes -o ConnectTimeout=15 "$(flag authorize-via)" "f=~/.ssh/authorized_keys; [ -f \$f ] && grep -vF $(printf '%q' "$keypart") \$f > \$f.fraim-tmp; cat \$f.fraim-tmp > \$f; rm -f \$f.fraim-tmp" \
+        # Only replace authorized_keys when grep ran cleanly (exit 0 or 1), never with a partial copy.
+        ssh -o BatchMode=yes -o ConnectTimeout=15 "$(flag authorize-via)" "f=\$HOME/.ssh/authorized_keys; [ -f \"\$f\" ] || exit 0; umask 077; grep -vF $(printf '%q' "$keypart") \"\$f\" > \"\$f.fraim-tmp\"; rc=\$?; if [ \$rc -le 1 ]; then cat \"\$f.fraim-tmp\" > \"\$f\"; rm -f \"\$f.fraim-tmp\"; else rm -f \"\$f.fraim-tmp\"; exit 1; fi" \
           || die "removed the host from space $FRAIM_SPACE, but could not remove its key on $(flag authorize-via)"
         say "Removed host $name from space $FRAIM_SPACE and its key from $(flag authorize-via)."
       else
@@ -1306,8 +1319,15 @@ cmd_connect() {
     rm)
       local target="${POSITIONAL[1]:-}"
       [ -n "$target" ] || usage "$usage_line"
+      # Delete the key too, but only when this MCP server used it through the proxy (a key
+      # added with `fraim secret add` for something else stays).
+      local via_proxy=""
+      if workspace_ssh 'fraim-connect list --json' 2>/dev/null \
+        | jq -e --arg n "$target" 'map(select(.name == $n and ((.url // "") | startswith("http://secrets:8080/" + $n + "/")))) | length > 0' >/dev/null 2>&1; then
+        via_proxy=1
+      fi
       workspace_ssh "fraim-connect rm $(printf '%q' "$target") && fraim-connect reload >/dev/null"
-      if admin "docker compose exec -T secrets fraim-secret list" 2>/dev/null | awk -F'\t' -v n="$target" '$1 == n { f = 1 } END { exit !f }'; then
+      if [ -n "$via_proxy" ] && admin "docker compose exec -T secrets fraim-secret list" 2>/dev/null | awk -F'\t' -v n="$target" '$1 == n { f = 1 } END { exit !f }'; then
         admin "docker compose exec -T secrets fraim-secret rm $(printf '%q' "$target")" >/dev/null
         say "Removed $target and its key from space $FRAIM_SPACE."
       fi
@@ -1315,6 +1335,9 @@ cmd_connect() {
       ;;
   esac
   printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "NAME must be lowercase letters, digits and dashes, starting with a letter"
+  case "$name" in
+    github|github-api|github-mcp|browser|my-chrome|whatsapp) usage "'$name' is used by fraim itself (fraim repo, the browser or WhatsApp); pick another name" ;;
+  esac
   local qname
   qname="$(printf '%q' "$name")"
   if [ -n "$(flag redirect)" ]; then
@@ -1598,6 +1621,7 @@ cmd_support_bundle() {
     echo "target=$FRAIM_TARGET access=$FRAIM_ACCESS instance=${FRAIM_INSTANCE:-}"
     echo "repo=$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo unknown)"
     echo; echo "== status"; cmd_status --json 2>&1 || true
+    echo; echo "== spaces"; space_list 2>&1 || true
     echo; echo "== versions"; workspace_ssh 'claude --version; node --version; cat /etc/os-release | head -2' 2>&1 || true
     echo; echo "== fraim-config"; workspace_ssh 'fraim-config status' 2>&1 || true
     echo; echo "== crontab"; workspace_ssh 'cat ~/fraim/jobs/crontab' 2>&1 || true
@@ -1718,6 +1742,12 @@ main() {
     [ "$arg" != -- ] || break
     case "$arg" in -h|--help) cmd_help; exit 0 ;; esac
   done
+  # These act on the whole server (every space at once).
+  case "$cmd" in
+    init|deploy|update|use|lock|tailscale|support-bundle)
+      [ "$FRAIM_SPACE" = main ] || usage "fraim $cmd works on the whole server (every space); leave out --space"
+      ;;
+  esac
   case "$cmd" in
     init) cmd_init "$@" ;;
     local) cmd_local "$@" ;;

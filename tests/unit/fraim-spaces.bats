@@ -148,11 +148,56 @@ esac'
   ! grep -q 'down -v' "$SSH_LOG"
 }
 
-@test "space rm without --wipe only stops the space" {
+@test "space rm without --wipe stops the space and keeps it stopped through updates" {
   fake_server_with_work
   run "$FRAIM" space rm work
   [ "$status" -eq 0 ]
+  grep -q 'k=STOPPED -v v=1' "$SSH_LOG"
   grep -q 'docker compose -p fraimwork-work --env-file .env.space-work down$' "$SSH_LOG"
+}
+
+@test "space up clears the stopped mark before starting" {
+  fake_server_with_work
+  run "$FRAIM" space up work
+  grep -q 'k=STOPPED -v v=0' "$SSH_LOG"
+  grep -q 'install.sh --space work' "$SSH_LOG"
+}
+
+@test "server-wide commands refuse --space" {
+  for c in update deploy init lock use; do
+    run "$FRAIM" "$c" --space work
+    [ "$status" -eq 2 ] || { echo "$c exited $status"; return 1; }
+    [[ "$output" == *"whole server"* ]]
+  done
+}
+
+@test "connect refuses names fraim uses itself" {
+  for n in github github-mcp browser whatsapp; do
+    run "$FRAIM" connect "$n" --url https://example.com/mcp
+    [ "$status" -eq 2 ] || { echo "$n accepted"; return 1; }
+  done
+}
+
+@test "connect rm keeps a key that the MCP server did not use" {
+  ssh_handler '
+case "$REMOTE" in
+  *"fraim-connect list --json"*) echo "[{\"name\":\"openai\",\"type\":\"http\",\"url\":\"https://api.example.com/mcp\"}]" ;;
+  *"fraim-secret list"*) printf "openai\thttps://api.openai.com\tAuthorization\tkey set\n" ;;
+esac'
+  run "$FRAIM" connect rm openai
+  [ "$status" -eq 0 ]
+  ! grep -q 'fraim-secret rm' "$SSH_LOG"
+}
+
+@test "connect rm deletes the key of a proxied MCP server" {
+  ssh_handler '
+case "$REMOTE" in
+  *"fraim-connect list --json"*) echo "[{\"name\":\"posthog\",\"type\":\"http\",\"url\":\"http://secrets:8080/posthog/mcp\"}]" ;;
+  *"fraim-secret list"*) printf "posthog\thttps://mcp-eu.posthog.com\tAuthorization\tkey set\n" ;;
+esac'
+  run "$FRAIM" connect rm posthog
+  [ "$status" -eq 0 ]
+  grep -q 'fraim-secret rm posthog' "$SSH_LOG"
 }
 
 @test "space policy writes the deny list to the space's env file and restarts it" {
@@ -160,7 +205,8 @@ esac'
   run "$FRAIM" space policy work --deny 'claude.ai Gmail,linear' --claudeai off
   grep -qF 'k=MCP_DENY -v v=claude.ai\ Gmail\,linear' "$SSH_LOG"
   grep -q 'k=CLAUDEAI_CONNECTORS -v v=off' "$SSH_LOG"
-  grep -q '.env.space-work > .env.space-work.tmp' "$SSH_LOG"
+  grep -q 'umask 077 && t=$(mktemp .fraim-put-env.XXXXXX)' "$SSH_LOG"
+  grep -q '.env.space-work > "$t"' "$SSH_LOG"
   grep -q 'install.sh --space work' "$SSH_LOG"
 }
 

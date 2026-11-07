@@ -65,7 +65,8 @@ services:
     environment: *workspace-env
     ports:
       - "${BIND_IP:?run install.sh first}:${SSH_PORT:-2222}:22"
-      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:60000-60010/udp"
+      # Same range on both sides: mosh-server binds the port the client asks for.
+      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:${MOSH_PORTS:-60000-60010}/udp"
       # Previews of dev servers (fraim-preview): tailnet only in tailscale mode, 127.0.0.1 in public mode.
       - "${PRIVATE_BIND_IP:-127.0.0.1}:${PREVIEW_PORTS:-3100-3109}:3100-3109"
     volumes:

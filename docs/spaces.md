@@ -13,7 +13,8 @@ one server, one Tailscale name
 
 - A space is the same `compose.yaml`, started as its own Docker Compose project with its own env file (`.env` for main, `.env.space-NAME` for the others). Docker gives every project its own containers, volumes and networks.
 - Space n (1 to 4) uses the main space's ports plus n (SSH, browser view, Syncthing), mosh plus 20n, previews plus 10n, and its own subnets in `172.29.0.0/16`.
-- `install.sh` starts every space. An update (`fraim update`) rebuilds them all with the same code.
+- `install.sh` starts every space. An update (`fraim update`) rebuilds them all with the same code and checks every space's health. A space that fails to start is reported but never stops the main space. A space stopped with `fraim space rm NAME` stays stopped (`STOPPED=1` in its env file) until `fraim space up NAME`.
+- Docker keeps the spaces' networks apart. Ports the server publishes on its own address (previews, browser view, Syncthing GUI) would still be reachable from any container through that address, so `install.sh` adds firewall rules (`/usr/local/sbin/fraim-isolation`, run by the `fraim-isolation` systemd unit) that drop container traffic to the server's own fraim ports.
 - Laptop commands take `--space NAME`; without it they work on `main`.
 
 ## What is separate, and what is shared
@@ -32,7 +33,7 @@ one server, one Tailscale name
 
 | Access | Command | Where the secret lives |
 | --- | --- | --- |
-| Full Claude login: Remote Control and claude.ai connectors | `fraim login --full --space S` | `~/.claude/.credentials.json` of the space |
+| Full Claude login: Remote Control and claude.ai connectors | `fraim login --full --space S` | `~/.claude/.credentials.json` of the space (counts only with the `~/.config/fraim/full-login` marker that command writes) |
 | Limit claude.ai connectors | `fraim space policy S --deny 'claude.ai Gmail'` or `--claudeai off` | root-owned `/etc/claude-code/managed-settings.d/50-fraim-space.json` |
 | GitHub repos | `fraim repo token` + `fraim repo add OWNER/REPO` | the space's secrets proxy (`github`, `github-api`, `github-mcp`) |
 | An SSH host (dev box) | `fraim host add NAME --address IP --user U --authorize-via ALIAS` | a key made for that host, in the space only |

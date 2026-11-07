@@ -108,6 +108,11 @@ fx connect rm demo --space work
 fx secret list --space work
 [[ "$OUT" != *demo* ]] && ok "connect rm removes the server and its key" || bad "connect rm" "$OUT"
 
+fx space policy work --deny 'claude.ai Gmail,ctx'
+listing="$(in_space work 'claude mcp list')"
+[[ "$listing" != *"ctx:"* ]] && ok "Claude Code hides an MCP server the space policy denies" || bad "policy not enforced" "$listing"
+fx space policy work --deny 'claude.ai Gmail'
+
 echo "== hosts"
 pub="$(in_space work 'fraim-hosts add devbox --address 192.0.2.10 --user dev')"
 list="$(in_space work 'fraim-hosts list --json')"

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Starts Claude Code with the stored login token (written by `fraim login`), if there is one.
-# A full login (~/.claude/.credentials.json, from `fraim login --full`) needs no token, and
-# the token would outrank it, so the token is only used when there is no full login.
+# A full login made by `fraim login --full` (marker file plus ~/.claude/.credentials.json)
+# needs no token, and the token would outrank it, so then the token is left out. A stray
+# credentials file from an old manual /login does not count: it may have expired.
 token_file="$HOME/.config/fraim/claude-token"
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ] && [ ! -s "$HOME/.claude/.credentials.json" ]; then
+full_login() { [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ]; }
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ] && ! full_login; then
   CLAUDE_CODE_OAUTH_TOKEN="$(cat "$token_file")"
   export CLAUDE_CODE_OAUTH_TOKEN
 fi

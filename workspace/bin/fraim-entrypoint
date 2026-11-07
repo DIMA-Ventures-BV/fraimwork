@@ -44,7 +44,7 @@ write_space_policy() {
     || deny_json='[]'
   [ "${FRAIM_CLAUDEAI_CONNECTORS:-on}" != off ] || disable=true
   jq -n --argjson deny "$deny_json" --argjson disable "$disable" \
-    '{deniedMcpServers: $deny} + (if $disable then {disableClaudeAiConnectors: true} else {} end)' \
+    '{deniedMcpServers: $deny} + (if $disable then {disableClaudeAiConnectors: true, env: {ENABLE_CLAUDEAI_MCP_SERVERS: "false"}} else {} end)' \
     > "$dir/50-fraim-space.json"
   chmod 0644 "$dir/50-fraim-space.json"
 }

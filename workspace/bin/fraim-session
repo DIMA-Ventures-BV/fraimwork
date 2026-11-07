@@ -12,7 +12,7 @@ esac
 rc_args=()
 # Remote Control (the Claude phone app) needs a full login; a setup-token cannot use it.
 # The session shows up in the app as "<server> <space>".
-if [ -s "$HOME/.claude/.credentials.json" ] && [ "${FRAIM_REMOTE_CONTROL:-on}" != off ]; then
+if [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ] && [ "${FRAIM_REMOTE_CONTROL:-on}" != off ]; then
   rc_args=(--remote-control "${FRAIM_HOSTNAME:-fraim} ${FRAIM_SPACE:-main}")
 fi
 
