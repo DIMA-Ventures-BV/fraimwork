@@ -6,13 +6,15 @@ You do not need to know anything about servers. Claude sets it up for you and on
 
 ## Get started
 
-1. **Install Claude Code** on your laptop: https://claude.com/claude-code
-2. **Add fraimwork to Claude Code.** Start `claude` in a terminal and type these two lines:
-   ```
-   /plugin marketplace add MHilhorst/fraimwork
-   /plugin install fraim@fraimwork
-   ```
-3. **Ask Claude:** `Set up fraim for me.`
+Open the Terminal app (press Cmd+Space, type Terminal, press Enter), paste this line and press Enter:
+
+```
+curl -fsSL https://raw.githubusercontent.com/MHilhorst/fraimwork/main/bootstrap.sh | bash
+```
+
+It installs Claude Code and the fraim plugin, adds short commands (`c` starts Claude, `cn` continues your last chat, `cr` picks an older one), and asks you once to approve a Claude login in your browser. Then Claude opens and sets up the rest with you. You can run it again at any time.
+
+Already use Claude Code? Type `/plugin marketplace add MHilhorst/fraimwork`, then `/plugin install fraim@fraimwork`, then ask: `Set up fraim for me.`
 
 Want to try it first without renting a server? Ask: `Set up fraim locally so I can try it.` It then runs on your laptop in Docker.
 
@@ -24,7 +26,7 @@ Claude does the rest. You only do these steps, one at a time, when Claude asks:
 |---|---|---|
 | Rent a server (Claude tells you which one and where to click) | 5 min | about 5 to 9 euro per month |
 | Create a free Tailscale account and install the Tailscale app on your laptop and phone | 5 min | free |
-| Run `claude setup-token` once and tell Claude "copied" | 1 min | your Claude Pro or Max plan |
+| Approve a Claude login in your browser (the setup command does this; otherwise Claude asks you to run `claude setup-token`) | 1 min | your Claude Pro or Max plan |
 | Optional, for WhatsApp: a second phone number (prepaid eSIM) with WhatsApp Business, then type a code Claude gives you | 10 min | about 5 to 10 euro once |
 | Optional: log in to websites in the server's browser when Claude asks | 1 min each | |
 

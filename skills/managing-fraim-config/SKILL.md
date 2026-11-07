@@ -20,6 +20,15 @@ Never edit `~/.claude/skills/fraim-*` (or `$CLAUDE_CONFIG_DIR/skills/fraim-*`): 
 
 Inside a plugin folder: `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hooks.json`, `.mcp.json`.
 
+## Laptop safety: changes that can run code need the user's yes
+
+The laptop does not load `~/fraim/claude` directly. It loads a private copy, because the server can write to the synced folder.
+- Changes to `.md` files (skill and agent text) are copied automatically at the next session start.
+- Every other change (`.mcp.json`, `hooks/`, `plugin.json`, `plugins.json`, scripts) stays inactive until approved.
+  `$F config apply --review` shows them. Tell the user in plain words what changed and where it may come from, and run `$F config apply --yes` only after a clear yes.
+- When you made the change yourself on this laptop (for example `mcp add`), say so: "I added the Linear MCP; shall I switch it on?" Then `apply --yes`.
+- When the session-start notice reports changes nobody asked for, treat them as suspicious: show them, and recommend not applying them.
+
 ## Add an MCP server
 
 1. Run `$F config mcp add <name> --url <url>` for a remote server, or
@@ -28,7 +37,7 @@ Inside a plugin folder: `skills/<name>/SKILL.md`, `agents/<name>.md`, `hooks/hoo
    Example: `$F config mcp add linear --url https://mcp.linear.app/mcp`; a header token: `--header 'Authorization: Bearer ${LINEAR_API_KEY}'`.
 3. Tell the user to add `KEY=value` to `~/.config/fraim/secrets.env` on each machine that needs it.
    You do not write secret values yourself, and you never read that file.
-4. Tell the user to restart Claude (new MCP servers load at session start). Run `$F config status` to check for missing keys.
+4. On the laptop: `$F config apply --yes` after the user's yes (see above). Then tell the user to restart Claude (new MCP servers load at session start). Run `$F config status` to check for missing keys.
 5. An OAuth server (no key) needs `/mcp` login once on each machine.
 
 ## Add a skill

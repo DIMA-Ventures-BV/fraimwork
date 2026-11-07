@@ -21,8 +21,24 @@ has_module() { case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 
 logged_in() { [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.config/fraim/claude-token" ]; }
 
 check "claude-login" logged_in
+# claude setup-token tokens last one year; warn a month before.
+token_fresh() { local f="$HOME/.config/fraim/claude-token"; [ ! -s "$f" ] || [ -n "$(find "$f" -mtime -335)" ]; }
+check "claude-token-not-expiring" token_fresh
 check "disk-below-90-percent" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
-check "claude-session-running" pgrep -x claude
+# The interactive session lives in the workspace container; the scheduler cannot see it.
+[ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "claude-session-running" pgrep -x claude
+# Failed last run of a job that still exists. State of deleted jobs is removed.
+jobs_ok() {
+  local f name failed=0
+  for f in "$HOME"/.local/state/fraim/jobs/*; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f")"
+    if [ ! -f "$HOME/fraim/jobs/$name.md" ]; then rm -f "$f"; continue; fi
+    grep -q '^failed' "$f" && failed=1
+  done
+  [ "$failed" = 0 ]
+}
+check "jobs-ok" jobs_ok
 has_module whatsapp && check "whatsapp-connected" sh -c "fraim-gateway GET /status | jq -e .connected"
 has_module browser && check "server-browser" curl -fsS "${BROWSER_CDP_URL}/json/version"
 has_module sync && check "syncthing" curl -fsS http://syncthing:8384/rest/noauth/health

@@ -31,6 +31,12 @@ Claude Code features only. There is no extra config tool to learn.
    `init` keeps an existing `~/fraim/claude`, so the laptop never overwrites the server's copy.
 3. Run `fraim config status` on both machines. The `fingerprint` lines must match.
 
+## Laptop safety
+
+The server can write to the synced `~/fraim/claude`. So the laptop never loads that folder directly: `fraim config apply` copies it to `~/.config/fraim/applied`, and Claude Code loads the copy.
+Changes to `.md` files are copied at the next session start. Any other change (hooks, `.mcp.json`, `plugin.json`, `plugins.json`, scripts) can run code, so it stays inactive until the user approves it: `fraim config apply --review` shows it, and `fraim config apply --yes` activates it.
+The server loads the synced folder directly: only the trusted laptop and the server itself write to it.
+
 ## Add an MCP server
 
 ```
@@ -100,6 +106,8 @@ Every server entry point (tmux session, scheduled job, WhatsApp channel) starts 
 `fraim-config exec -- claude ...`. A process started another way gets no secrets.
 
 ## Security model
+
+**In plain words: Claude on the server can read every secret that is loaded on that server, and anyone on the WhatsApp allow list can ask it to use them. Never put bank, production or admin credentials on a fraim server.**
 
 The server's Claude can read everything that the `claude` user can read. fraimwork does not try to hide
 files from Claude inside the container. It keeps dangerous things out of the container instead.

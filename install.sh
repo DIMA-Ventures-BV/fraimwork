@@ -20,6 +20,10 @@ has_module() { case ",$(get_env COMPOSE_PROFILES)," in *",$1,"*) return 0 ;; *) 
 
 [ "$(id -u)" = 0 ] || die "run as root"
 
+if [ "${1:-}" != --lock-public-ssh ] && [ -d .update-lock ] && [ "${FRAIM_LOCK_HELD:-}" != 1 ]; then
+  die "an update is running or did not finish ($(cat .update-lock/info 2>/dev/null)); run 'fraim update --recover' from the laptop"
+fi
+
 # Second stage, run by `fraim deploy` only after the laptop reached the server over Tailscale.
 if [ "${1:-}" = --lock-public-ssh ]; then
   ufw delete allow OpenSSH >/dev/null 2>&1 || true
@@ -46,18 +50,25 @@ say "Generating secrets"
 [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
 [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
 
-say "Installing system packages"
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-apt-get update -q
-apt-get install -y -q ca-certificates curl openssl jq ufw unattended-upgrades
+# Wait for Ubuntu's own apt runs (unattended-upgrades, apt-daily) instead of failing.
+apt_wait() { apt-get -o DPkg::Lock::Timeout=900 "$@"; }
+base_packages=(ca-certificates curl openssl jq ufw unattended-upgrades)
+if dpkg -s "${base_packages[@]}" >/dev/null 2>&1; then
+  say "System packages already installed"
+else
+  say "Installing system packages"
+  apt_wait update -q
+  apt_wait install -y -q "${base_packages[@]}"
+fi
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt-get update -q
-  apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_wait update -q
+  apt_wait install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 systemctl enable --now docker >/dev/null
 
@@ -122,6 +133,16 @@ PermitRootLogin prohibit-password
 EOF
 sshd -t && { systemctl reload ssh || systemctl reload sshd || true; }
 
+if ! swapon --show --noheadings | grep -q .; then
+  # Cloud images ship without swap; on a 4 GB server Claude, a job and Chromium can hit the OOM killer.
+  say "Adding 2 GB of swap"
+  if fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else
+    warn "could not add swap; the server works, but heavy browser use may run out of memory"
+  fi
+fi
+
 say "Building and starting fraimwork (first build takes a few minutes)"
 docker compose up -d --build --remove-orphans
 
@@ -136,15 +157,12 @@ if has_module sync; then
     key=$(sed -n "s:.*<apikey>\(.*\)</apikey>.*:\1:p" /var/syncthing/config/config.xml)
     st() { syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@"; }
     st config gui user set fraim && st config gui password set "$PW"
-  ' || warn "could not set the Syncthing GUI password; set it in the GUI"
+  ' || die "could not set the Syncthing GUI password; the GUI must not stay open without one. Run install.sh again."
 fi
-
-host="$(get_env FRAIM_HOSTNAME)"
-[ "$mode" = tailscale ] || host="$(curl -fsS https://api.ipify.org || hostname -I | cut -d' ' -f1)"
 
 cat <<EOF
 
-fraimwork is running on ${host}. Secrets are in $(pwd)/.env (root only).
+fraimwork is running ($(get_env FRAIM_HOSTNAME), $mode mode). Secrets are in $(pwd)/.env (root only).
 Next steps are run from the laptop by Claude:
   fraim login                   store the Claude login token on the server
 EOF

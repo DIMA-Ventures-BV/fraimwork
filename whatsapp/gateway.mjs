@@ -25,12 +25,14 @@ const PORT = Number(process.env.PORT || 8080)
 const TOKEN = process.env.GATEWAY_TOKEN || ''
 const AUTH_DIR = process.env.AUTH_DIR || '/data/auth'
 const QR_FILE = '/data/qr.png'
-const ROOTS = { fraim: '/fraim', pc: '/pc' }
-const INBOX = '/fraim/inbox'
+// The gateway sees ~/fraim read-only; only its inbox is writable. downloads and inbox are
+// separate volumes, mounted next to /fraim (a writable mount cannot sit inside a read-only one).
+const ROOTS = { fraim: '/fraim', pc: '/pc', 'fraim/inbox': '/inbox', 'fraim/downloads': '/downloads' }
+const INBOX = '/inbox'
 const MAX_TEXT = 4000
 const QUEUE_LIMIT = 100
 
-const digits = (value) => String(value || '').replace(/\D/g, '')
+const digits = (value) => String(value || '').replace(/\D/g, '').replace(/^00/, '')
 const OWNER = digits(process.env.WHATSAPP_OWNER)
 const ALLOW = new Set(
   [OWNER, ...String(process.env.WHATSAPP_ALLOW || '').split(',')].map(digits).filter(Boolean),
@@ -43,6 +45,11 @@ waLogger.level = 'warn'
 if (!TOKEN) {
   logger.fatal('GATEWAY_TOKEN is empty; refusing to start')
   process.exit(1)
+}
+for (const number of ALLOW) {
+  if (number.startsWith('0') || number.length < 10 || number.length > 15) {
+    logger.error({ number }, 'not an international number (use 31612345678, without + or 00); messages from it will never match')
+  }
 }
 if (ALLOW.size === 0) logger.warn('WHATSAPP_OWNER and WHATSAPP_ALLOW are empty; every message is dropped')
 
@@ -118,8 +125,9 @@ const MIME = {
 
 async function sendFile(jid, sharedPath, caption) {
   if (!connected) throw httpError(503, 'WhatsApp is not connected')
-  const [rootName, ...rest] = String(sharedPath).split('/')
-  const root = ROOTS[rootName]
+  const parts = String(sharedPath).split('/')
+  const twoLevel = `${parts[0]}/${parts[1]}`
+  const [root, rest] = ROOTS[twoLevel] ? [ROOTS[twoLevel], parts.slice(2)] : [ROOTS[parts[0]], parts.slice(1)]
   if (!root || rest.length === 0) throw httpError(400, 'path must start with fraim/ or pc/')
   const absolute = await realpath(path.join(root, ...rest)).catch(() => null)
   if (!absolute || !absolute.startsWith(root + path.sep)) throw httpError(404, 'file not found')

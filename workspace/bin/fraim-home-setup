@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Prepares the claude user's home. Runs AS claude (never as root): everything under
+# /home/claude is claude-controlled, and root following a planted symlink there could
+# be turned into root access. Usage: fraim-home-setup workspace|scheduler
+set -euo pipefail
+home="$HOME"
+
+# Planted symlinks for these paths would only break startup; remove them.
+for p in "$home/.claude" "$home/.claude.json" "$home/.ssh"; do
+  [ ! -L "$p" ] || rm -f "$p"
+done
+mkdir -p "$home/fraim/jobs" "$home/fraim/logs/jobs" "$home/.ssh" "$home/.claude"
+chmod 700 "$home/.ssh"
+rm -f "$home/.ssh/authorized_keys"
+
+(cd /etc/fraim/skel && find . -type f) | while read -r file; do
+  target="$home/${file#./}"
+  [ -e "$target" ] || install -D -m 0644 "/etc/fraim/skel/${file#./}" "$target"
+done
+
+# Security migrations for existing homes (skel files are only copied when missing):
+# bare WebFetch must never be pre-approved (a page could make Claude send data out).
+settings="$home/.claude/settings.json"
+if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 2>&1; then
+  tmp="$(mktemp)"
+  jq 'if .permissions.allow then .permissions.allow |= map(select(. != "WebFetch")) else . end' "$settings" > "$tmp" \
+    && cat "$tmp" > "$settings"
+  rm -f "$tmp"
+fi
+
+# Skip Claude Code's first-run theme picker and the folder trust prompt for ~/fraim,
+# so the always-on session never waits for a human at those screens.
+state="$home/.claude.json"
+[ -s "$state" ] || echo '{}' > "$state"
+tmp="$(mktemp)"
+jq --arg dir "$home/fraim" '
+  .hasCompletedOnboarding = true
+  | .theme = (.theme // "dark")
+  | .projects[$dir].hasTrustDialogAccepted = true
+' "$state" > "$tmp" && cat "$tmp" > "$state"
+rm -f "$tmp"
+chmod 0600 "$state"
+
+if [ "${1:-}" = scheduler ] && [ ! -f "$home/fraim/jobs/crontab" ]; then
+  install -m 0644 /etc/fraim/skel-jobs/crontab "$home/fraim/jobs/crontab"
+  install -m 0644 /etc/fraim/skel-jobs/example.md "$home/fraim/jobs/example.md"
+fi

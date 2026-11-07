@@ -2,14 +2,24 @@
 # Runs one scheduled job: ~/fraim/jobs/<name>.md is the prompt,
 # ~/fraim/jobs/<name>.tools (optional) lists allowed tools, one per line.
 # If Claude's answer is exactly SILENT, no notification is sent.
+# The outcome of the last run is kept in ~/.local/state/fraim/jobs/<name> for fraim-doctor.
 set -uo pipefail
 
 name="${1:?usage: fraim-job <name>}"
 jobs="$HOME/fraim/jobs"
 prompt_file="$jobs/$name.md"
-[ -f "$prompt_file" ] || { echo "fraim-job: $prompt_file not found" >&2; exit 1; }
+state_dir="$HOME/.local/state/fraim/jobs"
+mkdir -p "$state_dir"
+[ -f "$prompt_file" ] || {
+  echo "fraim-job: $prompt_file not found" >&2
+  printf 'failed %s prompt file missing\n' "$(date '+%Y-%m-%d %H:%M')" > "$state_dir/$name"
+  fraim-notify "Job $name could not run: its prompt file ~/fraim/jobs/$name.md is missing."
+  exit 1
+}
 
-tools="Read,Glob,Grep,WebSearch,WebFetch"
+# No WebFetch by default: a page could ask the job to send data out. A job that needs a
+# site lists it in <name>.tools, for example WebFetch(domain:example.com).
+tools="Read,Glob,Grep,WebSearch"
 if [ -f "$jobs/$name.tools" ]; then
   tools="$(grep -v '^\s*#' "$jobs/$name.tools" | grep -v '^\s*$' | paste -sd, -)"
 fi
@@ -25,13 +35,22 @@ code=$?
 printf '%s\n' "$output" > "$log"
 
 if [ "$code" -eq 0 ]; then
+  printf 'ok %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$state_dir/$name"
   [ "$(printf '%s' "$output" | tr -d '[:space:]')" = "SILENT" ] && exit 0
-  fraim-notify "Job $name finished:
+  FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "Job $name finished:
 
 ${output:0:3500}"
-else
-  fraim-notify "Job $name FAILED (exit $code). Log: ${log#"$HOME"/}
-
-${output:0:1500}"
+  exit 0
 fi
+
+reason="exit $code"
+case "$output" in
+  *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*)
+    reason="the server is not signed in to Claude; ask Claude on your laptop to log the server in" ;;
+  *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
+    reason="your Claude plan's usage limit was reached; the job works again when the limit resets" ;;
+esac
+[ "$code" -ne 124 ] || reason="it took longer than ${FRAIM_JOB_TIMEOUT:-1800} seconds and was stopped"
+printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$state_dir/$name"
+fraim-notify "Job $name failed: $reason. Log: ${log#"$HOME"/}"
 exit "$code"

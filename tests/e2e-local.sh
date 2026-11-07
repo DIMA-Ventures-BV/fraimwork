@@ -20,7 +20,7 @@ KEEP=0; [ "${1:-}" = --keep ] && KEEP=1
 
 export FRAIM_INSTANCE="${FRAIM_INSTANCE:-e2e}"
 export FRAIM_TARGET="$FRAIM_INSTANCE"
-PORT_OFFSET="${FRAIM_PORT_OFFSET:-100}"
+PORT_OFFSET="${FRAIM_PORT_OFFSET:-}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fraim-e2e.XXXXXX")"
 export DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}"
 export XDG_CONFIG_HOME="$WORK/xdg"
@@ -72,6 +72,11 @@ echo
 
 # --- 1. Before setup: clear errors, no hangs -------------------------------------
 check "help" 0 10 "$FRAIM" help && { has 'Exit codes' && ok "help" || bad "help" "no exit-code contract in help"; }
+missing=""
+for c in "local up" "local down" "init" "deploy" "update" "lock" "use" "config" "login" "exec" "ask" "status" "logs" "restart" "reset-workspace" "browser" "chrome" "sync" "whatsapp" "tailscale policy" "shell"; do
+  grep -q "fraim $c" "$OUT" || missing="$missing $c"
+done
+[ -z "$missing" ] && ok "help lists every command" || bad "help lists every command" "missing:$missing"
 check "status before setup fails clearly" 2 15 "$FRAIM" status --json || true
 [ "$CODE" = 2 ] && ok "status before setup fails clearly"
 check "unknown command" 2 10 "$FRAIM" no-such-command && ok "unknown command"
@@ -83,7 +88,7 @@ elif [ "$CODE" = 0 ] || [ "$CODE" = 2 ]; then ok "local --help starts nothing" "
 else bad "local --help starts nothing" "exit $CODE"; fi
 
 # --- 2. Local up ----------------------------------------------------------------
-if check "local up" 0 1200 "$FRAIM" local up --modules browser,scheduler --port-offset "$PORT_OFFSET"; then
+if check "local up" 0 1200 "$FRAIM" local up --modules browser,scheduler ${PORT_OFFSET:+--port-offset "$PORT_OFFSET"}; then
   ok "local up" "$(tail -1 "$OUT")"
 else
   echo "local up failed; the remaining steps need a stack. Stopping."
@@ -142,6 +147,7 @@ if check "browser --print-url" 0 15 "$FRAIM" browser --print-url; then
   if [ -n "$url" ] && curl -fsS -o /dev/null --max-time 10 "$url"; then ok "browser --print-url" "$url answers"
   else bad "browser --print-url" "url '$url' does not answer"; fi
 fi
+check "browser stop" 0 15 "$FRAIM" browser stop && ok "browser stop"
 check "chrome status" 0 15 "$FRAIM" chrome status && ok "chrome status" "$(head -1 "$OUT")"
 check "logs (bounded)" 0 30 "$FRAIM" logs workspace && ok "logs (bounded)" "$(wc -l < "$OUT" | tr -d ' ') lines"
 check "restart scheduler" 0 90 "$FRAIM" restart scheduler && ok "restart scheduler"
@@ -157,6 +163,16 @@ check "config init laptop" 0 120 "$FRAIM" config init --role laptop && ok "confi
 check "config mcp add" 0 15 "$FRAIM" config mcp add e2e-test --url https://example.invalid/mcp --header 'Authorization: Bearer ${E2E_KEY}' && ok "config mcp add"
 check "config status shows missing key" 0 15 "$FRAIM" config status \
   && { has 'missing +E2E_KEY' && ok "config status shows missing key" || bad "config status shows missing key" "no missing line"; }
+check "config apply refuses code changes without yes" 3 30 "$FRAIM" config apply \
+  && { has '^HUMAN STEP:' && ok "config apply refuses code changes without yes" || bad "config apply refuses code changes without yes" "no HUMAN STEP"; }
+mkdir -p "$FRAIM_DIR/claude/core/hooks"
+printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch %s/PWNED"}]}]}}' "$WORK" > "$FRAIM_DIR/claude/core/hooks/hooks.json"
+run 20 "$FRAIM" config hook
+if [ -f "$XDG_CONFIG_HOME/fraim/applied/core/hooks/hooks.json" ]; then bad "planted hook stays inactive" "it reached the loaded copy"
+elif grep -q 'NOT active' "$OUT"; then ok "planted hook stays inactive" "session hook warns, loaded copy clean"
+else bad "planted hook stays inactive" "no warning from the session hook"; fi
+printf '{"hooks":{}}' > "$FRAIM_DIR/claude/core/hooks/hooks.json"
+check "config apply --yes" 0 60 "$FRAIM" config apply --yes && ok "config apply --yes"
 check "config skill new" 0 15 "$FRAIM" config skill new e2e-checking && ok "config skill new"
 check "config mcp remove" 0 15 "$FRAIM" config mcp remove e2e-test && ok "config mcp remove"
 check "config uninstall" 0 15 "$FRAIM" config uninstall \

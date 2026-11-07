@@ -2,8 +2,12 @@
 # fraim-config: keep Claude Code skills, agents, hooks and MCP servers equal on every machine.
 #
 # Source of truth: ~/fraim/claude (Syncthing keeps it equal on laptop and server).
-# Each plugin folder there is linked into ~/.claude/skills/, where Claude Code loads it
-# live as <name>@skills-dir. Secrets stay per machine in ~/.config/fraim/secrets.env.
+# Each plugin folder is linked into ~/.claude/skills/, where Claude Code loads it as <name>@skills-dir.
+# Server: links point at the synced folder itself.
+# Laptop: links point at a private copy in ~/.config/fraim/applied. The synced folder is writable
+# by the server, so a change that can run code (anything but .md files) reaches that copy only
+# after the user approved it (apply --yes). The server must never be able to run code on the laptop.
+# Secrets stay per machine in ~/.config/fraim/secrets.env.
 set -euo pipefail
 
 FRAIM_DIR="${FRAIM_DIR:-$HOME/fraim}"
@@ -16,6 +20,7 @@ LINK_DIR="$CLAUDE_HOME/skills"
 CLAUDE="${FRAIM_CLAUDE_BIN:-claude}"
 SELF_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
 ROLES="laptop server"
+APPLIED="$STATE/applied"
 
 # Exit codes match bin/fraim: 0 ok, 1 failure, 2 usage or missing input.
 die() { printf 'fraim config: %s\n' "$*" >&2; exit 1; }
@@ -47,6 +52,8 @@ hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-12; else shasum -a 256 | cut -c1-12; fi
 }
 
+sha_files() { if command -v sha256sum >/dev/null 2>&1; then xargs -0 sha256sum; else xargs -0 shasum -a 256; fi; }
+
 # --- init -------------------------------------------------------------------
 
 cmd_init() {
@@ -63,6 +70,7 @@ cmd_init() {
     cp -R "$(template_dir)" "$SRC"
     rm -f "$SRC/secrets.env.example"
     say "Created $SRC from the template"
+    YES=1
   fi
 
   if [ ! -f "$SECRETS" ]; then
@@ -74,8 +82,11 @@ cmd_init() {
 
 # --- apply ------------------------------------------------------------------
 
+# Where Claude Code loads the plugins from on this machine.
+loaded_dir() { if [ "$1" = laptop ]; then printf '%s' "$APPLIED"; else printf '%s' "$SRC"; fi; }
+
 link_plugin() {
-  local name="$1" target="$SRC/$1" link="$LINK_DIR/fraim-$1"
+  local name="$1" target="$2/$1" link="$LINK_DIR/fraim-$1"
   [ -f "$target/.claude-plugin/plugin.json" ] || die "$target is not a plugin folder"
   if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then return; fi
   [ -e "$link" ] && [ ! -L "$link" ] && die "$link exists and is not a link; move it away first"
@@ -89,38 +100,94 @@ unlink_plugin() {
 }
 
 install_third_party() {
-  local r="$1" have_m have_p name source id
+  local r="$1" base="$2" have_m have_p name source id
   need jq
   have_m="$(claude_cli plugin marketplace list --json 2>/dev/null | jq -r '.[].name' || true)"
   while IFS=$'\t' read -r name source; do
     [ -n "$name" ] || continue
     grep -qx "$name" <<<"$have_m" && continue
     claude_cli plugin marketplace add "$source" >/dev/null && say "Added marketplace $name"
-  done < <(jq -r '.marketplaces // {} | to_entries[] | [.key, .value] | @tsv' "$SRC/plugins.json")
+  done < <(jq -r '.marketplaces // {} | to_entries[] | [.key, .value] | @tsv' "$base/plugins.json")
 
   have_p="$(claude_cli plugin list --json 2>/dev/null | jq -r '.[].id' || true)"
   while read -r id; do
     [ -n "$id" ] || continue
     grep -qx "$id" <<<"$have_p" && continue
     claude_cli plugin install "$id" >/dev/null && say "Installed $id"
-  done < <(jq -r --arg r "$r" '(.plugins.all // []) + (.plugins[$r] // []) | .[]' "$SRC/plugins.json")
+  done < <(jq -r --arg r "$r" '(.plugins.all // []) + (.plugins[$r] // []) | .[]' "$base/plugins.json")
+}
+
+# "<hash>  ./path" for every file in the parts this role loads. Missing parts give no lines.
+manifest() {
+  local base="$1" r="$2" part
+  [ -d "$base" ] || return 0
+  (cd "$base" && for part in core "$r" plugins.json; do
+    [ -e "$part" ] && find "$part" -type f ! -name .DS_Store -print0
+  done | sort -z | sha_files) | sed 's#  \./#  #'
+}
+
+# Paths that are new or changed in the synced folder compared with the applied copy.
+changed_paths() {
+  local r="$1"
+  comm -23 <(manifest "$SRC" "$r" | sort) <(manifest "$APPLIED" "$r" | sort) | cut -c67- | sort -u
+}
+removed_paths() {
+  local r="$1"
+  comm -13 <(manifest "$SRC" "$r" | cut -c67- | sort) <(manifest "$APPLIED" "$r" | cut -c67- | sort)
+}
+# Anything but Markdown can run code: hooks, .mcp.json, plugin.json, plugins.json, scripts.
+risky_paths() { changed_paths "$1" | grep -v '\.md$' || true; }
+
+show_review() {
+  local r="$1" path
+  say "Changes in $SRC that are not active on this laptop yet:"
+  changed_paths "$r" | sed 's/^/  changed  /'
+  removed_paths "$r" | sed 's/^/  removed  /'
+  while read -r path; do
+    [ -n "$path" ] || continue
+    say ""
+    say "--- $path (can run code on this laptop)"
+    if [ -f "$APPLIED/$path" ]; then diff -u "$APPLIED/$path" "$SRC/$path" | tail -n +3 | head -60 || true
+    else head -60 "$SRC/$path"; fi
+  done < <(risky_paths "$r")
+}
+
+sync_applied() {
+  local r="$1" tmp="$STATE/applied.tmp" part
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  for part in core "$r" plugins.json; do
+    [ -e "$SRC/$part" ] && cp -R "$SRC/$part" "$tmp/$part"
+  done
+  rm -rf "$APPLIED"; mv "$tmp" "$APPLIED"
 }
 
 cmd_apply() {
-  local r other stamp
+  local r other stamp base risky
   r="$(role)"; valid_role "$r"
   mkdir -p "$STATE"
   printf '%s\n' "$r" > "$ROLE_FILE"
   [ -d "$SRC" ] || usage "$SRC is missing; run 'fraim config init --role $r' or wait for Syncthing"
   mkdir -p "$LINK_DIR"
 
-  link_plugin core
-  link_plugin "$r"
+  if [ "$r" = laptop ]; then
+    if [ "${REVIEW:-0}" = 1 ]; then show_review "$r"; return 0; fi
+    risky="$(risky_paths "$r")"
+    if [ -n "$risky" ] && [ "${YES:-0}" != 1 ]; then
+      show_review "$r"
+      printf 'HUMAN STEP: The synced Claude config has changes that can run code on this laptop (%s). They may come from the server. Show the user what changed and why, and run fraim config apply --yes only after a clear yes.\n' "$(printf '%s' "$risky" | paste -sd, -)"
+      exit 3
+    fi
+    sync_applied "$r"
+  fi
+  base="$(loaded_dir "$r")"
+
+  link_plugin core "$base"
+  link_plugin "$r" "$base"
   for other in $ROLES; do [ "$other" = "$r" ] || unlink_plugin "$other"; done
 
-  stamp="$(hash_of < "$SRC/plugins.json")-$r"
+  stamp="$(hash_of < "$base/plugins.json")-$r"
   if [ "${FORCE:-0}" = 1 ] || [ "$(cat "$STATE/plugins.stamp" 2>/dev/null)" != "$stamp" ]; then
-    install_third_party "$r"
+    install_third_party "$r" "$base"
     printf '%s\n' "$stamp" > "$STATE/plugins.stamp"
   fi
   say "Applied role $r. Running sessions pick it up after /reload-plugins or a restart."
@@ -132,6 +199,7 @@ cmd_apply() {
 cmd_uninstall() {
   local to
   for to in core $ROLES; do unlink_plugin "$to"; done
+  rm -rf "$APPLIED"
   rm -f "$ROLE_FILE" "$STATE/plugins.stamp"
   say "Removed the fraim plugin links and the role. Kept $SRC and $SECRETS."
   say "Third-party plugins from plugins.json stay installed: remove one with 'claude plugin uninstall <id>'."
@@ -219,6 +287,7 @@ cmd_mcp() {
   fi
   jq --arg n "$name" --argjson e "$entry" '.mcpServers[$n] = $e' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
   say "Added $name to $to. Put any \${VAR} it uses in $SECRETS on each machine that needs it."
+  say "On a laptop it becomes active after 'fraim config apply --yes' (it can run code, so it needs the user's yes)."
 }
 
 # --- skill ------------------------------------------------------------------
@@ -274,6 +343,13 @@ cmd_status() {
   for to in core $ROLES; do
     if [ -L "$LINK_DIR/fraim-$to" ]; then printf 'linked       fraim-%s\n' "$to"; fi
   done
+  if [ "$r" = laptop ]; then
+    local n risky
+    n="$( { changed_paths "$r"; removed_paths "$r"; } | grep -c . || true)"
+    risky="$(risky_paths "$r" | paste -sd ' ' -)"
+    if [ "$n" = 0 ]; then printf 'applied      in sync with %s\n' "$SRC"
+    else printf 'applied      %s pending change(s)%s\n' "$n" "${risky:+; need review: $risky}"; fi
+  fi
   if [ -f "$SECRETS" ]; then
     printf 'secrets      %s (mode %s, %s keys)\n' "$SECRETS" "$(mode_of "$SECRETS")" "$(secret_lines | wc -l | tr -d ' ')"
   else
@@ -288,9 +364,18 @@ cmd_status() {
 cmd_hook() {
   set +e
   [ -f "$ROLE_FILE" ] && [ -d "$SRC" ] || exit 0
-  local r miss
+  local r miss risky
   r="$(cat "$ROLE_FILE")"
-  (QUIET=1 cmd_apply >/dev/null 2>&1 &)
+  if [ "$r" = laptop ]; then
+    risky="$(risky_paths "$r")"
+    if [ -n "$risky" ]; then
+      printf 'fraim config: the synced Claude config (%s) has changes that can run code on this laptop: %s. They may come from the server and are NOT active. Before using them, show the user what "fraim config apply --review" prints and ask; run "fraim config apply --yes" only after a clear yes.\n' "$SRC" "$(printf '%s' "$risky" | paste -sd, -)"
+    elif [ -n "$( { changed_paths "$r"; removed_paths "$r"; } )" ]; then
+      (QUIET=1 cmd_apply >/dev/null 2>&1 &)
+    fi
+  else
+    (QUIET=1 cmd_apply >/dev/null 2>&1 &)
+  fi
   miss="$(missing_vars "$r" | paste -sd ' ' -)"
   [ -z "$miss" ] || printf 'fraim config: these MCP secrets are missing on this machine, so their servers will fail: %s. Add them to %s.\n' "$miss" "$SECRETS"
   exit 0
@@ -302,6 +387,8 @@ Usage: fraim config <command>
 
   init --role laptop|server   Create ~/fraim/claude from the template (if missing) and apply it
   apply [--force]             Link the plugins and install the third-party plugins in plugins.json
+  apply --review              Laptop: show synced changes that are not active yet
+  apply --yes                 Laptop: also activate changes that can run code (after the user's yes)
   status                      Role, fingerprint, secrets, missing keys and MCP servers
   mcp list                    MCP servers per plugin
   mcp add <name> [--to P] --url <url> [--header 'K: V']
@@ -321,6 +408,8 @@ main() {
       --role) ROLE="$2"; shift 2 ;;
       --quiet) QUIET=1; shift ;;
       --force) FORCE=1; shift ;;
+      --yes) YES=1; shift ;;
+      --review) REVIEW=1; shift ;;
       --) rest+=("$@"); break ;;
       *) rest+=("$1"); shift ;;
     esac

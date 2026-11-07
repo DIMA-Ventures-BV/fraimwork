@@ -7,3 +7,4 @@ node_modules/
 .env.*
 !.env.example
 .claude/worktrees/
+.update-lock/
