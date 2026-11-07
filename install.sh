@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up a fresh Ubuntu 24.04 server for fraimwork. Safe to run again.
+# Sets up a fresh Ubuntu 22.04+ or Debian 12+ server for fraimwork, on any provider. Safe to run again.
 # Usage (as root, from the repo folder on the server): ./install.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,7 +21,10 @@ has_module() { case ",$(get_env COMPOSE_PROFILES)," in *",$1,"*) return 0 ;; *) 
 [ "$(id -u)" = 0 ] || die "run as root"
 # shellcheck source=/dev/null
 . /etc/os-release
-[ "${ID:-}" = ubuntu ] || die "Ubuntu 24.04 or newer is required (found ${ID:-unknown})"
+case "${ID:-}" in
+  ubuntu|debian) ;;
+  *) die "Ubuntu 22.04+ or Debian 12+ is required (found ${ID:-unknown})" ;;
+esac
 [ -f .env ] || die "no .env found; run 'fraim init' on your laptop and deploy again"
 [ -s config/authorized_keys ] || die "config/authorized_keys is empty; add at least one SSH public key"
 chmod 600 .env
@@ -32,26 +35,57 @@ if has_module whatsapp && [ -z "$(get_env WHATSAPP_OWNER)" ]; then
   die "the whatsapp module needs WHATSAPP_OWNER in .env"
 fi
 
+say "Installing system packages"
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+apt-get update -q
+apt-get install -y -q ca-certificates curl openssl jq ufw unattended-upgrades
+if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -q
+  apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+systemctl enable --now docker >/dev/null
+
 say "Generating secrets"
 [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
 # VNC only uses the first 8 characters of a password.
 [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
 [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
 
-say "Installing system packages"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -q
-apt-get install -y -q ca-certificates curl openssl jq ufw unattended-upgrades
-if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
-    > /etc/apt/sources.list.d/docker.list
-  apt-get update -q
-  apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# Small cloud servers (2 to 4 GB) have no swap. The image build and Chrome need headroom.
+mem_mb="$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo)"
+if [ "$mem_mb" -lt 3500 ]; then
+  warn "this server has ${mem_mb} MB memory; 4 GB or more is recommended"
 fi
-systemctl enable --now docker >/dev/null
+if [ "$mem_mb" -lt 6000 ] && [ -z "$(swapon --show --noheadings 2>/dev/null)" ] && [ ! -f /swapfile ]; then
+  say "Adding a 2 GB swap file"
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  # Container-based VPS hosts (LXC, OpenVZ) do not allow swap.
+  if swapon /swapfile 2>/dev/null; then
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else
+    warn "this host does not allow swap; continuing without it"
+    rm -f /swapfile
+  fi
+fi
+free_gb="$(df -BG --output=avail / | tail -1 | tr -dc 0-9)"
+[ "$free_gb" -ge 12 ] || warn "only ${free_gb} GB free disk; the images need about 6 GB, 20 GB or more is recommended"
+
+# Cloud images can enable passwords in sshd_config.d (for example 50-cloud-init.conf).
+# The first value sshd reads wins, so this file sorts first.
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-fraim.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 
 if [ "$mode" = tailscale ]; then
   say "Connecting to Tailscale"
@@ -95,13 +129,11 @@ else
   say "Configuring the firewall: SSH keys only"
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
-  ufw allow OpenSSH >/dev/null
+  ufw allow 22/tcp comment 'admin ssh' >/dev/null
   ufw allow "$(get_env SSH_PORT)/tcp" comment 'fraim workspace' >/dev/null
   ufw allow 60000:60010/udp comment 'mosh' >/dev/null
   ufw allow 22000 comment 'syncthing' >/dev/null
   ufw --force enable >/dev/null
-  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-  systemctl reload ssh || systemctl reload sshd || true
 fi
 
 say "Building and starting fraimwork (first build takes a few minutes)"
@@ -117,7 +149,11 @@ if has_module sync; then
   docker compose exec -T -e PW="$(get_env SYNCTHING_GUI_PASSWORD)" syncthing sh -c '
     key=$(sed -n "s:.*<apikey>\(.*\)</apikey>.*:\1:p" /var/syncthing/config/config.xml)
     st() { syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@"; }
-    st config gui user set fraim && st config gui password set "$PW"
+    # The API starts a few seconds after the config file appears, and each GUI change
+    # restarts the listener. Retry every call until the API takes it.
+    retry() { i=0; until "$@" 2>/dev/null; do i=$((i + 1)); [ "$i" -lt 60 ] || return 1; sleep 1; done; }
+    retry st config gui user set fraim && retry st config gui password set "$PW" \
+      && retry grep -q "<password>" /var/syncthing/config/config.xml
   ' || warn "could not set the Syncthing GUI password; set it in the GUI"
 fi
 

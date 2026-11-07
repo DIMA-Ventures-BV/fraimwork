@@ -10,6 +10,26 @@ REMOTE_DIR=/opt/fraimwork
 die() { printf 'fraim: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 
+# Offer only the fraim key. An SSH agent with many keys (1Password, ...) otherwise hits the
+# server's MaxAuthTries before it reaches the right key: "Too many authentication failures".
+fraim_key() {
+  local key
+  for key in "${FRAIM_SSH_KEY:-}" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ecdsa" "$HOME/.ssh/id_rsa"; do
+    if [ -n "$key" ] && [ -f "$key" ]; then printf '%s' "$key"; return; fi
+  done
+}
+# accept-new: trust a new server's host key once, refuse a changed one. Claude runs fraim
+# without a terminal, where the usual yes/no prompt fails.
+SSH_KEY_OPTS=(-o StrictHostKeyChecking=accept-new)
+RSYNC_RSH="ssh -o StrictHostKeyChecking=accept-new"
+if [ -n "$(fraim_key)" ]; then
+  SSH_KEY_OPTS+=(-o IdentitiesOnly=yes -i "$(fraim_key)")
+  RSYNC_RSH="$RSYNC_RSH -o IdentitiesOnly=yes -i $(fraim_key)"
+fi
+export RSYNC_RSH
+ssh() { command ssh ${SSH_KEY_OPTS[@]+"${SSH_KEY_OPTS[@]}"} "$@"; }
+scp() { command scp ${SSH_KEY_OPTS[@]+"${SSH_KEY_OPTS[@]}"} "$@"; }
+
 load_config() {
   [ -f "$CONFIG" ] || die "not set up yet; run 'fraim init' first"
   # shellcheck source=/dev/null
@@ -87,12 +107,17 @@ cmd_init() {
     fi
   done
   [ -s config/authorized_keys ] || die "no SSH key found; create one with: ssh-keygen -t ed25519"
-  say "Done. Next: create an Ubuntu 24.04 server and run: fraim deploy root@<server-ip>"
+  say "Done. Next: fraim cloud create --provider hetzner|digitalocean|aws, or create an Ubuntu 24.04 server yourself and run: fraim deploy USER@IP"
 }
 
 cmd_deploy() {
-  local target="${1:?usage: fraim deploy root@<server-ip>}"
+  local target="${1:?usage: fraim deploy USER@IP}"
   [ -f "$REPO/.env" ] || die "no .env; run 'fraim init' first"
+  # Any provider: turns ubuntu@IP (AWS, Google, ...) into root@IP, waits for cloud-init.
+  local prepared rc=0
+  prepared="$("$REPO/bin/fraim-cloud" prepare "$target")" || rc=$?
+  if [ "$rc" != 0 ]; then printf '%s\n' "$prepared"; exit "$rc"; fi
+  target="$(printf '%s\n' "$prepared" | tail -1)"
   say "Copying fraimwork to $target:$REMOTE_DIR"
   ssh "$target" "mkdir -p $REMOTE_DIR/config"
   rsync -az --delete \
@@ -133,9 +158,9 @@ cmd_shell() {
     remote="tmux new-session -A -s $session"
   fi
   if command -v mosh >/dev/null; then
-    exec mosh --ssh="ssh -p $FRAIM_SSH_PORT" --port=60000:60010 "claude@$FRAIM_HOST" -- sh -c "$remote"
+    exec mosh --ssh="${RSYNC_RSH:-ssh} -p $FRAIM_SSH_PORT" --port=60000:60010 "claude@$FRAIM_HOST" -- sh -c "$remote"
   fi
-  exec ssh -t -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST" "$remote"
+  exec ssh ${SSH_KEY_OPTS[@]+"${SSH_KEY_OPTS[@]}"} -t -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST" "$remote"
 }
 
 cmd_chrome() {
@@ -215,7 +240,8 @@ fraim: control your fraimwork server
 
 Setup
   fraim init                    create .env and add your SSH key
-  fraim deploy root@<ip>        install on a fresh Ubuntu 24.04 server
+  fraim cloud create --provider hetzner|digitalocean|aws   create a server (see 'fraim cloud help')
+  fraim deploy USER@IP          install on a fresh Ubuntu 22.04+ or Debian 12+ server, any provider
   fraim update                  push repo changes and rebuild
 
 Daily use
@@ -237,6 +263,7 @@ main() {
   case "$cmd" in
     init) cmd_init "$@" ;;
     deploy) cmd_deploy "$@" ;;
+    cloud) exec "$REPO/bin/fraim-cloud" "$@" ;;
     update) cmd_update "$@" ;;
     shell) cmd_shell "$@" ;;
     chrome) cmd_chrome "$@" ;;
