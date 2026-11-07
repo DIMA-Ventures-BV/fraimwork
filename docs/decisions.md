@@ -6,7 +6,7 @@
 |---|---|
 | Platform | Claude Code plus our own setup layer, not Hermes or OpenClaw |
 | Users | Tens of non-technical people. Claude runs every `fraim` command; humans only do `HUMAN STEP` items. |
-| Repo | Public at `MHilhorst/fraimwork`. Not created or pushed yet. |
+| Repo | Public at `DIMA-Ventures-BV/fraimwork`. |
 | Backups | Hetzner paid backups, as a recommended setup step. No backup job of our own. |
 | Updates | Release tags `vX.Y.Z`. `fraim update` installs the latest tag, checks health, and rolls back on failure. |
 | Sandbox | No Claude Code sandbox inside the container. The container is the boundary. |

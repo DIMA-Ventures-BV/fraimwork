@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-command laptop setup for fraimwork. Safe to run again.
-#   curl -fsSL https://raw.githubusercontent.com/MHilhorst/fraimwork/main/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/DIMA-Ventures-BV/fraimwork/main/bootstrap.sh | bash
 # Installs Claude Code, adds short aliases, installs the fraim plugin, stores a
 # Claude login token in the macOS Keychain, then opens Claude with "set up fraim".
 # Env: FRAIM_NO_ALIASES=1, FRAIM_NO_TOKEN=1, FRAIM_NO_LAUNCH=1 skip those steps.
 #      FRAIM_MARKETPLACE=<path or owner/repo> installs the plugin from elsewhere (tests, forks).
 set -euo pipefail
 
-MARKETPLACE="${FRAIM_MARKETPLACE:-MHilhorst/fraimwork}"
+MARKETPLACE="${FRAIM_MARKETPLACE:-DIMA-Ventures-BV/fraimwork}"
 KEYCHAIN_SERVICE="fraim-claude-token"
 BLOCK_START="# >>> fraimwork >>>"
 BLOCK_END="# <<< fraimwork <<<"

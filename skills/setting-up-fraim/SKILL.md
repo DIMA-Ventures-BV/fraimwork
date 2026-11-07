@@ -39,7 +39,7 @@ The user may stop for hours (Hetzner checks an account before it can be used). W
 
 1. Find the checkout: `~/fraimwork`, then `~/projects/fraimwork`. If neither exists, clone it:
    `git clone "$(git -C "${CLAUDE_PLUGIN_ROOT}" remote get-url origin)" ~/fraimwork`.
-   When the plugin folder has no git remote, use `https://github.com/MHilhorst/fraimwork`.
+   When the plugin folder has no git remote, use `https://github.com/DIMA-Ventures-BV/fraimwork`.
 2. Set `F=<checkout>/bin/fraim` and use `$F` for every command.
 3. Check the tools: `git`, `ssh`, `jq`; `docker info` only for the Mac trial. Docker missing: "Install OrbStack (https://orbstack.dev) or Docker Desktop, open it once, then tell me." An SSH key is missing: `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519`.
 

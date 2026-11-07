@@ -9,12 +9,12 @@ You do not need to know anything about servers. Claude sets it up for you and on
 Open the Terminal app (press Cmd+Space, type Terminal, press Enter), paste this line and press Enter:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/MHilhorst/fraimwork/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DIMA-Ventures-BV/fraimwork/main/bootstrap.sh | bash
 ```
 
 It installs Claude Code and the fraim plugin, adds short commands (`c` starts Claude, `cn` continues your last chat, `cr` picks an older one), and asks you once to approve a Claude login in your browser. Then Claude opens and sets up the rest with you. You can run it again at any time.
 
-Already use Claude Code? Type `/plugin marketplace add MHilhorst/fraimwork`, then `/plugin install fraim@fraimwork`, then ask: `Set up fraim for me.`
+Already use Claude Code? Type `/plugin marketplace add DIMA-Ventures-BV/fraimwork`, then `/plugin install fraim@fraimwork`, then ask: `Set up fraim for me.`
 
 Want to try it first without renting a server? Ask: `Set up fraim locally so I can try it.` It then runs on your laptop in Docker.
 

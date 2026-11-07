@@ -27,7 +27,7 @@ x-workspace-env: &workspace-env
   FRAIM_BROWSER_VIEW_URL: ${BROWSER_VIEW_URL:-http://localhost:6080/vnc.html}
   FRAIM_AUTO_CONFIRM_CHANNEL: ${AUTO_CONFIRM_CHANNEL:-1}
   FRAIM_VERSION: ${FRAIM_VERSION:-dev}
-  FRAIM_RELEASES_REPO: ${FRAIM_RELEASES_REPO:-MHilhorst/fraimwork}
+  FRAIM_RELEASES_REPO: ${FRAIM_RELEASES_REPO:-DIMA-Ventures-BV/fraimwork}
 
 x-workspace-volumes: &workspace-volumes
   - home:/home/claude
