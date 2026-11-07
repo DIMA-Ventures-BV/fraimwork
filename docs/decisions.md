@@ -19,7 +19,6 @@
 ## Open for Michael
 
 - Publish the repo (cannot be undone).
-- Rotate the Claude token that was pasted in a chat.
 
 ## Test status
 

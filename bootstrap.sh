@@ -18,8 +18,12 @@ warn() { printf '  note: %s\n' "$*" >&2; }
 die()  { printf '\nfraimwork setup stopped: %s\n' "$*" >&2; exit 1; }
 
 # With `curl | bash`, stdin is the script itself. Questions read from the terminal.
-[ -r /dev/tty ] || die "run this in a terminal window"
 ask() { local reply; printf '%s ' "$1" >/dev/tty; read -r reply </dev/tty || true; printf '%s' "$reply"; }
+
+# Everything runs from main, called on the last line. When a download breaks off,
+# bash sees an unfinished function and runs nothing, instead of half the steps.
+main() {
+( : </dev/tty ) 2>/dev/null || die "run this in a terminal window"
 
 [ "$(uname -s)" = Darwin ] || warn "this script is written for macOS; other systems may need manual steps"
 export PATH="$HOME/.local/bin:$PATH"
@@ -150,3 +154,6 @@ say "All set. Claude opens now and sets up the rest with you."
 echo "  Later, open a new terminal and type: c"
 [ -n "${FRAIM_NO_LAUNCH:-}" ] && exit 0
 exec claude "set up fraim" </dev/tty
+}
+
+main "$@"

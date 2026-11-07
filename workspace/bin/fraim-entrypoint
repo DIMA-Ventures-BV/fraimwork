@@ -78,9 +78,6 @@ case "$role" in
       echo "fraim: config/authorized_keys is empty, nobody can log in" >&2
     fi
 
-    if command -v fraim-config >/dev/null; then
-      as_claude "fraim-config init --role server --quiet" || echo "fraim: fraim-config init failed" >&2
-    fi
     if [ -d /opt/fraim/server-plugin ]; then
       as_claude "mkdir -p ~/.claude/skills && ln -sfn /opt/fraim/server-plugin ~/.claude/skills/fraim-system"
     fi
@@ -94,6 +91,16 @@ case "$role" in
     fi
 
     as_claude "tmux has-session -t main 2>/dev/null || tmux new-session -d -s main fraim-session"
+
+    # The Claude config layer can need the network (plugin marketplaces on GitHub). Never let
+    # SSH access wait on it: run it in the background with a time limit, record the result
+    # for fraim-doctor (plugins-ok), and restart the Claude session once so it loads the result.
+    if command -v fraim-config >/dev/null; then
+      (
+        as_claude "mkdir -p ~/.local/state/fraim && echo \"pending \$(date '+%Y-%m-%d %H:%M')\" > ~/.local/state/fraim/config-init.status && if timeout 180 fraim-config init --role server --quiet >~/.local/state/fraim/config-init.log 2>&1; then echo ok; else echo \"failed \$(date '+%Y-%m-%d %H:%M')\"; fi > ~/.local/state/fraim/config-init.status"
+        as_claude "pkill -x claude || true"
+      ) &
+    fi
 
     exec /usr/sbin/sshd -D -e
     ;;
