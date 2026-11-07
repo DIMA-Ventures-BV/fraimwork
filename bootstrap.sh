@@ -35,6 +35,16 @@ else
   command -v claude >/dev/null || die "Claude Code did not install. Install it from https://claude.com/claude-code and run this again."
   ok "Claude Code installed"
 fi
+# /usr/bin/git exists without the Command Line Tools; its first use opens an install dialog.
+if [ "$(uname -s)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
+  echo "  Your Mac needs Apple's developer tools (free, about 5 to 10 minutes)."
+  xcode-select --install >/dev/null 2>&1 || true
+  until xcode-select -p >/dev/null 2>&1; do
+    reply="$(ask "Click Install in the window that opened. When it says done, press Enter (or type skip):")"
+    case "$reply" in [Ss]kip*) warn "skipped; Claude asks for it again later"; break ;; esac
+  done
+  xcode-select -p >/dev/null 2>&1 && ok "developer tools installed"
+fi
 for tool in git ssh jq; do
   command -v "$tool" >/dev/null && continue
   if command -v brew >/dev/null; then
@@ -47,13 +57,14 @@ done
 say "Step 2 of 4: short commands"
 rc_file="$HOME/.zshrc"
 case "${SHELL:-}" in */bash) rc_file="$HOME/.bashrc" ;; esac
-if [ -n "${FRAIM_NO_ALIASES:-}" ]; then
-  ok "skipped"
-else
+# The PATH line is always written; FRAIM_NO_ALIASES=1 only leaves out the aliases.
+{
   touch "$rc_file"
   # Names the user already uses elsewhere in the rc file or as a program stay theirs.
   outside_block="$(sed "/^$BLOCK_START\$/,/^$BLOCK_END\$/d" "$rc_file")"
   block="$BLOCK_START"$'\n'"# Managed by fraimwork bootstrap.sh; rerunning it rewrites this block."
+  # The Claude Code installer puts claude in ~/.local/bin but may not add it to PATH.
+  block+=$'\n''case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
   taken() {
     printf '%s\n' "$outside_block" \
       | grep -qE "^[[:space:]]*(alias[[:space:]]+)?$1=|^[[:space:]]*(function[[:space:]]+)?$1[[:space:]]*\(\)" \
@@ -61,7 +72,9 @@ else
   }
   added=()
   # cc is the C compiler on macOS, so "continue" is cn.
-  for pair in "c=claude" "cn=claude --continue" "cr=claude --resume" "fraim-setup=claude \"set up fraim\""; do
+  pairs=("c=claude" "cn=claude --continue" "cr=claude --resume" "fraim-setup=claude \"set up fraim\"")
+  [ -z "${FRAIM_NO_ALIASES:-}" ] || pairs=()
+  for pair in ${pairs[@]+"${pairs[@]}"}; do
     name="${pair%%=*}" value="${pair#*=}"
     if taken "$name"; then
       warn "'$name' already means something on this computer; left it alone"
@@ -75,20 +88,23 @@ else
   printf '%s\n' "$outside_block" > "$tmp"
   printf '%s\n' "$block" >> "$tmp"
   cp "$rc_file" "$rc_file.fraim-backup"
-  mv "$tmp" "$rc_file"
+  # Write through the file: a dotfiles symlink stays a link and the mode stays the same.
+  cat "$tmp" > "$rc_file"
+  rm -f "$tmp"
   if [ ${#added[@]} -gt 0 ]; then
     ok "added: ${added[*]}  (type c to start Claude, cn to continue the last chat)"
   else
     ok "no new commands added"
   fi
-fi
+}
 
 say "Step 3 of 4: the fraim plugin"
 if claude plugin marketplace list 2>/dev/null | grep -q fraimwork; then
   claude plugin marketplace update fraimwork >/dev/null 2>&1 || true
   ok "fraimwork plugin source already added"
 else
-  claude plugin marketplace add "$MARKETPLACE" >/dev/null || die "could not add the fraimwork plugin source"
+  claude plugin marketplace add "$MARKETPLACE" >/dev/null \
+    || die "could not download fraimwork. Check your internet connection. If that works, the fraimwork repo is not public yet: ask whoever sent you this link."
   ok "fraimwork plugin source added"
 fi
 if claude plugin list 2>/dev/null | grep -q "fraim@fraimwork"; then
@@ -113,14 +129,16 @@ else
   for _ in 1 2 3; do
     ask "Copy the token, then press Enter (or type skip):" | grep -qi '^skip' && break
     token="$(pbpaste | tr -d '[:space:]')"
-    case "$token" in sk-ant-*) break ;; esac
+    case "$token" in *[!A-Za-z0-9_-]*) ;; sk-ant-*) break ;; esac
     token=""
     warn "the clipboard does not hold a token that starts with sk-ant-. Copy it again."
   done
   pbcopy </dev/null
   if [ -n "$token" ]; then
-    security add-generic-password -U -s "$KEYCHAIN_SERVICE" -a "$USER" \
-      -j "created $(date +%Y-%m-%d)" -w "$token"
+    # Through stdin, so the token never shows in the process list.
+    printf 'add-generic-password -U -s %s -a %s -j "created %s" -w %s\n' \
+      "$KEYCHAIN_SERVICE" "$USER" "$(date +%Y-%m-%d)" "$token" | security -i \
+      || die "could not save the token in your Keychain"
     unset token
     ok "token saved in your Keychain. Claude sends it to your server later; you never paste it."
   else
