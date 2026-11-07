@@ -55,7 +55,7 @@ Ask the rest in one round, recommended answer first:
 Do not ask about networking. A server always uses Tailscale (private network, no open ports).
 Use public mode only when the user cannot use Tailscale (for example a work laptop that blocks it), and then say that SSH is open to the internet with key-only login.
 
-When the user picks "Not now" for WhatsApp, say once: "Without WhatsApp your server cannot warn you by itself. Once a week, ask me 'is my server ok?' and I check it for you." Put the same line in the guide.
+When the user picks "Not now" for WhatsApp, say once: "Without WhatsApp your server cannot warn you by itself, and results of scheduled jobs wait on the server until you ask me what they said. Once a week, ask me 'is my server ok?' and I check it for you." Put the same lines in the guide.
 
 Modules: `browser` and `scheduler` always; `whatsapp` when chosen; `sync` on a server.
 Then follow **Path A** (Mac trial) or **Path B** (server).
@@ -161,6 +161,9 @@ Report, in this order:
    Costs: <new Hetzner server: about 7-9 euro a month (server, address, backups) | existing server: your provider's price>; Claude uses your own subscription
    To stop or move fraim: ask Claude on your laptop "remove fraim" or "move fraim to a new server"
    Set up on: <date>, server <hostname>, help: <the person who set it up, if any>
+
+   ## Your jobs
+   (none yet; ask Claude "every weekday at 8, ..." to add one)
    ```
 
 ## Human steps (the complete list)
