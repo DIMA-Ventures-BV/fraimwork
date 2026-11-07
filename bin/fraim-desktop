@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# jq filters are single-quoted on purpose.
+# shellcheck disable=SC2016
+# fraim-desktop: a ready fraim workspace on top of stock cmux. Built to be run by Claude.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FRAIM_BIN="${FRAIM_BIN:-$REPO/bin/fraim}"
+CMUX_DIR="$HOME/.config/cmux"
+DOCK="$CMUX_DIR/dock.json"
+
+usage() {
+  cat <<'EOF'
+fraim-desktop: a ready fraim workspace on top of stock cmux. Built to be run by Claude.
+
+Conventions: never prompts; exit codes 0 ok, 1 failure, 2 usage, 3 human step needed.
+cmux is GPL-3.0 and installed unmodified. Your own cmux settings are never changed.
+
+  fraim-desktop dock        add the fraim controls to the cmux Dock (~/.config/cmux/dock.json)
+  fraim-desktop uninstall   remove the fraim controls; your own Dock controls stay
+EOF
+}
+
+die() { printf 'fraim-desktop: %s\n' "$*" >&2; exit 1; }
+
+need_jq() { command -v jq >/dev/null || die "jq is missing. Install it with: brew install jq"; }
+
+# Single-quoted for the shell that runs the Dock command.
+shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+dock_controls() {
+  local fraim url
+  fraim="$(shell_quote "$FRAIM_BIN")"
+  url="$("$FRAIM_BIN" browser --print-url 2>/dev/null </dev/null | tail -1)" || url=""
+  case "$url" in http://*|https://*) ;; *) url="" ;; esac
+  jq -n --arg fraim "$fraim" --arg url "$url" '
+    [ {id: "fraim-agent", title: "Agent", command: ($fraim + " shell")},
+      {id: "fraim-status", title: "Server",
+       command: ("while :; do clear; " + $fraim + " status; sleep 60; done")} ]
+    + (if $url == "" then []
+       else [{id: "fraim-browser", title: "Server browser", type: "browser", url: $url, chrome: false}] end)'
+}
+
+# write_dock FILTER [ARGS...]: apply a jq filter to dock.json, keeping a backup.
+write_dock() {
+  local current='{}' tmp
+  if [ -e "$DOCK" ]; then
+    jq -e 'type == "object"' "$DOCK" >/dev/null 2>&1 \
+      || die "$DOCK: dock.json is not plain JSON (comments or a typo). Fix or remove it, then run this again."
+    current="$(cat "$DOCK")"
+    cp "$DOCK" "$DOCK.fraim-backup"
+  fi
+  mkdir -p "$CMUX_DIR"
+  tmp="$(mktemp "$CMUX_DIR/.dock.json.XXXXXX")"
+  printf '%s\n' "$current" | jq "$@" > "$tmp" || { rm -f "$tmp"; die "could not update $DOCK"; }
+  mv "$tmp" "$DOCK"
+}
+
+cmd_dock() {
+  need_jq
+  local ours
+  ours="$(dock_controls)"
+  write_dock --argjson ours "$ours" \
+    '.controls = ([.controls[]? | select((.id // "") | startswith("fraim-") | not)] + $ours)'
+  echo "fraim controls added to the cmux Dock"
+}
+
+cmd_uninstall() {
+  need_jq
+  [ -e "$DOCK" ] || { echo "nothing to remove"; return 0; }
+  write_dock '.controls = [.controls[]? | select((.id // "") | startswith("fraim-") | not)]'
+  if jq -e '.controls == [] and (keys - ["controls"]) == []' "$DOCK" >/dev/null; then
+    rm -f "$DOCK"
+  fi
+  echo "fraim controls removed from the cmux Dock"
+}
+
+case "${1:-help}" in
+  dock) cmd_dock ;;
+  uninstall) cmd_uninstall ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
