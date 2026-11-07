@@ -134,6 +134,62 @@ test_dock_commands_use_fraim_bin() {
   ok
 }
 
+# --- Task 2: install ---
+
+fake_brew() {
+  cat > "$FAKEBIN/brew" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$CALLS.brew"
+[ "$*" = "install --cask cmux" ] && mkdir -p "$FRAIM_CMUX_APP"
+exit 0
+EOF
+  chmod +x "$FAKEBIN/brew"
+}
+
+test_install_present() {
+  fresh; fake_brew
+  run "$DESKTOP" install
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  [ ! -e "$CALLS.brew" ] || { bad "brew was called"; return; }
+  [ -s "$DOCK" ] || { bad "no dock.json"; return; }
+  ok
+}
+
+test_install_brew() {
+  fresh; fake_brew; rmdir "$FRAIM_CMUX_APP"
+  run "$DESKTOP" install
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  [ "$(cat "$CALLS.brew")" = "install --cask cmux" ] || { bad "brew calls: $(cat "$CALLS.brew" 2>/dev/null)"; return; }
+  [ -s "$DOCK" ] || { bad "no dock.json"; return; }
+  ok
+}
+
+test_install_no_brew() {
+  fresh; rmdir "$FRAIM_CMUX_APP"
+  run "$DESKTOP" install
+  [ "$CODE" = 3 ] || { bad "exit $CODE, wanted 3"; return; }
+  [ "$(grep -c '^HUMAN STEP:' "$OUT")" = 1 ] || { bad "wanted one HUMAN STEP line"; return; }
+  grep '^HUMAN STEP:' "$OUT" | grep -q 'https://cmux.com' || { bad "no cmux.com link"; return; }
+  [ ! -e "$DOCK" ] || { bad "dock.json written"; return; }
+  ok
+}
+
+test_install_brew_fails() {
+  fresh; rmdir "$FRAIM_CMUX_APP"
+  printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/brew"; chmod +x "$FAKEBIN/brew"
+  run "$DESKTOP" install
+  [ "$CODE" = 1 ] || { bad "exit $CODE, wanted 1"; return; }
+  [ ! -e "$DOCK" ] || { bad "dock.json written"; return; }
+  ok
+}
+
+test_install_no_tty() {
+  fresh; fake_brew; rmdir "$FRAIM_CMUX_APP"
+  run "$DESKTOP" install
+  [ "$CODE" != 124 ] || { bad "timed out"; return; }
+  ok
+}
+
 ALL=$(declare -F | awk '{print $3}' | grep '^test_' | sed 's/^test_//')
 [ $# -gt 0 ] || set -- $ALL
 for T in "$@"; do "test_$T"; done

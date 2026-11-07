@@ -8,6 +8,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRAIM_BIN="${FRAIM_BIN:-$REPO/bin/fraim}"
 CMUX_DIR="$HOME/.config/cmux"
 DOCK="$CMUX_DIR/dock.json"
+CMUX_APP="${FRAIM_CMUX_APP:-/Applications/cmux.app}"
 
 usage() {
   cat <<'EOF'
@@ -16,6 +17,7 @@ fraim-desktop: a ready fraim workspace on top of stock cmux. Built to be run by 
 Conventions: never prompts; exit codes 0 ok, 1 failure, 2 usage, 3 human step needed.
 cmux is GPL-3.0 and installed unmodified. Your own cmux settings are never changed.
 
+  fraim-desktop install     get stock cmux (Homebrew) and add the fraim Dock controls
   fraim-desktop dock        add the fraim controls to the cmux Dock (~/.config/cmux/dock.json)
   fraim-desktop uninstall   remove the fraim controls; your own Dock controls stay
 EOF
@@ -65,6 +67,22 @@ cmd_dock() {
   echo "fraim controls added to the cmux Dock"
 }
 
+cmd_install() {
+  need_jq
+  if [ -d "$CMUX_APP" ]; then
+    echo "cmux is already installed"
+  elif command -v brew >/dev/null; then
+    echo "installing cmux with Homebrew"
+    NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask cmux </dev/null >&2 \
+      || die "Homebrew could not install cmux. Run: brew install --cask cmux"
+    [ -d "$CMUX_APP" ] || die "Homebrew finished but $CMUX_APP is missing"
+  else
+    echo "HUMAN STEP: download cmux from https://cmux.com, drag it into Applications, open it once, then say done."
+    exit 3
+  fi
+  cmd_dock
+}
+
 cmd_uninstall() {
   need_jq
   [ -e "$DOCK" ] || { echo "nothing to remove"; return 0; }
@@ -76,6 +94,7 @@ cmd_uninstall() {
 }
 
 case "${1:-help}" in
+  install) cmd_install ;;
   dock) cmd_dock ;;
   uninstall) cmd_uninstall ;;
   help|-h|--help) usage ;;
