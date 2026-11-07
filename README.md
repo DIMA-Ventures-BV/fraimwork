@@ -35,6 +35,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 ## How you use it
 
 - **On your laptop:** keep talking to Claude as usual. Ask it to "send this to my fraim server" or "check on the job you started".
+- **In your workspace (macOS):** setup opens a [cmux](https://cmux.com) window with your server's Claude on the left and a panel with server status and the server browser on the right. Ask Claude to "open my workspace" any time. cmux is GPL-3.0 software, installed unmodified from Homebrew; fraim only adds its own Dock controls and leaves your cmux settings alone.
 - **On your phone:** use the Claude app (Remote Control, after a full login: ask Claude to "turn on Remote Control for fraim"), or send a WhatsApp message to your agent's number.
 - **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
 - **Connect things:** ask Claude to "connect Linear / PostHog / my GitHub repo / my dev box to fraim". Keys go into the secrets container through your own Terminal, never through the chat.

@@ -37,6 +37,7 @@ echo "fraim $*" >> "$CALLS"
 if [ "$1 $2" = "browser --print-url" ]; then
   [ -n "$FAKE_BROWSER_URL" ] || { echo "no fraim target" >&2; exit 2; }
   echo "$FAKE_BROWSER_URL"
+  echo "vnc-password-s3cret"
 fi
 EOF
   chmod +x "$FAKEBIN/fraim"
@@ -125,6 +126,7 @@ test_no_secrets() {
   fresh; run "$DESKTOP" dock
   [ -s "$DOCK" ] || { bad "no dock.json"; return; }
   ! grep -qi password "$DOCK" || { bad "dock.json mentions a password"; return; }
+  ! grep -q s3cret "$DOCK" || { bad "dock.json holds the VNC password"; return; }
   ok
 }
 

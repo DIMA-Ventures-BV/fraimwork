@@ -38,7 +38,9 @@ shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
 dock_controls() {
   local fraim url
   fraim="$(shell_quote "$FRAIM_BIN")"
-  url="$("$FRAIM_BIN" browser --print-url 2>/dev/null </dev/null | tail -1)" || url=""
+  # Line 1 is the URL, line 2 the VNC password, which must never reach dock.json.
+  url="$("$FRAIM_BIN" browser --print-url 2>/dev/null </dev/null)" || url=""
+  url="${url%%$'\n'*}"
   case "$url" in http://*|https://*) ;; *) url="" ;; esac
   jq -n --arg fraim "$fraim" --arg url "$url" '
     [ {id: "fraim-agent", title: "Agent", command: ($fraim + " shell")},
