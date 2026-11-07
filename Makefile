@@ -1,4 +1,4 @@
-.PHONY: check check-linux lint test test-unit test-node e2e test-secrets
+.PHONY: check check-linux lint test test-unit test-node e2e e2e-spaces test-secrets
 
 # What CI runs: everything that needs no Docker daemon or server. About 1 minute.
 check: lint test
@@ -21,6 +21,10 @@ test-node:
 # Full stack on this machine with Docker. 10 to 20 minutes.
 e2e:
 	tests/e2e-local.sh
+
+# Two spaces on a local stack: separation, policy, previews, MCP, hosts, GitHub. About 5 minutes.
+e2e-spaces:
+	tests/e2e-spaces.sh
 
 # The secrets proxy in Docker, with a fake API. About 1 minute.
 test-secrets:

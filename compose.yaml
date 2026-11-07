@@ -9,6 +9,10 @@ name: fraimwork
 # the rest of ~/fraim, and each sits on its own network with the workspace, so neither
 # can reach the other.
 #
+# Spaces: every space (work, personal, ...) is this same file started as its own compose
+# project (fraimwork-NAME, env file .env.space-NAME), so it gets its own containers,
+# volumes, networks and secrets. The first space keeps the project name fraimwork.
+#
 # Secrets: API keys live only in the secrets container (secrets-store volume). Claude's
 # workspace calls http://secrets:8080/NAME/... with a session token, and the proxy swaps in
 # the real key. Only the workspace and scheduler share the internal `secrets` network with
@@ -35,6 +39,12 @@ x-workspace-env: &workspace-env
   FRAIM_RELEASES_REPO: ${FRAIM_RELEASES_REPO:-DIMA-Ventures-BV/fraimwork}
   FRAIM_SECRETS_URL: http://secrets:8080
   FRAIM_SECRETS_TOKEN: ${SECRETS_TOKEN:-}
+  FRAIM_SPACE: ${FRAIM_SPACE:-main}
+  FRAIM_ACCESS_MODE: ${ACCESS_MODE:-}
+  FRAIM_PREVIEW_PORTS: ${PREVIEW_PORTS:-3100-3109}
+  FRAIM_PREVIEW_HOST: ${PREVIEW_HOST:-}
+  FRAIM_MCP_DENY: ${MCP_DENY:-}
+  FRAIM_CLAUDEAI_CONNECTORS: ${CLAUDEAI_CONNECTORS:-on}
 
 x-workspace-volumes: &workspace-volumes
   - home:/home/claude
@@ -55,7 +65,10 @@ services:
     environment: *workspace-env
     ports:
       - "${BIND_IP:?run install.sh first}:${SSH_PORT:-2222}:22"
-      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:60000-60010/udp"
+      # Same range on both sides: mosh-server binds the port the client asks for.
+      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:${MOSH_PORTS:-60000-60010}/udp"
+      # Previews of dev servers (fraim-preview): tailnet only in tailscale mode, 127.0.0.1 in public mode.
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:${PREVIEW_PORTS:-3100-3109}:3100-3109"
     volumes:
       - home:/home/claude
       - files:/home/claude/fraim
@@ -137,7 +150,7 @@ services:
     <<: *defaults
     image: syncthing/syncthing:2.1.7
     profiles: [sync]
-    hostname: ${FRAIM_HOSTNAME:-fraim}
+    hostname: ${SYNC_DEVICE_NAME:-${FRAIM_HOSTNAME:-fraim}}
     environment:
       PUID: "1000"
       PGID: "1000"

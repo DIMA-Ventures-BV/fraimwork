@@ -9,6 +9,12 @@ args=()
 case ",${FRAIM_MODULES:-}," in
   *,whatsapp,*) args+=(--dangerously-load-development-channels server:whatsapp) ;;
 esac
+rc_args=()
+# Remote Control (the Claude phone app) needs a full login; a setup-token cannot use it.
+# The session shows up in the app as "<server> <space>".
+if [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ] && [ "${FRAIM_REMOTE_CONTROL:-on}" != off ]; then
+  rc_args=(--remote-control "${FRAIM_HOSTNAME:-fraim} ${FRAIM_SPACE:-main}")
+fi
 
 # The WhatsApp channel is a development channel, so Claude Code asks for confirmation
 # at every start. The owner enabled it in .env, so confirm it here unless disabled.
@@ -27,7 +33,7 @@ confirm_dev_channel() {
 
 while true; do
   confirm_dev_channel &
-  fraim-claude --continue "${args[@]}" || fraim-claude "${args[@]}"
+  fraim-claude --continue "${args[@]}" "${rc_args[@]}" || fraim-claude "${args[@]}" "${rc_args[@]}"
   echo
   echo "fraim: Claude stopped. It restarts in 5 seconds. Press Ctrl-C to get a plain shell."
   sleep 5 || break

@@ -35,7 +35,9 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 ## How you use it
 
 - **On your laptop:** keep talking to Claude as usual. Ask it to "send this to my fraim server" or "check on the job you started".
-- **On your phone:** use the Claude app (Remote Control), or send a WhatsApp message to your agent's number.
+- **On your phone:** use the Claude app (Remote Control, after a full login: ask Claude to "turn on Remote Control for fraim"), or send a WhatsApp message to your agent's number.
+- **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
+- **Connect things:** ask Claude to "connect Linear / PostHog / my GitHub repo / my dev box to fraim". Keys go into the secrets container through your own Terminal, never through the chat.
 - **While you sleep:** ask Claude to schedule a job, for example "every morning at 8, summarize my inbox and WhatsApp me".
 - **Approvals:** before your agent does something risky, it asks you on WhatsApp. Reply with the code it shows, for example `yes abcde`.
 - **Limits:** your agent uses your normal Claude plan. Scheduled jobs and WhatsApp chats count toward its usage limits. When a limit is reached, a job fails and you get a WhatsApp message with the reason; it works again when the limit resets.
@@ -57,7 +59,7 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 
 | Path | What |
 |---|---|
-| `compose.yaml` | All services. Modules are compose profiles: `sync`, `browser`, `whatsapp`, `scheduler`. |
+| `compose.yaml` | All services. Modules are compose profiles: `sync`, `browser`, `whatsapp`, `scheduler`. Every space starts this file as its own compose project (`docs/spaces.md`). |
 | `install.sh` | Server setup on Ubuntu 24.04: Docker, Tailscale, firewall, secrets. Safe to run again. |
 | `bin/fraim` | The CLI Claude uses. |
 | `bin/fraim-config` | Claude configuration shared between laptop and server (see `docs/config.md`). |
@@ -67,4 +69,4 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 | `whatsapp/` | WhatsApp gateway: linked device, allowlist, internal API. |
 | `browser/` | The server's Chrome with a persistent profile and a screen viewer (noVNC). |
 | `tailscale/policy.hujson` | Tailscale access policy (merge it into an existing policy, do not replace). |
-| `tests/` | End-to-end test against a throwaway local stack. |
+| `tests/` | Unit tests (`make check`), and end-to-end tests against throwaway local stacks (`make e2e`, `make e2e-spaces`). |

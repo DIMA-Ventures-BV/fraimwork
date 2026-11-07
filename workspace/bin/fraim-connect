@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# fraim-connect: MCP servers of this space. `fraim connect` on the laptop drives it; it never
+# handles a real key (keys live in the secrets proxy, see docs/secrets.md).
+#
+#   fraim-connect http NAME URL            a remote MCP server without a key (or with OAuth: then `login`)
+#   fraim-connect proxied NAME [PATH]      a remote MCP server whose key is in the secrets proxy as NAME
+#   fraim-connect stdio NAME -- CMD [ARGS] a local MCP server program
+#   fraim-connect login NAME               OAuth sign-in: prints the link; the redirect URL goes in with fraim-tty send mcp-NAME
+#   fraim-connect list [--json]
+#   fraim-connect rm NAME
+#   fraim-connect reload                   restart the Claude session so it loads the change
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env 2>/dev/null || true
+
+usage() { echo "fraim-connect: $*" >&2; exit 2; }
+die() { echo "fraim-connect: $*" >&2; exit 1; }
+valid_name() { printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$'; }
+
+forget() { claude mcp remove --scope user "$1" >/dev/null 2>&1 || true; }
+
+action="${1:-}"
+[ $# -gt 0 ] && shift
+case "$action" in
+  http)
+    name="${1:-}" url="${2:-}"
+    valid_name "$name" || usage "http NAME URL"
+    printf '%s' "$url" | grep -Eq '^https://[^[:space:]]+$' || usage "URL must start with https://"
+    forget "$name"
+    claude mcp add --scope user --transport http "$name" "$url" >/dev/null
+    echo "Added MCP server $name ($url)."
+    ;;
+  proxied)
+    name="${1:-}" path="${2:-/mcp}"
+    valid_name "$name" || usage "proxied NAME [PATH]"
+    case "$path" in /*) ;; *) path="/$path" ;; esac
+    printf '%s' "$path" | grep -Eq '^/[A-Za-z0-9._~/-]*$' || usage "PATH may only hold letters, digits and . _ ~ / -"
+    [ -n "${FRAIM_SECRETS_URL:-}" ] && [ -n "${FRAIM_SECRETS_TOKEN:-}" ] || die "this space has no secrets proxy settings; recreate the workspace (fraim reset-workspace)"
+    # Header and format of the service, from the proxy's own list (never holds a key).
+    line="$(curl -fsS --max-time 10 "$FRAIM_SECRETS_URL/_services" | awk -v n="$name" '$1 == n')" \
+      || die "the secrets proxy does not answer"
+    [ -n "$line" ] || die "the secrets proxy has no service $name with a key; run on the laptop: fraim secret add/set $name"
+    header="$(printf '%s' "$line" | awk '{print $2}')"
+    # The format may contain spaces ("Bearer %s"): everything between the header and the upstream.
+    format="$(printf '%s' "$line" | awk '{ $1 = ""; $2 = ""; $NF = ""; sub(/^ +/, ""); sub(/ +$/, ""); print }')"
+    # shellcheck disable=SC2059  # the proxy validated the format: exactly one %s
+    value="$(printf "$format" "$FRAIM_SECRETS_TOKEN")"
+    forget "$name"
+    claude mcp add --scope user --transport http "$name" "$FRAIM_SECRETS_URL/$name$path" --header "$header: $value" >/dev/null
+    echo "Added MCP server $name through the secrets proxy."
+    ;;
+  stdio)
+    name="${1:-}"
+    valid_name "$name" || usage "stdio NAME -- CMD [ARGS]"
+    shift
+    [ "${1:-}" = -- ] && shift
+    [ $# -gt 0 ] || usage "stdio NAME -- CMD [ARGS]"
+    forget "$name"
+    claude mcp add --scope user "$name" -- "$@" >/dev/null
+    echo "Added MCP server $name ($1)."
+    ;;
+  login)
+    name="${1:-}"
+    valid_name "$name" || usage "login NAME"
+    fraim-tty start "mcp-$name" -- claude mcp login "$name" --no-browser
+    ;;
+  list)
+    if [ "${1:-}" = --json ]; then
+      jq '[.mcpServers // {} | to_entries[] | {name: .key, type: (.value.type // "stdio"), url: (.value.url // null)}]' "$HOME/.claude.json"
+    else
+      claude mcp list
+    fi
+    ;;
+  rm)
+    name="${1:-}"
+    valid_name "$name" || usage "rm NAME"
+    forget "$name"
+    echo "Removed MCP server $name."
+    ;;
+  reload)
+    pkill -x claude || true
+    echo "The Claude session restarts with the new MCP servers."
+    ;;
+  *) usage "http|proxied|stdio|login|list|rm|reload" ;;
+esac

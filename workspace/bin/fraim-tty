@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Runs an interactive sign-in (claude auth login, claude mcp login) in its own tmux session,
+# so the laptop can show the human the sign-in link and pass the code back without the
+# code ever being a command-line argument or appearing in a chat.
+#
+#   fraim-tty start NAME -- CMD [ARGS]   start CMD in tmux session tty-NAME, print the first https link
+#   fraim-tty send NAME                  type one line read from stdin into it, then Enter
+#   fraim-tty wait NAME PATTERN [SECS]   exit 0 once the screen matches PATTERN (grep -E)
+#   fraim-tty show NAME                  print the current screen
+#   fraim-tty stop NAME
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+
+usage() { echo "fraim-tty: $*" >&2; exit 2; }
+die() { echo "fraim-tty: $*" >&2; exit 1; }
+
+action="${1:-}"
+name="${2:-}"
+[ -n "$action" ] && [ -n "$name" ] || usage "start|send|wait|show|stop NAME"
+printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "NAME must be lowercase letters, digits and dashes"
+session="tty-$name"
+shift 2
+
+screen() { tmux capture-pane -p -J -S -200 -t "$session" 2>/dev/null; }
+
+case "$action" in
+  start)
+    [ "${1:-}" = -- ] && shift
+    [ $# -gt 0 ] || usage "start NAME -- CMD [ARGS]"
+    tmux kill-session -t "$session" 2>/dev/null || true
+    # A wide window keeps a long sign-in link on one line.
+    tmux new-session -d -s "$session" -x 400 -y 50 "$(printf '%q ' "$@"); echo; echo '[fraim-tty: finished]'; sleep 600"
+    for _ in $(seq 60); do
+      sleep 1
+      link="$(screen | grep -Eo 'https://[^[:space:]"<>]+' | head -1 || true)"
+      if [ -n "$link" ]; then printf '%s\n' "$link"; exit 0; fi
+      if screen | grep -q '\[fraim-tty: finished\]'; then
+        screen | tail -20 >&2
+        die "the command ended without showing a sign-in link"
+      fi
+    done
+    screen | tail -20 >&2
+    die "no sign-in link appeared within 60 seconds"
+    ;;
+  send)
+    tmux has-session -t "$session" 2>/dev/null || die "no sign-in is waiting ($session); start it again"
+    IFS= read -r line || true
+    line="$(printf '%s' "$line" | tr -d '\r')"
+    [ -n "$line" ] || usage "nothing to send (stdin was empty)"
+    tmux send-keys -t "$session" -l -- "$line"
+    tmux send-keys -t "$session" Enter
+    ;;
+  wait)
+    pattern="${1:-}"
+    secs="${2:-30}"
+    [ -n "$pattern" ] || usage "wait NAME PATTERN [SECS]"
+    for _ in $(seq "$secs"); do
+      if screen | grep -Eqi -- "$pattern"; then exit 0; fi
+      sleep 1
+    done
+    exit 1
+    ;;
+  show) screen ;;
+  stop) tmux kill-session -t "$session" 2>/dev/null || true ;;
+  *) usage "start|send|wait|show|stop NAME" ;;
+esac

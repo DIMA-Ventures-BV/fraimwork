@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # Starts Claude Code with the stored login token (written by `fraim login`), if there is one.
+# A full login made by `fraim login --full` (marker file plus ~/.claude/.credentials.json)
+# needs no token, and the token would outrank it, so then the token is left out. A stray
+# credentials file from an old manual /login does not count: it may have expired.
 token_file="$HOME/.config/fraim/claude-token"
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ]; then
+full_login() { [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ]; }
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ] && ! full_login; then
   CLAUDE_CODE_OAUTH_TOKEN="$(cat "$token_file")"
   export CLAUDE_CODE_OAUTH_TOKEN
+fi
+# The secrets proxy address and this space's session token (not a real key; see docs/secrets.md).
+if [ -r /etc/fraim/runtime.env ]; then
+  # shellcheck source=/dev/null
+  . /etc/fraim/runtime.env
+  export FRAIM_SECRETS_URL FRAIM_SECRETS_TOKEN FRAIM_SPACE
 fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
 if command -v fraim-config >/dev/null; then

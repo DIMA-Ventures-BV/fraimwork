@@ -51,8 +51,10 @@ if [ "$json" = 1 ]; then
   for i in "${!names[@]}"; do
     out="$(jq -c --arg n "${names[$i]}" --argjson ok "${results[$i]}" '. + [{name: $n, ok: $ok}]' <<<"$out")"
   done
-  jq -n --argjson checks "$out" --arg modules "${FRAIM_MODULES:-}" --arg tz "${TZ:-UTC}" \
-    '{ok: ($checks | all(.ok)), modules: ($modules | split(",") | map(select(. != ""))), timezone: $tz, checks: $checks}'
+  login=none
+  if [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ]; then login=full; elif [ -s "$HOME/.config/fraim/claude-token" ]; then login=token; fi
+  jq -n --argjson checks "$out" --arg modules "${FRAIM_MODULES:-}" --arg tz "${TZ:-UTC}" --arg space "${FRAIM_SPACE:-main}" --arg login "$login" \
+    '{ok: ($checks | all(.ok)), space: $space, login: $login, modules: ($modules | split(",") | map(select(. != ""))), timezone: $tz, checks: $checks}'
 else
   for i in "${!names[@]}"; do
     if [ "${results[$i]}" = true ]; then printf 'OK    %s\n' "${names[$i]}"; else printf 'FAIL  %s\n' "${names[$i]}"; fi

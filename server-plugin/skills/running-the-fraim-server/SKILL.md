@@ -73,6 +73,21 @@ Add a job for the owner:
 | `~/fraim/logs/jobs` | One log per job run |
 | `~/fraim/fraim-guide.md` | The owner's one-page guide. Keep it current when you add a job |
 | `~/pc` | Read-only folders from the owner's PC |
+| `~/code` | Git repos of this space (not synced to the laptop) |
+
+## Your space
+
+`FRAIM_SPACE` in `/etc/fraim/runtime.env` names the space you run in (`main`, `work`, `personal`, ...). Other spaces on the server are separate: you cannot see their files, keys or MCP servers, and you never try to.
+
+| Tool | What it does |
+| --- | --- |
+| `fraim-repo list` | GitHub repos of this space (in `~/code`); git reaches GitHub through the secrets proxy |
+| `fraim-hosts list` | SSH hosts this space may reach: `ssh NAME`, `rsync`, mutagen |
+| `fraim-preview start PORT` | Makes a dev server on 127.0.0.1:PORT visible to the owner; prints the URL to send them |
+| `fraim-preview list` / `fraim-preview stop PORT` | Running previews |
+| `fraim-connect list` | MCP servers of this space |
+
+A repo, host or MCP server that is missing is added from the owner's laptop (`fraim repo/host/connect ... --space SPACE`). Tell the owner that in one line; never ask for a token or key in chat.
 
 ## Reaching a service, in this order
 
