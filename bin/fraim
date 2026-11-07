@@ -322,7 +322,7 @@ pick_offset() {
   subnets="$(used_subnets)"
   for o in 0 100 200 300 400 500 600 700 800 900; do
     printf '%s\n' "$claimed" | grep -qx "$o" && continue
-    printf '%s\n' "$subnets" | grep -qx "172.30.$((o / 100)).0/24\|172.31.$((o / 100)).0/24\|172.31.$((128 + o / 100)).0/24" && continue
+    printf '%s\n' "$subnets" | grep -qx "172.30.$((o / 100)).0/24\|172.31.$((o / 100)).0/24\|172.31.$((128 + o / 100)).0/24\|172.31.$((64 + o / 100)).0/24\|172.31.$((192 + o / 100)).0/24" && continue
     { port_free $((2299 + o)) && port_free $((6080 + o)) && port_free $((60000 + o)); } || continue
     printf '%s' "$o"
     return
@@ -370,6 +370,12 @@ cmd_local() {
         # Syncthing stays off locally: it would clash with a Syncthing app on this computer.
         env_set COMPOSE_PROFILES browser,scheduler
       fi
+      # Secrets proxy: token and subnets, also for instances created before it existed.
+      [ -n "$(env_get SECRETS_TOKEN)" ] || env_set SECRETS_TOKEN "$(openssl rand -hex 32)"
+      local o
+      o="$(env_get PORT_OFFSET | grep . || echo 0)"
+      [ -n "$(env_get FRAIM_SUBNET_SECRETS)" ] || env_set FRAIM_SUBNET_SECRETS "172.31.$((64 + o / 100)).0/24"
+      [ -n "$(env_get FRAIM_SUBNET_SECRETS_OUT)" ] || env_set FRAIM_SUBNET_SECRETS_OUT "172.31.$((192 + o / 100)).0/24"
       local new_owner="" new_allow=""
       if [ -n "$(flag whatsapp-owner)" ]; then new_owner="$(normalize_phone "$(flag whatsapp-owner)")" || exit 2; fi
       if [ -n "$(flag whatsapp-allow)" ]; then new_allow="$(normalize_phone_list "$(flag whatsapp-allow)")" || exit 2; fi
@@ -726,6 +732,56 @@ store_login_token() {
   say "Claude login stored on the server. The Claude session restarts with it."
 }
 
+# admin with this command's stdin passed through. admin's with_timeout runs ssh in the
+# background, and a background job gets /dev/null as stdin, so a piped key would be lost.
+admin_stdin() {
+  if [ "$FRAIM_ADMIN" = local ]; then
+    (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}")
+  else
+    ssh -T "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $*"
+  fi
+}
+
+# API keys for the secrets proxy. Keys go to the secrets container only: the value is read
+# hidden (terminal) or from stdin, sent over stdin, and never printed or put in an argument.
+cmd_secret() {
+  parse_flags "$@"
+  local action="${POSITIONAL[0]:-}" name="${POSITIONAL[1]:-}" value=""
+  local usage_line="fraim secret list | add NAME --upstream https://HOST [--header H] [--format 'Bearer %s'] | set NAME [--stdin] | rm NAME"
+  case "$action" in
+    list|add|set|rm) ;;
+    *) usage "$usage_line" ;;
+  esac
+  load_config
+  case "$action" in
+    list) admin "docker compose exec -T secrets fraim-secret list" ;;
+    add)
+      [ -n "$name" ] && [ -n "$(flag upstream)" ] || usage "$usage_line"
+      local header format
+      header="$(flag header)"; header="${header:-Authorization}"
+      format="$(flag format)"; format="${format:-Bearer %s}"
+      admin "docker compose exec -T secrets fraim-secret add $(printf '%q' "$name") --upstream $(printf '%q' "$(flag upstream)") --header $(printf '%q' "$header") --format $(printf '%q' "$format")"
+      ;;
+    set)
+      [ -n "$name" ] || usage "$usage_line"
+      if [ -n "$(flag stdin)" ]; then
+        value="$(cat)"
+      elif is_tty; then
+        read -r -s -p "Paste the key for $name (it stays hidden), then press Enter: " value
+        printf '\n'
+      else
+        human "In your own Terminal app (not in the Claude chat), run: fraim secret set $name  and paste the key when it asks. Then tell Claude 'done'."
+      fi
+      [ -n "$value" ] || usage "no key given for $name"
+      printf '%s' "$value" | admin_stdin "docker compose exec -T secrets fraim-secret set $(printf '%q' "$name")"
+      ;;
+    rm)
+      [ -n "$name" ] || usage "$usage_line"
+      admin "docker compose exec -T secrets fraim-secret rm $(printf '%q' "$name")"
+      ;;
+  esac
+}
+
 cmd_exec() {
   load_config
   [ $# -gt 0 ] && [ "$1" = -- ] && shift
@@ -992,6 +1048,10 @@ Operate
   fraim restart [SERVICE]
   fraim reset-workspace                      recreate the workspace container (files kept)
   fraim config ...                           Claude config layer (see bin/fraim-config help)
+  fraim secret list                          API keys held by the secrets proxy (names only)
+  fraim secret add NAME --upstream https://HOST [--header H] [--format 'Bearer %s']
+  fraim secret set NAME [--stdin]            store the key: hidden prompt, or piped (never an argument)
+  fraim secret rm NAME
   fraim shell [NAME]                         humans only: attach to the Claude tmux session
 EOF
 }
@@ -1017,6 +1077,7 @@ main() {
       say "fraim now targets: $1"
       ;;
     config) exec "$REPO/bin/fraim-config" "$@" ;;
+    secret) cmd_secret "$@" ;;
     login) cmd_login "$@" ;;
     lock) cmd_lock "$@" ;;
     tailscale) cmd_tailscale "$@" ;;

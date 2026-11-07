@@ -16,7 +16,7 @@ setup() { setup_isolated; }
 @test "help lists every command the dispatcher knows" {
   run "$FRAIM" help
   for c in init local deploy update use config login lock tailscale exec ask shell chrome \
-           browser sync whatsapp status logs support-bundle restart reset-workspace; do
+           browser sync whatsapp status logs support-bundle restart reset-workspace secret; do
     [[ "$output" == *"fraim $c"* ]] || { echo "help misses: $c"; return 1; }
   done
 }
@@ -222,4 +222,39 @@ allow=[\"447700900123\",\"12025550123\"]"'
 @test "tailscale policy without email exits 2" {
   run "$FRAIM" tailscale policy
   [ "$status" -eq 2 ]
+}
+
+# --- secret ------------------------------------------------------------------------
+
+@test "secret without an action exits 2" {
+  use_public_target
+  run "$FRAIM" secret
+  [ "$status" -eq 2 ]
+  [ ! -s "$SSH_LOG" ]
+}
+
+@test "secret set without a terminal or --stdin is a human step (exit 3)" {
+  use_public_target
+  run "$FRAIM" secret set openai </dev/null
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"HUMAN STEP:"* ]]
+  [ ! -s "$SSH_STDIN_LOG" ]
+}
+
+@test "secret set --stdin sends the key over stdin, never on the command line" {
+  use_public_target
+  run bash -c "printf 'sk-SECRETVALUE' | '$FRAIM' secret set openai --stdin"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SSH_STDIN_LOG")" = "sk-SECRETVALUE" ]
+  grep -q "fraim-secret set openai" "$SSH_LOG"
+  ! grep -q SECRETVALUE "$SSH_LOG"
+  ! grep -q SECRETVALUE <<<"$output"
+}
+
+@test "secret add quotes its arguments for the remote shell" {
+  use_public_target
+  run "$FRAIM" secret add openai --upstream 'https://api.openai.com' --format 'Bearer %s'
+  [ "$status" -eq 0 ]
+  grep -qF "fraim-secret add openai --upstream https://api.openai.com" "$SSH_LOG"
+  grep -qF 'Bearer\ %s' "$SSH_LOG"
 }

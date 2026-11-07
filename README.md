@@ -47,6 +47,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 - Everyone on your WhatsApp allowlist can ask your agent to do anything you could. Only add people you fully trust. Only you can approve risky actions.
 - Websites you log in to in the server's browser stay logged in, and your agent can use them. Only log in where it needs access.
 - Keep production passwords and company secrets off the server.
+- API keys you give your agent stay in a separate container. The agent can use them but never sees them (see `docs/secrets.md`).
 - WhatsApp support uses the unofficial WhatsApp Web protocol. Use a separate number, never your personal one. For customer-facing use, switch to the official WhatsApp Business API.
 - Every action the agent takes is logged on the server in `~/.local/state/fraim/audit.jsonl`.
 
