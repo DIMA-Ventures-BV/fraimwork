@@ -1,0 +1,11 @@
+{
+  "name": "fraimwork",
+  "owner": { "name": "fraimwork" },
+  "plugins": [
+    {
+      "name": "fraim",
+      "source": "./",
+      "description": "Your own always-on Claude server. Ask Claude to set up fraim; it builds, deploys and runs the server for you."
+    }
+  ]
+}

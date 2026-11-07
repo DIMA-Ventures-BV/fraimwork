@@ -1,20 +1,113 @@
 #!/usr/bin/env bash
-# fraim: laptop CLI for a fraimwork server.
+# fraim: control a fraimwork server. Written to be run by Claude on the user's behalf.
+#
+# Conventions
+#   - Never prompts when stdin is not a terminal. Missing values: exit 2 with the missing flags.
+#   - Never blocks without a terminal: long-running things run in the background with pid files.
+#   - A step only a human can do prints one line starting with "HUMAN STEP:" and exits 3.
+#   - Exit codes: 0 ok, 1 failure, 2 usage or missing input, 3 human step needed.
 set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fraim"
-CONFIG="$CONFIG_DIR/config"
+STATE_DIR="$HOME/.fraim"
+RUN_DIR="$STATE_DIR/run"
 REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 REMOTE_DIR=/opt/fraimwork
+FRAIM_INSTANCE="${FRAIM_INSTANCE:-local}"
+LOCAL_PROJECT="fraim$FRAIM_INSTANCE"
+FRAIM_TARGET="${FRAIM_TARGET:-$(cat "$CONFIG_DIR/current" 2>/dev/null || echo default)}"
+if [ "$FRAIM_TARGET" = default ]; then CONFIG="$CONFIG_DIR/config"; else CONFIG="$CONFIG_DIR/$FRAIM_TARGET.config"; fi
 
-die() { printf 'fraim: %s\n' "$*" >&2; exit 1; }
-say() { printf '%s\n' "$*"; }
+die()   { printf 'fraim: %s\n' "$*" >&2; exit 1; }
+usage() { printf 'fraim: %s\n' "$*" >&2; exit 2; }
+human() { printf 'HUMAN STEP: %s\n' "$*"; exit 3; }
+say()   { printf '%s\n' "$*"; }
+is_tty() { [ -t 0 ] && [ -t 1 ]; }
 
+# --- flags -------------------------------------------------------------------------
+POSITIONAL=()
+parse_flags() {
+  POSITIONAL=()
+  local key value
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --) shift; POSITIONAL+=("$@"); break ;;
+      --*=*) key="${1%%=*}"; value="${1#*=}" ;;
+      --*)
+        key="$1"
+        if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then value="$2"; shift; else value=1; fi
+        ;;
+      *) POSITIONAL+=("$1"); shift; continue ;;
+    esac
+    key="$(printf '%s' "${key#--}" | tr 'a-z-' 'A-Z_')"
+    printf -v "FLAG_$key" '%s' "$value"
+    shift
+  done
+}
+flag() {
+  local name
+  name="FLAG_$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+  printf '%s' "${!name:-}"
+}
+
+# value <flag> <prompt> <default>: flag wins, then a prompt on a terminal, then the default.
+value() {
+  local given answer
+  given="$(flag "$1")"
+  if [ -n "$given" ]; then printf '%s' "$given"; return; fi
+  if is_tty; then
+    if [ -n "$3" ]; then read -r -p "$2 [$3]: " answer; else read -r -p "$2: " answer; fi
+    printf '%s' "${answer:-$3}"
+  else
+    printf '%s' "$3"
+  fi
+}
+
+# --- env files ---------------------------------------------------------------------
+ENV_FILE="$REPO/.env"
+env_get() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+env_set() {
+  if grep -qE "^$1=" "$ENV_FILE"; then
+    sed -i.bak "s|^$1=.*|$1=$2|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
+  fi
+}
+# Phone numbers in international format without + or 00 (31612345678). Accepts
+# "+31 6 1234 5678" and "0031...", rejects local formats like "0612345678".
+PHONE_HINT="use the international format without + or 00, for example 31612345678"
+normalize_phone() {
+  local n
+  n="$(printf '%s' "$1" | tr -dc 0-9)"
+  case "$n" in 00*) n="${n#00}" ;; esac
+  case "$n" in 0*|"") usage "'$1' is not a valid WhatsApp number: $PHONE_HINT" ;; esac
+  [ ${#n} -ge 10 ] && [ ${#n} -le 15 ] || usage "'$1' is not a valid WhatsApp number: $PHONE_HINT"
+  printf '%s' "$n"
+}
+normalize_phone_list() {
+  local item out=""
+  local IFS=,
+  for item in $1; do
+    [ -n "$(printf '%s' "$item" | tr -d ' ')" ] || continue
+    item="$(normalize_phone "$item")" || exit 2
+    out="${out:+$out,}$item"
+  done
+  printf '%s' "$out"
+}
+
+has_module() { case ",$(env_get COMPOSE_PROFILES)," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+
+# --- config ------------------------------------------------------------------------
 load_config() {
-  [ -f "$CONFIG" ] || die "not set up yet; run 'fraim init' first"
+  [ -f "$CONFIG" ] || usage "no fraim target configured; run 'fraim local up' or 'fraim deploy root@<ip>' first"
   # shellcheck source=/dev/null
   . "$CONFIG"
-  : "${FRAIM_HOST:?}" "${FRAIM_ADMIN:?}" "${FRAIM_ACCESS:?}" "${FRAIM_SSH_PORT:=2222}"
+  : "${FRAIM_HOST:?}" "${FRAIM_ADMIN:?}" "${FRAIM_ACCESS:?}" "${FRAIM_SSH_PORT:=2222}" "${FRAIM_SSH_KEY:=}" "${FRAIM_PUBLIC_HOST:=}"
+  use_ssh_key "$FRAIM_SSH_KEY"
+  if [ "$FRAIM_ACCESS" = local ]; then
+    LOCAL_PROJECT="fraim$FRAIM_INSTANCE"
+    ENV_FILE="$REPO/.env.$FRAIM_INSTANCE"
+  fi
 }
 
 save_config() {
@@ -24,231 +117,901 @@ FRAIM_HOST=$FRAIM_HOST
 FRAIM_ADMIN=$FRAIM_ADMIN
 FRAIM_ACCESS=$FRAIM_ACCESS
 FRAIM_SSH_PORT=$FRAIM_SSH_PORT
+FRAIM_SSH_KEY=${FRAIM_SSH_KEY:-}
+FRAIM_PUBLIC_HOST=${FRAIM_PUBLIC_HOST:-}
+FRAIM_INSTANCE=$FRAIM_INSTANCE
 EOF
 }
+set_current() { mkdir -p "$CONFIG_DIR"; printf '%s\n' "$1" > "$CONFIG_DIR/current"; }
 
-ask() {
-  local prompt="$1" default="${2:-}" answer
-  if [ -n "$default" ]; then read -r -p "$prompt [$default]: " answer; else read -r -p "$prompt: " answer; fi
-  printf '%s' "${answer:-$default}"
+find_ssh_key() {
+  local key
+  for key in "$(flag ssh-key)" "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ecdsa" "$HOME/.ssh/id_rsa"; do
+    if [ -n "$key" ] && [ -f "$key.pub" ]; then printf '%s' "$key"; return; fi
+  done
 }
 
-env_get() { grep -E "^$1=" "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
-env_set() {
-  if grep -qE "^$1=" "$REPO/.env"; then
-    sed -i.bak "s|^$1=.*|$1=$2|" "$REPO/.env" && rm -f "$REPO/.env.bak"
+add_authorized_key() {
+  local key="$1"
+  mkdir -p "$REPO/config"
+  touch "$REPO/config/authorized_keys"
+  grep -qF "$(cut -d' ' -f2 "$key.pub")" "$REPO/config/authorized_keys" || cat "$key.pub" >> "$REPO/config/authorized_keys"
+}
+
+# --- transport ---------------------------------------------------------------------
+# fraim keeps its own known_hosts per target, so a rebuilt server never breaks the
+# user's ~/.ssh/known_hosts and `fraim deploy` can safely forget an old server's keys.
+KNOWN_HOSTS="$STATE_DIR/known_hosts-$FRAIM_TARGET"
+mkdir -p "$STATE_DIR"
+SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
+# Use only fraim's key: with many keys in an agent (1Password) ssh fails or pops up approvals.
+use_ssh_key() {
+  [ -n "${1:-}" ] || return 0
+  FRAIM_SSH_KEY="$1"
+  SSH_BASE+=(-o IdentitiesOnly=yes -i "$1")
+}
+# Runs a command with a wall-clock limit (macOS has no `timeout`). stdin is not passed on.
+with_timeout() {
+  local secs="$1" pid watcher rc=0
+  shift
+  "$@" &
+  pid=$!
+  # The watcher detaches from our stdout/stderr (so a caller's pipe closes when we finish)
+  # and kills its own sleep when it is stopped, so no orphan sleeps are left behind.
+  (
+    exec >/dev/null 2>&1 </dev/null
+    sleep "$secs" &
+    s=$!
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    wait "$s"
+    kill "$pid" 2>/dev/null
+  ) &
+  watcher=$!
+  wait "$pid" || rc=$?
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+  if [ "$rc" = 143 ]; then printf 'fraim: no answer from the server within %ss\n' "$secs" >&2; fi
+  return "$rc"
+}
+ssh_opts() {
+  printf -- '-p %s -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3' "$FRAIM_SSH_PORT"
+  if [ -n "${FRAIM_SSH_KEY:-}" ]; then printf -- ' -o IdentitiesOnly=yes -i %s' "$FRAIM_SSH_KEY"; fi
+  if [ "$FRAIM_ACCESS" = local ]; then
+    printf -- ' -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'
   else
-    printf '%s=%s\n' "$1" "$2" >> "$REPO/.env"
+    printf -- ' -o UserKnownHostsFile=%s -o LogLevel=ERROR' "$KNOWN_HOSTS"
   fi
 }
 
-workspace_ssh() { ssh -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST" "$@"; }
-admin() { ssh "$FRAIM_ADMIN" "cd $REMOTE_DIR && $*"; }
-admin_tty() { ssh -t "$FRAIM_ADMIN" "cd $REMOTE_DIR && $*"; }
+# Without a terminal, long output (docker builds) goes to a log file; only stage lines,
+# the summary and the log path are printed, so an agent can read the result.
+run_logged() {
+  local name="$1" log rc=0
+  shift
+  if is_tty; then "$@"; return; fi
+  mkdir -p "$STATE_DIR/logs"
+  log="$STATE_DIR/logs/$name-$(date +%Y%m%d-%H%M%S).log"
+  say "Full log: $log"
+  "$@" >"$log" 2>&1 || rc=$?
+  grep -E '^(==>|install\.sh:|fraimwork is running|Next steps|  fraim |Public SSH)' "$log" || true
+  if [ "$rc" != 0 ]; then
+    say "Failed (exit $rc). Last lines of the log:"
+    tail -15 "$log"
+  fi
+  return "$rc"
+}
+tty_flag() { if is_tty; then printf -- '-t'; else printf -- '-T'; fi; }
+
+# shellcheck disable=SC2046
+workspace_ssh() { ssh $(ssh_opts) "claude@$FRAIM_HOST" "$@"; }
+
+admin() {
+  if [ "$FRAIM_ADMIN" = local ]; then
+    (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}")
+  else
+    # ADMIN_TIMEOUT: seconds; long operations (install, builds) raise it.
+    # shellcheck disable=SC2046
+    with_timeout "${ADMIN_TIMEOUT:-90}" ssh $(tty_flag) "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $*"
+  fi
+}
+server_env() { admin "grep -E '^$1=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true"; }
+remote_env() { if [ "$FRAIM_ACCESS" = local ]; then env_get "$1"; else server_env "$1"; fi; }
 
 open_url() {
-  if command -v open >/dev/null; then open "$1"; elif command -v xdg-open >/dev/null; then xdg-open "$1"; else say "$1"; fi
+  if is_tty && [ -z "$(flag print-url)" ]; then
+    if command -v open >/dev/null; then open "$1"; elif command -v xdg-open >/dev/null; then xdg-open "$1"; fi
+  fi
+  say "$1"
 }
 
-tunnel_then_open() {
-  local port="$1" target="$2" url="$3"
-  say "Opening a tunnel on localhost:$port. Press Ctrl-C to close it."
-  (sleep 2 && open_url "$url") &
-  ssh -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$port:$target:$port" -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST"
+# --- background processes ----------------------------------------------------------
+bg_running() { [ -f "$RUN_DIR/$1.pid" ] && kill -0 "$(cat "$RUN_DIR/$1.pid")" 2>/dev/null; }
+bg_start() {
+  local name="$1"; shift
+  mkdir -p "$RUN_DIR"
+  if bg_running "$name"; then return 0; fi
+  nohup "$@" >"$RUN_DIR/$name.log" 2>&1 &
+  echo $! > "$RUN_DIR/$name.pid"
+  sleep 2
+  bg_running "$name" || die "$name did not start; see $RUN_DIR/$name.log"
+}
+bg_stop() {
+  if bg_running "$1"; then kill "$(cat "$RUN_DIR/$1.pid")" 2>/dev/null || true; fi
+  rm -f "$RUN_DIR/$1.pid"
+}
+# Tunnel a server-side port to localhost. Only needed when the server is not on Tailscale.
+# tunnel start REMOTE_PORT TARGET prints the local port it uses (the first free one from
+# REMOTE_PORT up). A running tunnel for the same target is reused.
+tunnel() {
+  local action="$1" remote_port="$2" target="${3:-}" name local_port
+  name="tunnel-$FRAIM_TARGET-$remote_port"
+  case "$action" in
+    start)
+      if bg_running "$name" && [ -s "$RUN_DIR/$name.port" ]; then cat "$RUN_DIR/$name.port"; return; fi
+      local_port="$remote_port"
+      while ! port_free "$local_port"; do
+        local_port=$((local_port + 1))
+        [ "$local_port" -lt $((remote_port + 50)) ] || die "no free local port near $remote_port"
+      done
+      mkdir -p "$RUN_DIR"
+      printf '%s' "$local_port" > "$RUN_DIR/$name.port"
+      # shellcheck disable=SC2046
+      bg_start "$name" ssh -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$local_port:$target:$remote_port" $(ssh_opts) "claude@$FRAIM_HOST" >&2
+      printf '%s' "$local_port"
+      ;;
+    stop) bg_stop "$name"; rm -f "$RUN_DIR/$name.port" ;;
+  esac
 }
 
+# --- commands ----------------------------------------------------------------------
 cmd_init() {
+  parse_flags "$@"
   cd "$REPO"
+  [ -f .env.example ] || die "the fraimwork folder $REPO is incomplete (.env.example is missing); download it again"
   [ -f .env ] || cp .env.example .env
   chmod 600 .env
-  say "fraimwork setup. Press Enter to keep the value in brackets."
-  env_set FRAIM_HOSTNAME "$(ask 'Server name on your tailnet' "$(env_get FRAIM_HOSTNAME | sed 's/^fraim$/fraim-'"$(whoami)"'/')")"
-  env_set ACCESS_MODE "$(ask 'Access mode (tailscale or public)' "$(env_get ACCESS_MODE)")"
-  if [ "$(env_get ACCESS_MODE)" = tailscale ]; then
-    say "Create a one-time auth key with tag:fraim: https://login.tailscale.com/admin/settings/keys"
-    env_set TS_AUTHKEY "$(ask 'Tailscale auth key' "$(env_get TS_AUTHKEY)")"
-  fi
-  env_set COMPOSE_PROFILES "$(ask 'Modules (sync,browser,whatsapp,scheduler)' "$(env_get COMPOSE_PROFILES)")"
-  env_set TZ "$(ask 'Timezone' "$(env_get TZ)")"
-  case ",$(env_get COMPOSE_PROFILES)," in *,whatsapp,*)
-    env_set WHATSAPP_OWNER "$(ask 'Your personal WhatsApp number, digits only (e.g. 31612345678)' "$(env_get WHATSAPP_OWNER)")"
-    env_set WHATSAPP_ALLOW "$(ask 'Other numbers allowed to message the agent, comma separated' "$(env_get WHATSAPP_ALLOW)")"
-    ;;
-  esac
+  local hostname access authkey modules owner missing=()
+  hostname="$(value hostname 'Server name on your tailnet' "$(env_get FRAIM_HOSTNAME | sed "s/^fraim\$/fraim-$(whoami)/")")"
+  access="$(value access 'Access mode (tailscale or public)' "$(env_get ACCESS_MODE)")"
+  modules="$(value modules 'Modules (sync,browser,whatsapp,scheduler)' "$(env_get COMPOSE_PROFILES)")"
+  env_set FRAIM_HOSTNAME "$hostname"
+  env_set ACCESS_MODE "$access"
+  env_set COMPOSE_PROFILES "$modules"
+  env_set TZ "$(value tz 'Timezone' "$(env_get TZ)")"
 
-  mkdir -p config
-  touch config/authorized_keys
+  case "$access" in tailscale|public) ;; *) usage "--access must be tailscale or public" ;; esac
+  if [ "$access" = tailscale ]; then
+    authkey="$(value ts-authkey 'Tailscale auth key' "$(env_get TS_AUTHKEY)")"
+    env_set TS_AUTHKEY "$authkey"
+    [ -n "$authkey" ] || missing+=(--ts-authkey)
+  fi
+  if has_module whatsapp; then
+    owner="$(value whatsapp-owner 'Your personal WhatsApp number, digits only' "$(env_get WHATSAPP_OWNER)")"
+    # Validate before writing anything: `usage` inside $(...) only exits the subshell.
+    local allow
+    if [ -n "$owner" ]; then owner="$(normalize_phone "$owner")" || exit 2; fi
+    allow="$(value whatsapp-allow 'Other allowed numbers, comma separated' "$(env_get WHATSAPP_ALLOW)")"
+    allow="$(normalize_phone_list "$allow")" || exit 2
+    [ -z "$owner" ] || env_set WHATSAPP_OWNER "$owner"
+    env_set WHATSAPP_ALLOW "$allow"
+    [ -n "$owner" ] || missing+=(--whatsapp-owner)
+  fi
+
   local key
-  for key in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_rsa.pub"; do
-    if [ -f "$key" ]; then
-      grep -qF "$(cut -d' ' -f2 "$key")" config/authorized_keys || cat "$key" >> config/authorized_keys
-      say "Added $key to config/authorized_keys"
-      break
+  key="$(find_ssh_key)"
+  [ -n "$key" ] || human "Create an SSH key on this computer: run ssh-keygen -t ed25519 and press Enter at every question. Then run fraim init again."
+  add_authorized_key "$key"
+
+  if [ ${#missing[@]} -gt 0 ]; then
+    if printf '%s\n' "${missing[@]}" | grep -q ts-authkey; then
+      say "HUMAN STEP: In https://login.tailscale.com/admin/settings/keys click 'Generate auth key', turn on 'Tags' with tag:fraim, generate, and give the key to Claude."
     fi
+    usage "missing: ${missing[*]}"
+  fi
+  say "Configuration written to $REPO/.env"
+}
+
+port_free() { ! nc -z 127.0.0.1 "$1" >/dev/null 2>&1; }
+used_subnets() {
+  docker network ls -q | xargs docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null | tr ' ' '\n'
+}
+# First offset (0, 100, ...) whose ports and subnet are free and not claimed by another instance.
+pick_offset() {
+  local o claimed subnets
+  claimed="$(grep -h '^PORT_OFFSET=' "$REPO"/.env.* 2>/dev/null | cut -d= -f2 || true)"
+  subnets="$(used_subnets)"
+  for o in 0 100 200 300 400 500 600 700 800 900; do
+    printf '%s\n' "$claimed" | grep -qx "$o" && continue
+    printf '%s\n' "$subnets" | grep -qx "172.30.$((o / 100)).0/24\|172.31.$((o / 100)).0/24\|172.31.$((128 + o / 100)).0/24" && continue
+    { port_free $((2299 + o)) && port_free $((6080 + o)) && port_free $((60000 + o)); } || continue
+    printf '%s' "$o"
+    return
   done
-  [ -s config/authorized_keys ] || die "no SSH key found; create one with: ssh-keygen -t ed25519"
-  say "Done. Next: create an Ubuntu 24.04 server and run: fraim deploy root@<server-ip>"
+  die "no free port offset found between 0 and 900"
+}
+
+cmd_local() {
+  parse_flags "$@"
+  local action="${POSITIONAL[0]:-}"
+  cd "$REPO"
+  ENV_FILE="$REPO/.env.$FRAIM_INSTANCE"
+  local offset
+  offset="$(flag port-offset)"
+  case "$action" in
+    up)
+      command -v docker >/dev/null || human "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ and start it."
+      docker info >/dev/null 2>&1 || human "Start Docker Desktop (open it from Applications) and wait until it says it is running."
+      if [ -f "$ENV_FILE" ] && [ -n "$(flag port-offset)" ] && [ "$(flag port-offset)" != "$(env_get PORT_OFFSET | grep . || echo 0)" ]; then
+        usage "instance '$FRAIM_INSTANCE' already uses port offset $(env_get PORT_OFFSET | grep . || echo 0); the offset is fixed, run 'fraim local down --wipe' first"
+      fi
+      if [ ! -f "$ENV_FILE" ]; then
+        if [ -z "$offset" ]; then
+          offset="$(pick_offset)"
+          [ "$offset" = 0 ] || say "Another stack uses the default ports; using port offset $offset (SSH $((2299 + offset)), browser view $((6080 + offset)))."
+        fi
+        cp .env.example "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        env_set PORT_OFFSET "$offset"
+        env_set FRAIM_IMAGE_TAG "$FRAIM_INSTANCE"
+        env_set FRAIM_HOSTNAME "fraim-$FRAIM_INSTANCE"
+        env_set ACCESS_MODE local
+        env_set SSH_PORT "$((2299 + offset))"
+        env_set VNC_PORT "$((6080 + offset))"
+        env_set MOSH_PORTS "$((60000 + offset))-$((60010 + offset))"
+        env_set FRAIM_SUBNET "172.30.$((offset / 100)).0/24"
+        env_set FRAIM_SUBNET_WA "172.31.$((offset / 100)).0/24"
+        env_set FRAIM_SUBNET_SYNC "172.31.$((128 + offset / 100)).0/24"
+        env_set BROWSER_IP "172.30.$((offset / 100)).10"
+        env_set GATEWAY_TOKEN "$(openssl rand -hex 24)"
+        env_set VNC_PASSWORD "$(openssl rand -hex 4)"
+        env_set BIND_IP 127.0.0.1
+        env_set PRIVATE_BIND_IP 127.0.0.1
+        env_set BROWSER_VIEW_URL "http://localhost:$((6080 + offset))/vnc.html"
+        # Syncthing stays off locally: it would clash with a Syncthing app on this computer.
+        env_set COMPOSE_PROFILES browser,scheduler
+      fi
+      local new_owner="" new_allow=""
+      if [ -n "$(flag whatsapp-owner)" ]; then new_owner="$(normalize_phone "$(flag whatsapp-owner)")" || exit 2; fi
+      if [ -n "$(flag whatsapp-allow)" ]; then new_allow="$(normalize_phone_list "$(flag whatsapp-allow)")" || exit 2; fi
+      if [ -n "$new_owner" ]; then
+        env_set WHATSAPP_OWNER "$new_owner"
+        has_module whatsapp || env_set COMPOSE_PROFILES "$(env_get COMPOSE_PROFILES),whatsapp"
+      fi
+      [ -z "$new_allow" ] || env_set WHATSAPP_ALLOW "$new_allow"
+      [ -z "$(flag modules)" ] || env_set COMPOSE_PROFILES "$(flag modules)"
+      if has_module whatsapp && [ -z "$(env_get WHATSAPP_OWNER)" ]; then usage "the whatsapp module needs --whatsapp-owner"; fi
+
+      FRAIM_SSH_KEY="$(find_ssh_key)"
+      [ -n "$FRAIM_SSH_KEY" ] || human "Create an SSH key on this computer: run ssh-keygen -t ed25519 and press Enter at every question."
+      add_authorized_key "$FRAIM_SSH_KEY"
+
+      local output rc=0
+      output="$(docker compose -p "$LOCAL_PROJECT" --env-file "$ENV_FILE" up -d --build --remove-orphans --quiet-pull 2>&1)" || rc=$?
+      if [ "$rc" != 0 ]; then
+        printf '%s\n' "$output" | tail -15 >&2
+        if printf '%s' "$output" | grep -qi 'pool overlaps\|address already in use\|port is already allocated'; then
+          die "another stack uses these ports or this subnet; use FRAIM_INSTANCE=<name> with --port-offset 100 (after 'fraim local down --wipe' for this instance)"
+        fi
+        die "docker compose up failed (exit $rc)"
+      fi
+      CONFIG="$CONFIG_DIR/$FRAIM_INSTANCE.config"
+      FRAIM_HOST=127.0.0.1 FRAIM_ADMIN=local FRAIM_ACCESS=local FRAIM_SSH_PORT="$(env_get SSH_PORT)"
+      FRAIM_SSH_KEY="$(find_ssh_key)"
+      save_config
+      if [ "$FRAIM_INSTANCE" = local ] || [ ! -f "$CONFIG_DIR/current" ]; then set_current "$FRAIM_INSTANCE"; fi
+      local waited=0
+      # shellcheck disable=SC2046
+      until ssh $(ssh_opts) -o BatchMode=yes -o ConnectTimeout=2 "claude@$FRAIM_HOST" true 2>/dev/null; do
+        waited=$((waited + 1))
+        [ "$waited" -lt 30 ] || die "the stack started but SSH does not answer after 30 seconds; check: fraim logs workspace"
+        sleep 1
+      done
+      say "Local fraim is running (instance $FRAIM_INSTANCE, modules: $(env_get COMPOSE_PROFILES))."
+      ;;
+    down)
+      if [ -n "$(flag wipe)" ]; then
+        docker compose -p "$LOCAL_PROJECT" --env-file "$ENV_FILE" down -v
+        rm -f "$ENV_FILE" "$CONFIG_DIR/$FRAIM_INSTANCE.config"
+        [ "$(cat "$CONFIG_DIR/current" 2>/dev/null)" != "$FRAIM_INSTANCE" ] || rm -f "$CONFIG_DIR/current"
+      else
+        docker compose -p "$LOCAL_PROJECT" --env-file "$ENV_FILE" down
+      fi
+      ;;
+    *) usage "fraim local up [--whatsapp-owner N] [--whatsapp-allow N,N] [--modules m,m] [--port-offset N] | down [--wipe]" ;;
+  esac
 }
 
 cmd_deploy() {
-  local target="${1:?usage: fraim deploy root@<server-ip>}"
-  [ -f "$REPO/.env" ] || die "no .env; run 'fraim init' first"
+  parse_flags "$@"
+  local target="${POSITIONAL[0]:-}"
+  [ -n "$target" ] || human "Create an Ubuntu 24.04 server (Hetzner Cloud: type CX23, or CAX21 if CX is sold out; 4 GB RAM minimum; add the SSH key from ~/.ssh/id_ed25519.pub; turn on 'Backups' so a dead server can be restored) and give Claude its IP address."
+  [ -f "$REPO/.env" ] || usage "no .env; run 'fraim init' first"
+  # Deploying is consent to a (possibly rebuilt) server: forget the old host keys for it.
+  FRAIM_TARGET=default
+  KNOWN_HOSTS="$STATE_DIR/known_hosts-default"
+  rm -f "$KNOWN_HOSTS"
+  SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
+  use_ssh_key "$(find_ssh_key)"
+  ssh "${SSH_BASE[@]}" -o BatchMode=yes "$target" true 2>/dev/null \
+    || human "Claude cannot log in to $target. Add the public key from ~/.ssh/id_ed25519.pub to the server (Hetzner: Security > SSH keys, then rebuild), or check the IP."
   say "Copying fraimwork to $target:$REMOTE_DIR"
-  ssh "$target" "mkdir -p $REMOTE_DIR/config"
-  rsync -az --delete \
-    --exclude .git --exclude node_modules --exclude .env --exclude '*.bak' \
+  ssh "${SSH_BASE[@]}" "$target" "mkdir -p $REMOTE_DIR/config"
+  rsync -az --delete -e "ssh ${SSH_BASE[*]}" \
+    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
     "$REPO/" "$target:$REMOTE_DIR/"
-  if ! ssh "$target" "test -f $REMOTE_DIR/.env"; then
-    scp -q "$REPO/.env" "$target:$REMOTE_DIR/.env"
+  if [ -n "$(flag force-env)" ] || ! ssh "${SSH_BASE[@]}" "$target" "test -f $REMOTE_DIR/.env"; then
+    scp -q "${SSH_BASE[@]}" "$REPO/.env" "$target:$REMOTE_DIR/.env"
   fi
-  ssh -t "$target" "cd $REMOTE_DIR && ./install.sh"
+  # shellcheck disable=SC2046
+  ssh "${SSH_BASE[@]}" "$target" "cd $REMOTE_DIR && $(stamp_command)"
+  # --take-over: a deploy reinstalls everything, so it may replace a stale update lock.
+  [ -z "$(flag take-over)" ] || ssh "${SSH_BASE[@]}" "$target" "rm -rf $REMOTE_DIR/.update-lock"
+  ssh "${SSH_BASE[@]}" "$target" "cd $REMOTE_DIR && mkdir .update-lock 2>/dev/null && echo 'started=$(date -u +%FT%TZ) action=deploy by=$(hostname -s)' > .update-lock/info" \
+    || die "an update or deploy is already running on $target ($(ssh "${SSH_BASE[@]}" "$target" "cat $REMOTE_DIR/.update-lock/info" 2>/dev/null)). If none is running now: fraim deploy $target --take-over"
+  # shellcheck disable=SC2046
+  run_logged deploy ssh $(tty_flag) "${SSH_BASE[@]}" "$target" "cd $REMOTE_DIR && FRAIM_LOCK_HELD=1 ./install.sh" \
+    || die "install.sh failed on $target; the server keeps its update lock, run fraim deploy again after fixing the cause"
+  ssh "${SSH_BASE[@]}" "$target" "rm -rf $REMOTE_DIR/.update-lock"
 
   FRAIM_ACCESS="$(env_get ACCESS_MODE)"
   FRAIM_SSH_PORT="$(env_get SSH_PORT)"
   if [ "$FRAIM_ACCESS" = tailscale ]; then
     FRAIM_HOST="$(env_get FRAIM_HOSTNAME)"
+    FRAIM_PUBLIC_HOST="${target#*@}"
     FRAIM_ADMIN="root@$FRAIM_HOST"
     env_set TS_AUTHKEY ""
   else
     FRAIM_HOST="${target#*@}"
+    FRAIM_PUBLIC_HOST="${target#*@}"
     FRAIM_ADMIN="$target"
   fi
+  CONFIG="$CONFIG_DIR/config"
+  FRAIM_SSH_KEY="$(find_ssh_key)"
   save_config
-  say "Saved $CONFIG. Next: fraim shell"
+  set_current default
+  [ "$FRAIM_ACCESS" != tailscale ] || cmd_lock
+  wait_for_workspace || die "deployed, but the Claude workspace does not answer after 60 seconds; check: fraim logs workspace"
+  say "Deployed. fraim commands now target $FRAIM_HOST."
 }
 
-cmd_update() {
+# The workspace container needs a few seconds after `docker compose up` before SSH answers.
+wait_for_workspace() {
+  local tries=0
+  # shellcheck disable=SC2046
+  until ssh $(ssh_opts) -o BatchMode=yes -o ConnectTimeout=5 "claude@$FRAIM_HOST" true 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 20 ] || return 1
+    sleep 3
+  done
+}
+
+# Closes public SSH, but only after this laptop reached the server over Tailscale.
+cmd_lock() {
   load_config
-  rsync -az --delete --exclude .git --exclude node_modules --exclude .env --exclude '*.bak' \
-    "$REPO/" "$FRAIM_ADMIN:$REMOTE_DIR/"
-  admin_tty "docker compose up -d --build --remove-orphans"
+  [ "$FRAIM_ACCESS" = tailscale ] || usage "fraim lock only applies to tailscale mode"
+  local tries=0
+  until ssh "${SSH_BASE[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$FRAIM_ADMIN" true 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 6 ]; then
+      human "Install Tailscale on this computer (https://tailscale.com/download), log in with the same account as the server, and make sure the account is in group:fraim-admins in the Tailscale policy. Then tell Claude 'tailscale ready'; Claude runs: fraim lock. Until then the server keeps public SSH open."
+    fi
+    sleep 5
+  done
+  ssh "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && ./install.sh --lock-public-ssh"
+}
+
+cmd_tailscale() {
+  parse_flags "$@"
+  case "${POSITIONAL[0]:-}" in
+    policy)
+      local email
+      email="$(flag email)"
+      [ -n "$email" ] || usage "fraim tailscale policy --email you@example.com [--email-2 colleague@example.com]"
+      local members="\"$email\""
+      [ -z "$(flag email-2)" ] || members="$members, \"$(flag email-2)\""
+      sed "s/\"michael@example.com\"/$members/g" "$REPO/tailscale/policy.hujson"
+      ;;
+    *) usage "fraim tailscale policy --email ADDRESS" ;;
+  esac
+}
+
+repo_version() { git -C "$REPO" describe --tags --always 2>/dev/null || echo dev; }
+repo_commit() { git -C "$REPO" rev-parse HEAD 2>/dev/null || true; }
+# What gets deployed: deploy and update copy the working tree, so uncommitted changes
+# are stamped "<sha>-dirty", which update treats as unknown (no rollback to it).
+deployed_stamp() {
+  local commit
+  commit="$(repo_commit)"
+  if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]; then commit="$commit-dirty"; fi
+  printf '%s' "$commit"
+}
+
+# Shell snippet that writes FRAIM_VERSION and FRAIM_COMMIT of the laptop checkout into a
+# server's .env, so the server always knows exactly which code it runs.
+stamp_command() {
+  local version commit kv cmd=""
+  version="$(repo_version)"
+  commit="$(deployed_stamp)"
+  for kv in "FRAIM_VERSION=$version" "FRAIM_COMMIT=$commit"; do
+    cmd="$cmd (grep -q '^${kv%%=*}=' .env && sed -i 's|^${kv%%=*}=.*|$kv|' .env || echo '$kv' >> .env);"
+  done
+  printf '%s' "$cmd"
+}
+
+# The commit the target actually runs (empty when it predates version stamping).
+deployed_commit() { remote_env FRAIM_COMMIT; }
+
+# Server-side update lock: a directory in the fraimwork folder, created atomically.
+# It is only removed when an update or deploy finishes (well or with a completed rollback).
+# If a run is interrupted (laptop asleep, killed), the lock stays and marks the server as
+# "last update did not finish"; `fraim update --recover` reinstalls the last good commit.
+lock_info() { admin "cat .update-lock/info 2>/dev/null || true" 2>/dev/null || true; }
+lock_acquire() {
+  local info
+  info="started=$(date -u +%FT%TZ) from=$1 to=$2 by=$(hostname -s)"
+  if admin "mkdir .update-lock 2>/dev/null && echo '$info' > .update-lock/info"; then return 0; fi
+  die "an update is already running or did not finish ($(lock_info)). If none is running now: fraim update --recover"
+}
+lock_release() { admin "rm -rf .update-lock" || true; }
+
+# Copies the checkout to the target and applies it. On a server this reruns install.sh
+# (idempotent), so host-level changes in a release (sshd, firewall, packages) arrive too.
+push_and_rebuild() {
+  if [ "$FRAIM_ACCESS" = local ]; then
+    env_set FRAIM_VERSION "$(repo_version)"
+    env_set FRAIM_COMMIT "$(deployed_stamp)"
+    ADMIN_TIMEOUT=3600 admin "docker compose up -d --build --remove-orphans" || return 1
+    return 0
+  fi
+  rsync -az --delete -e "ssh ${SSH_BASE[*]}" \
+    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
+    "$REPO/" "$FRAIM_ADMIN:$REMOTE_DIR/" || return 1
+  admin "$(stamp_command)" || return 1
+  if ! ADMIN_TIMEOUT=3600 run_logged update admin "FRAIM_LOCK_HELD=1 ./install.sh"; then
+    # Never leave the server down: start the containers with whatever code is now in place.
+    ADMIN_TIMEOUT=3600 admin "docker compose up -d --build --remove-orphans" || true
+    return 1
+  fi
+}
+
+# Names of failing health checks, one per line, sorted. "workspace-unreachable" if SSH fails.
+failing_checks() {
+  local json
+  json="$(workspace_ssh 'fraim-doctor --json' 2>/dev/null || true)"
+  if ! printf '%s' "$json" | jq -e .checks >/dev/null 2>&1; then echo workspace-unreachable; return; fi
+  printf '%s' "$json" | jq -r '.checks[] | select(.ok | not) | .name' | sort
+}
+
+# Passes when no check that was ok before the update fails now (a regression).
+# Checks that already failed before (not logged in yet, WhatsApp not linked) are ignored.
+healthy_after_update() {
+  local before="$1" tries=0 now regressions
+  sleep 10
+  while :; do
+    now="$(failing_checks)"
+    if printf '%s\n' "$before" | grep -qx workspace-unreachable; then
+      # Nothing was measurable before the update: pass once the workspace and Claude run again.
+      regressions="$(printf '%s\n' "$now" | grep -x 'workspace-unreachable\|claude-session-running' || true)"
+      if [ -z "$regressions" ] && [ -n "$now" ]; then
+        say "Not checked before the update (the server was unreachable), failing now: $(printf '%s' "$now" | paste -sd, -)"
+      fi
+    else
+      regressions="$(comm -13 <(printf '%s\n' "$before" | grep . | sort) <(printf '%s\n' "$now" | grep . | sort))"
+    fi
+    [ -n "$regressions" ] || return 0
+    tries=$((tries + 1))
+    if [ "$tries" -ge 12 ]; then
+      printf 'fraim: new failing checks after the update: %s\n' "$(printf '%s' "$regressions" | paste -sd, -)" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# Installs the latest tested release (a vX.Y.Z git tag), checks health, and rolls back on failure.
+cmd_update() {
+  parse_flags "$@"
+  load_config
+  git -C "$REPO" diff --quiet && git -C "$REPO" diff --cached --quiet \
+    || usage "the fraimwork folder has local changes; fraim update needs a clean checkout"
+  git -C "$REPO" fetch --tags --quiet origin || die "could not fetch releases from GitHub"
+  local current target target_commit checkout_commit held recovering=""
+  local latest_hint
+  latest_hint="fraim update --to $(git -C "$REPO" tag --list 'v*' --sort=-version:refname | head -1 | grep . || echo '<release>') --force"
+  held="$(lock_info)"
+  if [ -n "$(flag recover)" ]; then
+    [ -n "$held" ] || usage "nothing to recover: no unfinished update on this server"
+    local good
+    good="$(printf '%s' "$held" | sed -n 's/.*from=\([0-9a-f]*\).*/\1/p')"
+    # Keep the lock (the marker) until a reinstall actually passes health.
+    recovering=1
+    if [ -n "$(flag to)" ]; then
+      say "Recovering from an unfinished update ($held): installing $(flag to)"
+    elif [ -n "$good" ] && git -C "$REPO" cat-file -e "$good^{commit}" 2>/dev/null; then
+      say "Recovering from an unfinished update ($held): reinstalling ${good:0:12}"
+      # shellcheck disable=SC2034  # read through flag()
+      FLAG_TO="$good"
+    else
+      die "the last good version (${good:-not recorded}) is not known on this laptop; the unfinished-update marker stays. Next: ${latest_hint/fraim update/fraim update --recover}"
+    fi
+    # shellcheck disable=SC2034  # read through flag()
+    FLAG_FORCE=1
+  elif [ -n "$held" ]; then
+    die "an update is already running or did not finish ($held). If none is running now: fraim update --recover"
+  fi
+  target="$(flag to)"
+  [ -n "$target" ] || target="$(git -C "$REPO" tag --list 'v*' --sort=-version:refname | head -1)"
+  [ -n "$target" ] || die "no releases published yet"
+  target_commit="$(git -C "$REPO" rev-parse --verify --quiet "$target^{commit}")" || die "release $target not found"
+
+  # "current" is what the server runs, not what this laptop has checked out.
+  checkout_commit="$(repo_commit)"
+  current="$(deployed_commit)"
+  if [ -z "$current" ]; then
+    current="$checkout_commit"
+    say "The server does not report its version (installed before version stamping); assuming it runs this checkout."
+  elif [ "$current" != "$checkout_commit" ]; then
+    say "Note: this laptop's checkout ($(repo_version)) differs from what the server runs (${current:0:12})."
+  fi
+  # The server may run code that exists in no repo here (uncommitted "-dirty" deploy, other
+  # laptop, deleted branch). Then there is no rollback target; --force continues anyway.
+  if ! git -C "$REPO" cat-file -e "$current^{commit}" 2>/dev/null; then
+    [ -n "$(flag force)" ] \
+      || die "the server runs ${current:0:18}, which this laptop does not have, so a failed update could not be rolled back. To update anyway: $latest_hint"
+    say "The server's current version (${current:0:18}) is unknown here: if this update fails there is no rollback."
+    current=""
+  fi
+  if [ "$current" = "$target_commit" ] && [ -z "$(flag force)" ]; then say "Already on $target."; return; fi
+
+  local before
+  before="$(failing_checks)"
+  [ -z "$before" ] || say "Already failing before the update (ignored): $(printf '%s' "$before" | paste -sd, -)"
+  if [ -n "$recovering" ]; then
+    admin "echo 'started=$(date -u +%FT%TZ) from=$target_commit to=$target_commit by=$(hostname -s) recovering=1' > .update-lock/info"
+  else
+    lock_acquire "${current:-unknown}" "$target_commit"
+  fi
+  if [ -n "$current" ]; then say "Updating from ${current:0:12} to $target"; else say "Updating from an unknown version to $target"; fi
+  git -C "$REPO" -c advice.detachedHead=false checkout --quiet "$target" || die "release $target not found"
+  if push_and_rebuild && healthy_after_update "$before"; then
+    lock_release
+    say "Updated to $target. No new problems after the update."
+    # Old images and build cache pile up with every update; a 40 GB disk fills over time.
+    ADMIN_TIMEOUT=600 admin "docker image prune -f >/dev/null 2>&1; docker builder prune -f --filter until=168h >/dev/null 2>&1" || true
+    return
+  fi
+  if [ -z "$current" ] || [ "$current" = "$target_commit" ]; then
+    lock_release
+    die "installing $target failed and there is no other version to roll back to. Next: fraim deploy root@${FRAIM_PUBLIC_HOST:-<server ip>} reinstalls this laptop's version; or run 'fraim support-bundle' and send it to the fraimwork maintainer."
+  fi
+  say "The update to $target failed; rolling back to ${current:0:12}"
+  git -C "$REPO" -c advice.detachedHead=false checkout --quiet "$current"
+  if push_and_rebuild && healthy_after_update "$before"; then
+    lock_release
+    die "update to $target failed and was rolled back to $current (code only; data in volumes is not rolled back). Run 'fraim support-bundle' and send it to the fraimwork maintainer."
+  fi
+  lock_release
+  die "update to $target failed AND the rollback to $current did not pass health checks. Run 'fraim support-bundle' and send it to the fraimwork maintainer."
+}
+
+cmd_login() {
+  parse_flags "$@"
+  load_config
+  if [ -n "$(flag token-stdin)" ]; then
+    store_login_token "$(tr -d '[:space:]')"
+    return
+  fi
+  if server_logged_in; then
+    say "The server is already logged in to Claude."
+    return
+  fi
+  # bootstrap.sh saves the token here, so setup needs no copy and paste.
+  local token
+  if token="$(security find-generic-password -s fraim-claude-token -w 2>/dev/null)" && [ -n "$token" ]; then
+    store_login_token "$token"
+    return
+  fi
+  need_login_step
+}
+
+store_login_token() {
+  case "$1" in sk-ant-*) ;; *) usage "that does not look like a Claude token (sk-ant-...)" ;; esac
+  printf '%s' "$1" | workspace_ssh 'umask 077 && mkdir -p ~/.config/fraim && cat > ~/.config/fraim/claude-token'
+  workspace_ssh 'pkill -x claude || true'
+  say "Claude login stored on the server. The Claude session restarts with it."
+}
+
+cmd_exec() {
+  load_config
+  [ $# -gt 0 ] && [ "$1" = -- ] && shift
+  [ $# -gt 0 ] || usage "fraim exec -- <command> [args]"
+  workspace_ssh "$(printf '%q ' "$@")"
+}
+
+need_login_step() {
+  # Claude then runs: pbpaste | fraim login --token-stdin
+  human "Open Terminal (press Cmd+Space, type Terminal, press Enter), type claude setup-token and press Enter, approve in the browser window that opens, copy the long token it prints, and tell Claude 'copied'. Do not paste the token into the chat."
+}
+# 0 logged in, 1 not logged in; an unreachable workspace (ssh exit 255) is an error, not a login step.
+server_logged_in() {
+  local rc=0
+  workspace_ssh 'test -s ~/.claude/.credentials.json || test -s ~/.config/fraim/claude-token' || rc=$?
+  [ "$rc" != 255 ] || die "the server's Claude workspace is unreachable (it may be restarting); check: fraim status"
+  return "$rc"
+}
+
+cmd_ask() {
+  parse_flags "$@"
+  load_config
+  server_logged_in || need_login_step
+  local prompt="${POSITIONAL[*]:-}" remote
+  [ -n "$prompt" ] || usage 'fraim ask "<prompt>" [--allow "Read,Bash(git:*)"] [--json]'
+  remote="cd ~/fraim && fraim-claude -p $(printf '%q' "$prompt")"
+  [ -z "$(flag allow)" ] || remote="$remote --allowedTools $(printf '%q' "$(flag allow)")"
+  [ -z "$(flag json)" ] || remote="$remote --output-format json"
+  workspace_ssh "$remote"
 }
 
 cmd_shell() {
   load_config
+  is_tty || usage "fraim shell is interactive and for humans; use 'fraim exec' or 'fraim ask' instead"
   local session="${1:-main}" remote
-  if [ "$session" = main ]; then
-    remote="tmux new-session -A -s main fraim-session"
-  else
-    remote="tmux new-session -A -s $session"
+  if [ "$session" = main ]; then remote="tmux new-session -A -s main fraim-session"; else remote="tmux new-session -A -s $session"; fi
+  if command -v mosh >/dev/null && [ "$FRAIM_ACCESS" != local ]; then
+    exec mosh --ssh="ssh $(ssh_opts)" --port=60000:60010 "claude@$FRAIM_HOST" -- sh -c "$remote"
   fi
-  if command -v mosh >/dev/null; then
-    exec mosh --ssh="ssh -p $FRAIM_SSH_PORT" --port=60000:60010 "claude@$FRAIM_HOST" -- sh -c "$remote"
-  fi
-  exec ssh -t -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST" "$remote"
+  # shellcheck disable=SC2046
+  exec ssh -t $(ssh_opts) "claude@$FRAIM_HOST" "$remote"
 }
 
 cmd_chrome() {
   load_config
   local chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-  [ -x "$chrome" ] || chrome="$(command -v google-chrome || command -v chromium || true)"
-  [ -n "$chrome" ] || die "Chrome not found"
-  local profile="$HOME/.fraim/chrome-profile"
-  mkdir -p "$profile"
-  "$chrome" --user-data-dir="$profile" --remote-debugging-port=9222 --no-first-run --no-default-browser-check >/dev/null 2>&1 &
-  local chrome_pid=$!
-  trap 'kill $chrome_pid 2>/dev/null || true' EXIT
-  say "This separate Chrome profile is now lent to the server (MCP server 'my-chrome')."
-  say "Your normal Chrome profile is not shared. Press Ctrl-C to stop lending."
-  sleep 2
-  ssh -N -o ExitOnForwardFailure=yes -R 127.0.0.1:9222:127.0.0.1:9222 -p "$FRAIM_SSH_PORT" "claude@$FRAIM_HOST"
+  case "${1:-status}" in
+    start)
+      [ -x "$chrome" ] || chrome="$(command -v google-chrome || command -v chromium || true)"
+      [ -n "$chrome" ] || human "Install Google Chrome on this computer."
+      mkdir -p "$STATE_DIR/chrome-profile"
+      bg_start chrome "$chrome" --user-data-dir="$STATE_DIR/chrome-profile" --remote-debugging-port=9222 \
+        --no-first-run --no-default-browser-check
+      # shellcheck disable=SC2046
+      bg_start chrome-tunnel ssh -N -o ExitOnForwardFailure=yes -R 127.0.0.1:9222:127.0.0.1:9222 $(ssh_opts) "claude@$FRAIM_HOST"
+      say "Lending a separate Chrome profile ($STATE_DIR/chrome-profile) to the server as MCP server 'my-chrome'."
+      ;;
+    stop) bg_stop chrome-tunnel; bg_stop chrome; say "Chrome is no longer lent to the server." ;;
+    status) if bg_running chrome-tunnel; then say "lent"; else say "not lent"; fi ;;
+    *) usage "fraim chrome start|stop|status" ;;
+  esac
 }
 
 cmd_browser() {
+  parse_flags "$@"
   load_config
+  case "${POSITIONAL[0]:-open}" in
+    stop) tunnel stop 6080; return ;;
+    open|start) ;;
+    *) usage "fraim browser [--print-url] | stop" ;;
+  esac
+  local url
   if [ "$FRAIM_ACCESS" = tailscale ]; then
-    open_url "http://$FRAIM_HOST:6080/vnc.html"
+    url="http://$FRAIM_HOST:6080/vnc.html"
   else
-    tunnel_then_open 6080 172.30.0.10 "http://localhost:6080/vnc.html"
+    if [ "$FRAIM_ACCESS" = local ]; then
+      url="http://localhost:$(env_get VNC_PORT | grep . || echo 6080)/vnc.html"
+    else
+      url="http://localhost:$(tunnel start 6080 172.30.0.10)/vnc.html"
+    fi
   fi
+  open_url "$url"
+  say "VNC password: $(remote_env VNC_PASSWORD)"
 }
 
 cmd_sync() {
+  parse_flags "$@"
   load_config
-  cat <<EOF
-File sync setup (once per laptop):
-  1. Install Syncthing:  brew install --cask syncthing  (then open it)
-  2. In the server GUI (opening now): Actions > Show ID. Copy the device ID.
-  3. In your laptop Syncthing: Add Remote Device, paste the ID.
-     Under Advanced, set Addresses to: tcp://$FRAIM_HOST:22000
-  4. Share folders:
-     - Shared work folder: on the server, share folder "fraim" (/var/syncthing/fraim) two-way.
-     - PC folders (Documents, Desktop, ...): on the laptop, set the folder type to "Send Only",
-       share it with the server, and accept it there under /var/syncthing/pc/<name> as "Receive Only".
-  5. On the laptop, add secrets to each folder's ignore patterns: .env*, .ssh, *.pem, *.key
-EOF
-  if [ "$FRAIM_ACCESS" = tailscale ]; then
-    open_url "http://$FRAIM_HOST:8384"
-  else
-    tunnel_then_open 8384 syncthing "http://localhost:8384"
-  fi
+  [ "$FRAIM_ACCESS" != local ] || usage "file sync is not part of the local test stack"
+  if [ "${POSITIONAL[0]:-}" = stop ]; then tunnel stop 8384; return; fi
+  local url="http://$FRAIM_HOST:8384"
+  if [ "$FRAIM_ACCESS" = public ]; then url="http://localhost:$(tunnel start 8384 syncthing)"; fi
+  open_url "$url"
+  say "Syncthing GUI user: fraim, password: $(remote_env SYNCTHING_GUI_PASSWORD)"
+  say "Server address for the laptop device: tcp://$FRAIM_HOST:22000"
+  command -v syncthing >/dev/null || [ -d /Applications/Syncthing.app ] \
+    || say "HUMAN STEP: Install Syncthing on this computer (brew install --cask syncthing) and open it once."
 }
 
 cmd_whatsapp() {
+  parse_flags "$@"
   load_config
-  case "${1:-link}" in
+  local status rc=0
+  local off_hint="the whatsapp module is off; add it with: fraim local up --whatsapp-owner N (local) or --modules ...,whatsapp in fraim init + fraim deploy (server)"
+  case "${POSITIONAL[0]:-status}" in
+    status)
+      workspace_ssh 'fraim-gateway GET /status' || rc=$?
+      [ "$rc" != 2 ] || usage "$off_hint"
+      [ "$rc" = 0 ] || die "the WhatsApp gateway is not reachable (exit $rc)"
+      ;;
     link)
-      say "Scan the QR code with WhatsApp Business: Settings > Linked devices > Link a device."
-      say "Press Ctrl-C when it says 'WhatsApp connected'."
-      admin_tty "docker compose logs -f --tail 60 whatsapp"
+      status="$(workspace_ssh 'fraim-gateway GET /status')" || rc=$?
+      [ "$rc" != 2 ] || usage "$off_hint"
+      [ "$rc" = 0 ] || die "the WhatsApp gateway is not reachable (exit $rc)"
+      if printf '%s' "$status" | grep -q '"connected":true'; then say "WhatsApp is already linked."; return; fi
+      if [ -n "$(flag number)" ]; then
+        local code
+        local bot owner
+        bot="$(normalize_phone "$(flag number)")" || exit 2
+        owner="$(remote_env WHATSAPP_OWNER)"
+        [ "$bot" != "$owner" ] || usage "the agent needs its own second number; $bot is the owner's personal number"
+        code="$(workspace_ssh "fraim-gateway POST /pair '{\"number\":\"$bot\"}'" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')"
+        [ -n "$code" ] || die "could not get a pairing code"
+        human "On the phone with the agent's WhatsApp Business account: Settings > Linked devices > Link a device > 'Link with phone number instead', and enter code $code. The code works for about 1 minute; if it fails, tell Claude and it gets a new one."
+      fi
+      mkdir -p "$STATE_DIR"
+      workspace_ssh 'fraim-gateway GET /qr.png' > "$STATE_DIR/whatsapp-qr.png" || die "no QR code yet; run this again in 10 seconds"
+      human "Scan the QR code in $STATE_DIR/whatsapp-qr.png with the agent's WhatsApp Business app: Settings > Linked devices > Link a device. It expires in about 20 seconds; use --number <agent number> for a code that lasts longer."
       ;;
     relink)
-      admin_tty "docker compose stop whatsapp && docker compose run --rm --no-deps --entrypoint sh whatsapp -c 'rm -rf /data/auth/*' && docker compose up -d whatsapp && docker compose logs -f --tail 60 whatsapp"
+      admin "docker compose stop whatsapp && docker compose run --rm --no-deps --entrypoint sh whatsapp -c 'rm -rf /data/auth/* /data/qr.png' && docker compose up -d whatsapp"
+      say "WhatsApp session removed. Run: fraim whatsapp link --number <agent number>"
       ;;
-    test)
-      workspace_ssh "fraim-notify 'fraim test message: WhatsApp works.'" && say "Sent."
-      ;;
-    *) die "usage: fraim whatsapp [link|relink|test]" ;;
+    test) workspace_ssh "fraim-notify 'fraim test message: WhatsApp works.'" && say "Test message sent to the owner." ;;
+    *) usage "fraim whatsapp status | link [--number N] | relink | test" ;;
   esac
 }
 
 cmd_status() {
+  parse_flags "$@"
   load_config
-  admin "docker compose ps --format 'table {{.Service}}\t{{.Status}}'"
-  echo
-  workspace_ssh fraim-doctor || true
+  if [ -n "$(flag json)" ]; then
+    local services health
+    services="$( { admin "docker compose ps --format json" 2>/dev/null || true; } | jq -s 'map({service: .Service, state: .State, status: .Status})' 2>/dev/null || echo '[]')"
+    [ -n "$services" ] || services='[]'
+    local update_lock
+    update_lock="$(lock_info)"
+    health="$(workspace_ssh 'fraim-doctor --json' || true)"
+    local alerts
+    alerts="$(workspace_ssh "grep '^- ' ~/fraim/alerts.md 2>/dev/null | tail -5" 2>/dev/null || true)"
+    [ -n "$health" ] || health='{"ok":false,"checks":[],"error":"workspace unreachable"}'
+    local instance="" offset=""
+    if [ "$FRAIM_ACCESS" = local ]; then instance="$FRAIM_INSTANCE"; offset="$(env_get PORT_OFFSET)"; fi
+    jq -n --arg target "$FRAIM_TARGET" --arg host "$FRAIM_HOST" --arg access "$FRAIM_ACCESS" \
+      --arg instance "$instance" --arg offset "$offset" \
+      --arg ssh "$FRAIM_SSH_PORT" --arg vnc "$( { [ "$FRAIM_ACCESS" = local ] && env_get VNC_PORT; } | grep . || echo 6080)" \
+      --arg public_host "${FRAIM_PUBLIC_HOST:-}" --arg update_lock "$update_lock" --arg alerts "$alerts" \
+      --argjson services "$services" --argjson health "$health" \
+      '{target: $target, host: $host, access: $access,
+        instance: (if $instance == "" then null else $instance end),
+        port_offset: (if $offset == "" then null else ($offset | tonumber) end),
+        public_host: (if $public_host == "" then null else $public_host end),
+        unfinished_update: (if $update_lock == "" then null else $update_lock end),
+        recent_alerts: ($alerts | split("\n") | map(select(. != "") | sub("^- "; "")
+          | {time: .[0:16], text: .[17:]})),
+        ports: {ssh: ($ssh | tonumber), browser_view: ($vnc | tonumber)},
+        ok: $health.ok, services: $services, health: $health}'
+    printf '%s' "$health" | jq -e .ok >/dev/null
+  else
+    admin "docker compose ps --format 'table {{.Service}}\t{{.Status}}'"
+    echo
+    workspace_ssh fraim-doctor
+  fi
+}
+
+# One redacted text file with everything needed to debug a server remotely.
+cmd_support_bundle() {
+  load_config
+  mkdir -p "$STATE_DIR"
+  local out
+  out="$STATE_DIR/support-$(date +%Y%m%d-%H%M%S).txt"
+  {
+    echo "== fraim support bundle $(date -u +%FT%TZ)"
+    echo "target=$FRAIM_TARGET access=$FRAIM_ACCESS instance=${FRAIM_INSTANCE:-}"
+    echo "repo=$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo unknown)"
+    echo; echo "== status"; cmd_status --json 2>&1 || true
+    echo; echo "== versions"; workspace_ssh 'claude --version; node --version; cat /etc/os-release | head -2' 2>&1 || true
+    echo; echo "== fraim-config"; workspace_ssh 'fraim-config status' 2>&1 || true
+    echo; echo "== crontab"; workspace_ssh 'cat ~/fraim/jobs/crontab' 2>&1 || true
+    echo; echo "== recent job logs"; workspace_ssh 'ls -t ~/fraim/logs/jobs 2>/dev/null | head -5' 2>&1 || true
+    echo; echo "== service logs (last 150 lines each)"; admin "docker compose logs --no-color --tail 150" 2>&1 || true
+  } | sed -E \
+      -e 's/sk-ant-[A-Za-z0-9_-]+/sk-ant-[REDACTED]/g' \
+      -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' \
+      -e 's/((TOKEN|PASSWORD|AUTHKEY|SECRET|KEY)[A-Z_]*=)[^ ]+/\1[REDACTED]/g' \
+      -e 's/(^|[^0-9])(31|32|49|44|1)[0-9]{8,11}([^0-9]|$)/\1[PHONE]\3/g' \
+    > "$out"
+  say "$out"
+  say "This file has passwords, tokens and phone numbers removed. It can be sent to whoever helps you."
+}
+
+cmd_logs() {
+  parse_flags "$@"
+  load_config
+  local follow=""
+  if [ -n "$(flag follow)" ] && is_tty; then follow="-f"; fi
+  admin "docker compose logs --no-color $follow --tail $(flag tail | grep . || echo 100) ${POSITIONAL[*]:-}"
 }
 
 cmd_help() {
   cat <<'EOF'
-fraim: control your fraimwork server
+fraim: control a fraimwork server (an always-on Claude Code server). Built to be run by Claude.
 
-Setup
-  fraim init                    create .env and add your SSH key
-  fraim deploy root@<ip>        install on a fresh Ubuntu 24.04 server
-  fraim update                  push repo changes and rebuild
+Conventions: never prompts without a terminal; long-running parts run in the background;
+a human-only step prints one "HUMAN STEP: ..." line. Exit codes: 0 ok, 1 failure,
+2 usage or missing input, 3 human step needed.
 
-Daily use
-  fraim shell [name]            attach to the always-on Claude session (or a named shell)
-  fraim chrome                  lend a separate Chrome profile on this laptop to the server
-  fraim browser                 open the server browser (log in to sites, watch jobs)
-  fraim sync                    open Syncthing and show sync setup steps
-  fraim whatsapp [link|relink|test]
-  fraim status                  container status and health checks
-  fraim logs [service]          follow logs
-  fraim restart [service]       restart one or all services
-  fraim reset-workspace         rebuild the workspace container (files and logins are kept)
+Try locally (Docker on this computer)
+  fraim local up [--whatsapp-owner N] [--whatsapp-allow N,N] [--modules browser,whatsapp,scheduler]
+                 [--port-offset N]   FRAIM_INSTANCE=NAME runs a separate stack (default: local)
+  fraim local down [--wipe]
+
+Real server
+  fraim init --hostname NAME --access tailscale|public [--ts-authkey KEY]
+             [--modules sync,browser,whatsapp,scheduler] [--tz Europe/Amsterdam]
+             [--whatsapp-owner N] [--whatsapp-allow N,N] [--ssh-key PATH]
+  fraim tailscale policy --email ADDR [--email-2 ADDR]   print the access policy to merge in Tailscale
+  fraim deploy root@IP [--force-env] [--take-over]   installs, then closes public SSH once Tailscale works
+                                             (--take-over replaces a stale update lock)
+  fraim lock                                 close public SSH (tailscale mode; checks access first)
+  fraim update [--to vX.Y.Z] [--force]     install the latest release; rolls back if health checks fail
+  fraim update --recover [--to vX.Y.Z]       finish an interrupted update: reinstall the last good version,
+                                             or the given release when the last good one is unknown
+  fraim use local|server
+
+Operate
+  fraim status [--json]                      services and health checks
+  fraim login [--token-stdin]                store a Claude login token on the server
+  fraim ask "PROMPT" [--allow TOOLS] [--json]  one-off claude -p run on the server
+  fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
+  fraim whatsapp status|link [--number N]|relink|test
+  fraim browser [--print-url] | stop         server browser view URL and VNC password
+  fraim chrome start|stop|status             lend a separate local Chrome profile to the server
+  fraim sync [--print-url] | stop            Syncthing GUI URL and password
+  fraim logs [SERVICE] [--tail N] [--follow]
+  fraim support-bundle                       write a redacted debug file to send to a helper
+  fraim restart [SERVICE]
+  fraim reset-workspace                      recreate the workspace container (files kept)
+  fraim config ...                           Claude config layer (see bin/fraim-config help)
+  fraim shell [NAME]                         humans only: attach to the Claude tmux session
 EOF
 }
 
 main() {
-  local cmd="${1:-help}"
+  local cmd="${1:-help}" arg
   shift || true
+  for arg in "$@"; do
+    [ "$arg" != -- ] || break
+    case "$arg" in -h|--help) cmd_help; exit 0 ;; esac
+  done
   case "$cmd" in
     init) cmd_init "$@" ;;
+    local) cmd_local "$@" ;;
     deploy) cmd_deploy "$@" ;;
     update) cmd_update "$@" ;;
+    use)
+      case "${1:-}" in
+        local) set_current local ;;
+        server) set_current default ;;
+        *) usage "fraim use local|server" ;;
+      esac
+      say "fraim now targets: $1"
+      ;;
+    config) exec "$REPO/bin/fraim-config" "$@" ;;
+    login) cmd_login "$@" ;;
+    lock) cmd_lock "$@" ;;
+    tailscale) cmd_tailscale "$@" ;;
+    exec) cmd_exec "$@" ;;
+    ask) cmd_ask "$@" ;;
     shell) cmd_shell "$@" ;;
     chrome) cmd_chrome "$@" ;;
     browser) cmd_browser "$@" ;;
     sync) cmd_sync "$@" ;;
     whatsapp) cmd_whatsapp "$@" ;;
     status) cmd_status "$@" ;;
-    logs) load_config; admin_tty "docker compose logs -f --tail 100 ${1:-}" ;;
-    restart) load_config; admin_tty "docker compose restart ${1:-}" ;;
-    reset-workspace) load_config; admin_tty "docker compose up -d --force-recreate workspace" ;;
+    logs) cmd_logs "$@" ;;
+    support-bundle) cmd_support_bundle "$@" ;;
+    restart) load_config; admin "docker compose restart ${1:-}" ;;
+    reset-workspace) load_config; ADMIN_TIMEOUT=300 admin "docker compose up -d --force-recreate workspace" ;;
     help|-h|--help) cmd_help ;;
-    *) die "unknown command '$cmd'; run 'fraim help'" ;;
+    *) usage "unknown command '$cmd'; run 'fraim help'" ;;
   esac
 }
 

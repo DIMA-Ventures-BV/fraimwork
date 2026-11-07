@@ -43,6 +43,8 @@ COPY channel/whatsapp-channel.mjs /opt/fraim/channel/
 
 COPY sshd_config /etc/ssh/sshd_config.d/fraim.conf
 COPY managed-settings.json /etc/claude-code/managed-settings.json
+COPY managed-CLAUDE.md /etc/claude-code/CLAUDE.md
+COPY system.crontab /etc/fraim/system.crontab
 COPY skel/ /etc/fraim/skel/
 COPY skel-jobs/ /etc/fraim/skel-jobs/
 COPY bin/ /usr/local/bin/

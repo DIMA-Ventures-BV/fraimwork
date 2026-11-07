@@ -1,0 +1,5 @@
+{
+  "name": "fraim-system",
+  "version": "0.1.0",
+  "description": "Built-in know-how for the Claude that runs on a fraim server: health, jobs, files and WhatsApp. Shipped with fraimwork and updated by fraim update."
+}

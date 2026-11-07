@@ -4,6 +4,8 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 AllowUsers claude
+# Root-owned key list, so the claude user (and Claude) cannot add keys.
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding yes

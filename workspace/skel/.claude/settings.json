@@ -5,7 +5,6 @@
       "Glob",
       "Grep",
       "WebSearch",
-      "WebFetch",
       "mcp__whatsapp__reply",
       "mcp__whatsapp__send_file",
       "Bash(ls:*)",

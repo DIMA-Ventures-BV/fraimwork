@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Runs the read-only system crontab and the owner's crontab side by side.
+# If either scheduler stops, exit so Docker restarts the container.
+supercronic /etc/fraim/system.crontab &
+supercronic -inotify "$HOME/fraim/jobs/crontab" &
+wait -n
+echo "fraim-scheduler: a scheduler stopped, restarting the container" >&2
+exit 1

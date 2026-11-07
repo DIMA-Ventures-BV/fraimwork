@@ -1,0 +1,5 @@
+{
+  "name": "fraim-laptop",
+  "version": "0.1.0",
+  "description": "Loaded only on laptops: things that need the local browser, phone or desktop."
+}

@@ -1,0 +1,126 @@
+---
+name: operating-fraim
+description: Run an existing fraimwork setup for the user with the fraim CLI - check health, read logs, restart, update, run something on the server, ask the server's Claude, open the server browser, lend laptop Chrome, check WhatsApp and file sync, switch between local and server. Use when the user says "is my server up", "restart fraim", "update fraim", "what is the server doing", "ask my server to ...", "open the server browser", "WhatsApp stopped working", "move fraim to a new server", "remove fraim", "a fraimwork update is available", or anything about a running fraim. The user never types fraim; you run it. Do NOT use for first-time setup (use setting-up-fraim) or for adding skills and MCP servers (use managing-fraim-config).
+---
+
+# Operating fraim
+
+The user never types `fraim`. You run it from their fraimwork checkout (`~/fraimwork` or `~/projects/fraimwork`):
+`F=<checkout>/bin/fraim`. Never run it from the plugin folder.
+
+## Contract
+
+- Exit codes: 0 ok, 1 failure, 2 usage or missing input, 3 human step needed.
+- Exit 3 prints one line `HUMAN STEP: ...`. Pass it to the user in plain words, wait, then run the same command again.
+- Exit 2 names what is missing (for example `missing: --ts-authkey`). Get the value, then run the command again.
+- No command prompts or blocks without a terminal. `fraim shell` is for humans only and exits 2 for you.
+
+## Target
+
+`$F use local` or `$F use server` picks the target. Always tell the user which one you acted on.
+
+## Health first
+
+`$F status --json` returns `{target, host, ok, services[{service,state,status}], health{ok, modules, checks[{name,ok}]}, recent_alerts[{time,text}]}`
+and exits 1 when any check fails (also `claude-login` before the first login: then exit 1 is expected). Report only the failing parts, one line each.
+
+| Failing check | First action |
+| --- | --- |
+| `health.error` "workspace unreachable" | Right after start: wait 10 s and retry. Later: `$F logs workspace --tail 80`, then `$F restart workspace` |
+| `claude-login` | "Claude login" in setting-up-fraim |
+| `claude-session-running` | `$F restart workspace`, then status again |
+| `whatsapp-connected` | `$F whatsapp status`; if logged out, `$F whatsapp relink` (ask first) |
+| `server-browser` | `$F restart browser` |
+| `syncthing` | `$F restart syncthing`, then `$F sync --print-url` |
+| `disk-below-90-percent` | `$F exec -- sh -c 'du -sh ~/fraim/*'` and tell the user what is large |
+| `jobs-ok` | The last run of a job failed. The reason is in `recent_alerts`; act on it (login, usage limit, timeout, missing prompt file), then run the job once: `$F exec -- fraim-job <name>` |
+| a service not `running` | `$F logs <service> --tail 80`, read it, then `$F restart <service>` |
+
+Always read `recent_alerts` too (the last 5 problems, newest last; normal job answers never land there). Report the ones from the last 7 days in plain words, also when every check is ok, because a user without WhatsApp sees them only here.
+
+The scheduler has a container health check, not a doctor check: read its `status` in `services[]` (`unhealthy` means supercronic stopped; `$F restart scheduler`).
+
+## Restarting
+
+Run each step as its own command; never chain logs, restart and status in one call (a chained call can hit the 2-minute tool limit).
+1. `$F restart <service>`.
+2. Wait 20 seconds.
+3. `$F status --json`. When the service still shows "Restarting", read `$F logs <service> --tail 80`, then restart once more. When it fails again, report what the logs show.
+
+Read the logs before you name a cause. A restart that fixes it still gets one line on what the logs showed.
+
+## Commands
+
+| Goal | Command |
+| --- | --- |
+| Run a command on the server | `$F exec -- <command>` (exit code passes through) |
+| Ask the server's Claude | `$F ask "<prompt>" --json`; add `--allow "Read,Bash(git:*)"` when it needs tools. Exit 3 means not logged in: run the login flow |
+| Logs | `$F logs [service] --tail N` (never `--follow` in the foreground) |
+| Restart | `$F restart [service]`; services: workspace, scheduler, browser, whatsapp, syncthing. See "Restarting" below |
+| Rebuild the workspace | `$F reset-workspace` (files and logins stay) |
+| Update fraim | See "Updating" below |
+| Server browser for the user | `$F browser --print-url`. Line 1 is the URL (its port can differ from 6080: fraim picks a free one), line 2 the VNC password. Give the user both lines. The tunnel stays open until `$F browser stop`; run that when the user is done |
+| Lend laptop Chrome to the server | `$F chrome start`, `$F chrome status`, `$F chrome stop` when the job is done |
+| WhatsApp | `$F whatsapp status`, `$F whatsapp test` |
+| File sync GUI | `$F sync --print-url`; `$F sync stop` after |
+| Claude config | `$F config status` (see managing-fraim-config) |
+
+## Locked out (server unreachable)
+
+When: Tailscale mode, `$F status` cannot reach the server, and `tailscale status` on this Mac shows the Mac connected but the fraim machine offline (public SSH is closed by design).
+First check the simple causes: the Mac's Tailscale icon says Connected; the server shows "Running" in the Hetzner console (ask the user). Then the human steps, one at a time:
+
+1. "Open https://console.hetzner.cloud, your fraim project, the server, the Rescue tab, and click Reset root password. Save the password in your password manager. Do not paste it here."
+2. "On the same server page, click the Console icon (>_ at the top right). Log in as `root` with that password." (Typing, not pasting, may be needed in that window.)
+3. "Type `tailscale up --ssh` and press Enter. Tell me what it prints in a few words."
+   When that does not bring the machine back online within a minute: "Type `ufw allow OpenSSH` and press Enter." This opens public SSH again, so you can repair it.
+4. With public SSH open, repair it yourself: `ssh root@<public_host> 'systemctl restart tailscaled; tailscale up --ssh; tailscale status'`.
+   `public_host` comes from `$F status --json` (it is there even when the server is unreachable). When it is null (an older setup), ask the user for the IPv4 address on the Hetzner server page.
+   Never ask the user to type more than step 3.
+5. `$F status`. When the server is reachable over Tailscale again, `$F lock` closes public SSH. Do not stop before `lock` succeeds.
+6. Tell the user: "Fixed. You can delete the root password from your password manager, or keep it for emergencies." No root password is set at deploy (see docs/decisions.md).
+
+## Updating
+
+Triggers: the user says "a fraimwork update is available" (the server sends this on WhatsApp once a week), "update fraim", or you see it yourself with `$F exec -- fraim-version-check` (exit 10 = an update exists, 0 = up to date).
+1. Tell the user: "Updating fraim, this takes a few minutes. Your files stay."
+2. `$F update` in the background (`--to vX.Y.Z` for a given version). On a server it reinstalls, so allow several minutes. It prints stage lines and a summary; the full log path is on its "Full log:" line. On failure, read the 15 lines it prints first.
+3. Exit 0: report the new version and run `$F status --json`.
+   Exit 1: the update failed and fraim rolled back. Read whether the rollback passed health, and tell the user in one line: "The update failed, your server is back on the old version and works" (or, when the rollback failed too, follow "Health first").
+   Exit 2: the checkout has local changes. Tell the user; never discard them yourself.
+   Unfinished update (`unfinished_update` in `$F status --json`, or update says "an update is already running or did not finish"): ask the user "Is another Claude window updating fraim right now?" Only when no: `$F update --recover`.
+   Update or rollback failed for an unclear reason: the server may be installing its own system updates. Wait 10 minutes and run the same command once more before you report it as broken.
+   A line "Already failing before the update (ignored): <checks>" lists problems that existed before the update. The update did not cause them and they do not block it.
+   Report them separately ("These were already broken before: ..."), then handle each with the table in "Health first".
+4. The checkout is a detached HEAD at the release tag after an update. Never `git pull`, `git checkout` or `git reset` in it: `$F update` is the only way to move it.
+
+## Move to a new server
+
+1. Ask the user to create the new server (setting-up-fraim, Path B step 3; the SSH key `laptop` already exists, so they tick it instead of adding it) and give the IP.
+2. Back up first: `$F exec -- tar czf - -C ~ fraim > ~/fraim-backup-$(date +%Y%m%d).tgz` on the laptop. Check the file is not empty.
+   (Hetzner backups restore a whole server in place; they do not move data to a new server.)
+3. `$F deploy root@<new ip>`, then the login flow, then copy the backup in: `$F exec -- tar xzf - -C ~ < <backup>`.
+4. WhatsApp: on the old server, nothing to do; on the new one, `$F whatsapp link --number <bot>` and the pairing human step.
+5. `$F status --json` on the new server. Only when everything works: tell the user to delete the old server in the Hetzner console, and remove the old machine at https://login.tailscale.com/admin/machines.
+
+## Remove fraim
+
+Confirm first: "This deletes your fraim server and everything on it, after a backup to your laptop. Continue?"
+1. Backup: as in "Move", step 2. Tell the user where the file is.
+2. Human steps, one at a time:
+   - WhatsApp: on the bot phone, Settings, Linked devices, tap fraim, Log out.
+   - Hetzner: https://console.hetzner.cloud, the project, the server, Delete. (A deleted server stops costing money; an existing one costs money even when stopped.)
+   - Tailscale: https://login.tailscale.com/admin/machines, the fraim machine, Remove. Then https://login.tailscale.com/admin/settings/keys: revoke any fraim auth key left.
+   - Claude token: https://claude.ai/settings, revoke the token named for fraim (from `claude setup-token`).
+3. Local stack, if any: `$F local down --wipe`.
+4. Laptop: `$F config uninstall` removes the fraim plugin links. `~/fraim` and the backup stay; delete them only when the user asks.
+
+## Ask first
+
+`$F local down --wipe` (deletes the stack with every file inside it, its volumes and env file; keeps the laptop's `~/fraim/claude` and `secrets.env`. When the stack was the user's only fraim, also run `$F config uninstall`), `$F whatsapp relink`, `$F deploy` to a server that already runs fraim (`--force-env`), `$F reset-workspace` while a job runs.
+
+## Never
+
+Start a second `$F update` while one may still run (another Claude window can be updating too).
+
+Print `.env`, `secrets.env`, tokens or auth keys in the chat. Pipe them.

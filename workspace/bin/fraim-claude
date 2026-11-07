@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Starts Claude Code with the stored login token (written by `fraim login`), if there is one.
+token_file="$HOME/.config/fraim/claude-token"
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ]; then
+  CLAUDE_CODE_OAUTH_TOKEN="$(cat "$token_file")"
+  export CLAUDE_CODE_OAUTH_TOKEN
+fi
+# fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
+if command -v fraim-config >/dev/null; then
+  exec fraim-config exec -- claude "$@"
+fi
+exec claude "$@"

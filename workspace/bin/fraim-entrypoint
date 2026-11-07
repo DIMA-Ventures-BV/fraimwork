@@ -9,6 +9,7 @@ write_runtime_env() {
   install -d -m 0755 /etc/fraim
   umask 027
   {
+    printf 'FRAIM_ROLE=%q\n' "$role"
     printf 'FRAIM_MODULES=%q\n' "${FRAIM_MODULES:-}"
     printf 'FRAIM_HOSTNAME=%q\n' "${FRAIM_HOSTNAME:-fraim}"
     printf 'FRAIM_GATEWAY_URL=%q\n' "${FRAIM_GATEWAY_URL:-}"
@@ -17,6 +18,9 @@ write_runtime_env() {
     printf 'BROWSER_CDP_URL=%q\n' "${BROWSER_CDP_URL:-}"
     printf 'FRAIM_BROWSER_VIEW_URL=%q\n' "${FRAIM_BROWSER_VIEW_URL:-}"
     printf 'TZ=%q\n' "${TZ:-UTC}"
+    printf 'FRAIM_AUTO_CONFIRM_CHANNEL=%q\n' "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}"
+    printf 'FRAIM_VERSION=%q\n' "${FRAIM_VERSION:-dev}"
+    printf 'FRAIM_RELEASES_REPO=%q\n' "${FRAIM_RELEASES_REPO:-}"
   } > /etc/fraim/runtime.env
   chown root:claude /etc/fraim/runtime.env
   chmod 0640 /etc/fraim/runtime.env
@@ -27,18 +31,21 @@ has_module() {
   case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac
 }
 
+# Root only touches volume mount points (claude cannot replace a mount point with a
+# symlink); everything inside the home folder is done as claude by fraim-home-setup.
 prepare_home() {
-  chown claude:claude "$home" "$home/fraim"
-  install -d -o claude -g claude "$home/fraim/downloads" "$home/fraim/inbox" \
-    "$home/fraim/jobs" "$home/fraim/logs" "$home/fraim/logs/jobs"
-
-  (cd /etc/fraim/skel && find . -type f) | while read -r file; do
-    target="$home/${file#./}"
-    if [ ! -e "$target" ]; then
-      install -D -o claude -g claude -m 0644 "/etc/fraim/skel/${file#./}" "$target"
+  local dir
+  for dir in "$home" "$home/fraim"; do
+    [ -L "$dir" ] || chown claude:claude "$dir"
+  done
+  # Drop folders shared with the browser and the WhatsApp gateway (other users).
+  for dir in "$home/fraim/downloads" "$home/fraim/inbox"; do
+    if mountpoint -q "$dir" && [ ! -L "$dir" ]; then
+      chown claude:claude "$dir"
+      chmod 0777 "$dir"
     fi
   done
-  chown claude:claude "$home/.claude"
+  su claude -s /bin/bash -c "fraim-home-setup '$role'"
 }
 
 as_claude() {
@@ -64,11 +71,18 @@ case "$role" in
       [ -f "$key" ] || ssh-keygen -q -N "" -t "$type" -f "$key"
     done
 
-    install -d -o claude -g claude -m 0700 "$home/.ssh"
+    install -d -o root -g root -m 0755 /etc/ssh/authorized_keys
     if [ -s /etc/fraim/authorized_keys ]; then
-      install -o claude -g claude -m 0600 /etc/fraim/authorized_keys "$home/.ssh/authorized_keys"
+      install -o root -g root -m 0644 /etc/fraim/authorized_keys /etc/ssh/authorized_keys/claude
     else
       echo "fraim: config/authorized_keys is empty, nobody can log in" >&2
+    fi
+
+    if command -v fraim-config >/dev/null; then
+      as_claude "fraim-config init --role server --quiet" || echo "fraim: fraim-config init failed" >&2
+    fi
+    if [ -d /opt/fraim/server-plugin ]; then
+      as_claude "mkdir -p ~/.claude/skills && ln -sfn /opt/fraim/server-plugin ~/.claude/skills/fraim-system"
     fi
 
     register_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"
@@ -87,12 +101,7 @@ case "$role" in
   scheduler)
     write_runtime_env
     prepare_home
-    crontab="$home/fraim/jobs/crontab"
-    if [ ! -f "$crontab" ]; then
-      install -o claude -g claude -m 0644 /etc/fraim/skel-jobs/crontab "$crontab"
-      install -o claude -g claude -m 0644 /etc/fraim/skel-jobs/example.md "$home/fraim/jobs/example.md"
-    fi
-    exec su claude -s /bin/bash -c "cd ~ && exec supercronic -inotify '$crontab'"
+    exec su claude -s /bin/bash -c "cd ~ && exec fraim-scheduler"
     ;;
 
   *)

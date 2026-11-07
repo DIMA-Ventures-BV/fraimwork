@@ -4,6 +4,13 @@
       "Read(**/.env)",
       "Read(**/.env.*)",
       "Read(//home/claude/.ssh/**)",
+      "Read(//home/claude/.config/fraim/**)",
+      "Read(//home/claude/.claude/.credentials.json)",
+      "Read(//home/claude/.claude.json)",
+      "Read(//etc/fraim/**)",
+      "Edit(//home/claude/.config/fraim/**)",
+      "Edit(//home/claude/.ssh/**)",
+      "Edit(//home/claude/.claude/settings.json)",
       "Bash(sudo:*)"
     ]
   },

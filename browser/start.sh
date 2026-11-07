@@ -4,13 +4,21 @@
 #   9223: Chrome DevTools Protocol for the workspace's chrome-devtools-mcp
 set -euo pipefail
 
+# As root: give the profile volume to the browser user (uid 1100, not the workspace's
+# claude uid, so a browser exploit cannot write Claude's files), then drop privileges.
+if [ "$(id -u)" = 0 ]; then
+  chown -R browser:browser /data
+  exec runuser -u browser -- "$0" "$@"
+fi
+
 : "${VNC_PASSWORD:?VNC_PASSWORD is empty; run install.sh to generate one}"
 export DISPLAY=:99
 WIDTH="${SCREEN_WIDTH:-1440}"
 HEIGHT="${SCREEN_HEIGHT:-900}"
 
 mkdir -p /data/profile /fraim/downloads
-rm -f /data/profile/Singleton*
+# `docker restart` and crashes keep /tmp and the profile: clear stale display and profile locks.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 /data/profile/Singleton*
 
 Xvfb :99 -screen 0 "${WIDTH}x${HEIGHT}x24" -nolisten tcp &
 for _ in $(seq 50); do [ -e /tmp/.X11-unix/X99 ] && break; sleep 0.1; done

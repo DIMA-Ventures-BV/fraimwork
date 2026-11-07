@@ -3,9 +3,15 @@ name: fraimwork
 # Ports bind to BIND_IP (Tailscale IP in VPN mode) or PRIVATE_BIND_IP (127.0.0.1 in
 # public mode), so Docker never opens a port on the public interface by accident.
 # install.sh sets both.
+#
+# Isolation: the browser and the WhatsApp gateway handle untrusted input (web pages,
+# messages from anyone). They only get their own drop folder (downloads, inbox), never
+# the rest of ~/fraim, and each sits on its own network with the workspace, so neither
+# can reach the other.
 
 x-defaults: &defaults
   restart: unless-stopped
+  init: true
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
@@ -17,62 +23,84 @@ x-workspace-env: &workspace-env
   FRAIM_GATEWAY_URL: http://whatsapp:8080
   FRAIM_GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
   WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
-  BROWSER_CDP_URL: http://172.30.0.10:9223
+  BROWSER_CDP_URL: http://${BROWSER_IP:-172.30.0.10}:9223
   FRAIM_BROWSER_VIEW_URL: ${BROWSER_VIEW_URL:-http://localhost:6080/vnc.html}
+  FRAIM_AUTO_CONFIRM_CHANNEL: ${AUTO_CONFIRM_CHANNEL:-1}
+  FRAIM_VERSION: ${FRAIM_VERSION:-dev}
+  FRAIM_RELEASES_REPO: ${FRAIM_RELEASES_REPO:-DIMA-Ventures-BV/fraimwork}
+
+x-workspace-volumes: &workspace-volumes
+  - home:/home/claude
+  - files:/home/claude/fraim
+  - downloads:/home/claude/fraim/downloads
+  - inbox:/home/claude/fraim/inbox
+  - pc:/home/claude/pc:ro
+  - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
+  - ./config/claude-template:/opt/fraim/claude-template:ro
+  - ./server-plugin:/opt/fraim/server-plugin:ro
 
 services:
   workspace:
     <<: *defaults
     build: ./workspace
-    image: fraimwork/workspace:local
+    image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     hostname: fraim
     environment: *workspace-env
     ports:
       - "${BIND_IP:?run install.sh first}:${SSH_PORT:-2222}:22"
-      - "${BIND_IP}:60000-60010:60000-60010/udp"
+      - "${BIND_IP}:${MOSH_PORTS:-60000-60010}:60000-60010/udp"
     volumes:
       - home:/home/claude
       - files:/home/claude/fraim
+      - downloads:/home/claude/fraim/downloads
+      - inbox:/home/claude/fraim/inbox
       - pc:/home/claude/pc:ro
+      - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
+      - ./config/claude-template:/opt/fraim/claude-template:ro
+      - ./server-plugin:/opt/fraim/server-plugin:ro
       - ssh-host-keys:/etc/ssh/keys
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
-    networks: [fraim]
+    networks: [fraim, wa, sync]
 
   scheduler:
     <<: *defaults
-    image: fraimwork/workspace:local
+    image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     profiles: [scheduler]
     command: ["scheduler"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "supercronic"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on: [workspace]
     environment: *workspace-env
-    volumes:
-      - home:/home/claude
-      - files:/home/claude/fraim
-      - pc:/home/claude/pc:ro
-    networks: [fraim]
+    volumes: *workspace-volumes
+    networks: [fraim, wa, sync]
 
   browser:
     <<: *defaults
     build: ./browser
-    image: fraimwork/browser:local
+    image: fraimwork/browser:${FRAIM_IMAGE_TAG:-local}
     profiles: [browser]
     environment:
       VNC_PASSWORD: ${VNC_PASSWORD:-}
       TZ: ${TZ:-Europe/Amsterdam}
     shm_size: 1gb
+    # A runaway tab kills only Chromium (it restarts on its own), not Claude's workspace.
+    mem_limit: 1536m
     ports:
-      - "${PRIVATE_BIND_IP:-127.0.0.1}:6080:6080"
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:${VNC_PORT:-6080}:6080"
     volumes:
       - browser-profile:/data
-      - files:/fraim
+      - downloads:/fraim/downloads
     networks:
       fraim:
-        ipv4_address: 172.30.0.10
+        ipv4_address: ${BROWSER_IP:-172.30.0.10}
 
   whatsapp:
     <<: *defaults
     build: ./whatsapp
-    image: fraimwork/whatsapp:local
+    image: fraimwork/whatsapp:${FRAIM_IMAGE_TAG:-local}
     profiles: [whatsapp]
     environment:
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
@@ -81,9 +109,11 @@ services:
       TZ: ${TZ:-Europe/Amsterdam}
     volumes:
       - whatsapp-auth:/data
-      - files:/fraim
+      - files:/fraim:ro
+      - inbox:/inbox
+      - downloads:/downloads:ro
       - pc:/pc:ro
-    networks: [fraim]
+    networks: [wa]
 
   syncthing:
     <<: *defaults
@@ -96,24 +126,40 @@ services:
       STGUIADDRESS: 0.0.0.0:8384
       TZ: ${TZ:-Europe/Amsterdam}
     ports:
-      - "${PRIVATE_BIND_IP:-127.0.0.1}:8384:8384"
-      - "${BIND_IP}:22000:22000/tcp"
-      - "${BIND_IP}:22000:22000/udp"
+      - "${PRIVATE_BIND_IP:-127.0.0.1}:${SYNC_GUI_PORT:-8384}:8384"
+      - "${BIND_IP}:${SYNC_PORT:-22000}:22000/tcp"
+      - "${BIND_IP}:${SYNC_PORT:-22000}:22000/udp"
     volumes:
       - syncthing-config:/var/syncthing
       - files:/var/syncthing/fraim
+      - downloads:/var/syncthing/fraim/downloads
+      - inbox:/var/syncthing/fraim/inbox
       - pc:/var/syncthing/pc
-    networks: [fraim]
+    networks: [sync]
 
 networks:
+  # workspace + scheduler + browser (the browser has a fixed IP: Chrome DevTools
+  # rejects host names in the Host header)
   fraim:
     ipam:
       config:
-        - subnet: 172.30.0.0/24
+        - subnet: ${FRAIM_SUBNET:-172.30.0.0/24}
+  # workspace + scheduler + WhatsApp gateway
+  wa:
+    ipam:
+      config:
+        - subnet: ${FRAIM_SUBNET_WA:-172.31.0.0/24}
+  # workspace + scheduler + Syncthing
+  sync:
+    ipam:
+      config:
+        - subnet: ${FRAIM_SUBNET_SYNC:-172.31.128.0/24}
 
 volumes:
   home:
   files:
+  downloads:
+  inbox:
   pc:
   ssh-host-keys:
   browser-profile:

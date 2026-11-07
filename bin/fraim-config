@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+# fraim-config: keep Claude Code skills, agents, hooks and MCP servers equal on every machine.
+#
+# Source of truth: ~/fraim/claude (Syncthing keeps it equal on laptop and server).
+# Each plugin folder is linked into ~/.claude/skills/, where Claude Code loads it as <name>@skills-dir.
+# Server: links point at the synced folder itself.
+# Laptop: links point at a private copy in ~/.config/fraim/applied. The synced folder is writable
+# by the server, so a change that can run code (anything but .md files) reaches that copy only
+# after the user approved it (apply --yes). The server must never be able to run code on the laptop.
+# Secrets stay per machine in ~/.config/fraim/secrets.env.
+set -euo pipefail
+
+FRAIM_DIR="${FRAIM_DIR:-$HOME/fraim}"
+SRC="${FRAIM_CLAUDE_DIR:-$FRAIM_DIR/claude}"
+STATE="${FRAIM_STATE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/fraim}"
+SECRETS="${FRAIM_SECRETS:-$STATE/secrets.env}"
+ROLE_FILE="$STATE/role"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+LINK_DIR="$CLAUDE_HOME/skills"
+CLAUDE="${FRAIM_CLAUDE_BIN:-claude}"
+SELF_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+ROLES="laptop server"
+APPLIED="$STATE/applied"
+
+# Exit codes match bin/fraim: 0 ok, 1 failure, 2 usage or missing input.
+die() { printf 'fraim config: %s\n' "$*" >&2; exit 1; }
+usage() { printf 'fraim config: %s\n' "$*" >&2; exit 2; }
+say() { [ "${QUIET:-0}" = 1 ] || printf '%s\n' "$*"; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed"; }
+claude_cli() { "$CLAUDE" "$@" </dev/null; }
+
+template_dir() {
+  local d
+  for d in "${FRAIM_TEMPLATE:-}" "$SELF_DIR/../config/claude-template" /opt/fraim/claude-template; do
+    [ -n "$d" ] && [ -f "$d/plugins.json" ] && { (cd "$d" && pwd); return; }
+  done
+  die "template not found; set FRAIM_TEMPLATE"
+}
+
+role() {
+  if [ -n "${ROLE:-}" ]; then printf '%s' "$ROLE"
+  elif [ -f "$ROLE_FILE" ]; then cat "$ROLE_FILE"
+  else usage "no role yet; run 'fraim config init --role laptop|server'"
+  fi
+}
+
+valid_role() { case " $ROLES " in *" $1 "*) ;; *) usage "role must be laptop or server, not '$1'" ;; esac; }
+
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+
+hash_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -c1-12; else shasum -a 256 | cut -c1-12; fi
+}
+
+sha_files() { if command -v sha256sum >/dev/null 2>&1; then xargs -0 sha256sum; else xargs -0 shasum -a 256; fi; }
+
+# --- init -------------------------------------------------------------------
+
+cmd_init() {
+  [ -n "${ROLE:-}" ] || usage "usage: fraim config init --role laptop|server"
+  valid_role "$ROLE"
+  mkdir -p "$STATE"
+  chmod 700 "$STATE"
+  printf '%s\n' "$ROLE" > "$ROLE_FILE"
+
+  if [ -d "$SRC" ]; then
+    say "Kept existing $SRC"
+  else
+    mkdir -p "$(dirname "$SRC")"
+    cp -R "$(template_dir)" "$SRC"
+    rm -f "$SRC/secrets.env.example"
+    say "Created $SRC from the template"
+    YES=1
+  fi
+
+  if [ ! -f "$SECRETS" ]; then
+    (umask 077 && cp "$(template_dir)/secrets.env.example" "$SECRETS")
+    say "Created $SECRETS (mode 600, never synced)"
+  fi
+  cmd_apply
+}
+
+# --- apply ------------------------------------------------------------------
+
+# Where Claude Code loads the plugins from on this machine.
+loaded_dir() { if [ "$1" = laptop ]; then printf '%s' "$APPLIED"; else printf '%s' "$SRC"; fi; }
+
+link_plugin() {
+  local name="$1" target="$2/$1" link="$LINK_DIR/fraim-$1"
+  [ -f "$target/.claude-plugin/plugin.json" ] || die "$target is not a plugin folder"
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then return; fi
+  [ -e "$link" ] && [ ! -L "$link" ] && die "$link exists and is not a link; move it away first"
+  ln -sfn "$target" "$link"
+  say "Linked fraim-$name"
+}
+
+unlink_plugin() {
+  local link="$LINK_DIR/fraim-$1"
+  if [ -L "$link" ]; then rm "$link"; say "Unlinked fraim-$1"; fi
+}
+
+install_third_party() {
+  local r="$1" base="$2" have_m have_p name source id
+  need jq
+  have_m="$(claude_cli plugin marketplace list --json 2>/dev/null | jq -r '.[].name' || true)"
+  while IFS=$'\t' read -r name source; do
+    [ -n "$name" ] || continue
+    grep -qx "$name" <<<"$have_m" && continue
+    claude_cli plugin marketplace add "$source" >/dev/null && say "Added marketplace $name"
+  done < <(jq -r '.marketplaces // {} | to_entries[] | [.key, .value] | @tsv' "$base/plugins.json")
+
+  have_p="$(claude_cli plugin list --json 2>/dev/null | jq -r '.[].id' || true)"
+  while read -r id; do
+    [ -n "$id" ] || continue
+    grep -qx "$id" <<<"$have_p" && continue
+    claude_cli plugin install "$id" >/dev/null && say "Installed $id"
+  done < <(jq -r --arg r "$r" '(.plugins.all // []) + (.plugins[$r] // []) | .[]' "$base/plugins.json")
+}
+
+# "<hash>  ./path" for every file in the parts this role loads. Missing parts give no lines.
+manifest() {
+  local base="$1" r="$2" part
+  [ -d "$base" ] || return 0
+  (cd "$base" && for part in core "$r" plugins.json; do
+    [ -e "$part" ] && find "$part" -type f ! -name .DS_Store -print0
+  done | sort -z | sha_files) | sed 's#  \./#  #'
+}
+
+# Paths that are new or changed in the synced folder compared with the applied copy.
+changed_paths() {
+  local r="$1"
+  comm -23 <(manifest "$SRC" "$r" | sort) <(manifest "$APPLIED" "$r" | sort) | cut -c67- | sort -u
+}
+removed_paths() {
+  local r="$1"
+  comm -13 <(manifest "$SRC" "$r" | cut -c67- | sort) <(manifest "$APPLIED" "$r" | cut -c67- | sort)
+}
+# Anything but Markdown can run code: hooks, .mcp.json, plugin.json, plugins.json, scripts.
+risky_paths() { changed_paths "$1" | grep -v '\.md$' || true; }
+
+show_review() {
+  local r="$1" path
+  say "Changes in $SRC that are not active on this laptop yet:"
+  changed_paths "$r" | sed 's/^/  changed  /'
+  removed_paths "$r" | sed 's/^/  removed  /'
+  while read -r path; do
+    [ -n "$path" ] || continue
+    say ""
+    say "--- $path (can run code on this laptop)"
+    if [ -f "$APPLIED/$path" ]; then diff -u "$APPLIED/$path" "$SRC/$path" | tail -n +3 | head -60 || true
+    else head -60 "$SRC/$path"; fi
+  done < <(risky_paths "$r")
+}
+
+sync_applied() {
+  local r="$1" tmp="$STATE/applied.tmp" part
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  for part in core "$r" plugins.json; do
+    [ -e "$SRC/$part" ] && cp -R "$SRC/$part" "$tmp/$part"
+  done
+  rm -rf "$APPLIED"; mv "$tmp" "$APPLIED"
+}
+
+cmd_apply() {
+  local r other stamp base risky
+  r="$(role)"; valid_role "$r"
+  mkdir -p "$STATE"
+  printf '%s\n' "$r" > "$ROLE_FILE"
+  [ -d "$SRC" ] || usage "$SRC is missing; run 'fraim config init --role $r' or wait for Syncthing"
+  mkdir -p "$LINK_DIR"
+
+  if [ "$r" = laptop ]; then
+    if [ "${REVIEW:-0}" = 1 ]; then show_review "$r"; return 0; fi
+    risky="$(risky_paths "$r")"
+    if [ -n "$risky" ] && [ "${YES:-0}" != 1 ]; then
+      show_review "$r"
+      printf 'HUMAN STEP: The synced Claude config has changes that can run code on this laptop (%s). They may come from the server. Show the user what changed and why, and run fraim config apply --yes only after a clear yes.\n' "$(printf '%s' "$risky" | paste -sd, -)"
+      exit 3
+    fi
+    sync_applied "$r"
+  fi
+  base="$(loaded_dir "$r")"
+
+  link_plugin core "$base"
+  link_plugin "$r" "$base"
+  for other in $ROLES; do [ "$other" = "$r" ] || unlink_plugin "$other"; done
+
+  stamp="$(hash_of < "$base/plugins.json")-$r"
+  if [ "${FORCE:-0}" = 1 ] || [ "$(cat "$STATE/plugins.stamp" 2>/dev/null)" != "$stamp" ]; then
+    install_third_party "$r" "$base"
+    printf '%s\n' "$stamp" > "$STATE/plugins.stamp"
+  fi
+  say "Applied role $r. Running sessions pick it up after /reload-plugins or a restart."
+}
+
+# --- uninstall --------------------------------------------------------------
+
+# Removes what apply added on this machine. Keeps ~/fraim/claude (synced, shared) and secrets.env.
+cmd_uninstall() {
+  local to
+  for to in core $ROLES; do unlink_plugin "$to"; done
+  rm -rf "$APPLIED"
+  rm -f "$ROLE_FILE" "$STATE/plugins.stamp"
+  say "Removed the fraim plugin links and the role. Kept $SRC and $SECRETS."
+  say "Third-party plugins from plugins.json stay installed: remove one with 'claude plugin uninstall <id>'."
+}
+
+# --- secrets ----------------------------------------------------------------
+
+# Prints KEY=VALUE lines; never evaluates the file as shell.
+secret_lines() {
+  [ -f "$SECRETS" ] || return 0
+  grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS" | sed -E 's/^[[:space:]]+//'
+}
+
+cmd_exec() {
+  [ "${1:-}" = "--" ] && shift
+  [ $# -gt 0 ] || usage "usage: fraim config exec -- <command> [args]"
+  if [ -f "$SECRETS" ] && [ "$(mode_of "$SECRETS")" != 600 ]; then
+    printf 'fraim config: warning: %s is not mode 600\n' "$SECRETS" >&2
+  fi
+  if secret_lines | grep -q '=op://'; then
+    need op
+    exec op run --env-file "$SECRETS" -- "$@"
+  fi
+  local line key value
+  while IFS= read -r line; do
+    key="${line%%=*}"; value="${line#*=}"
+    value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+    export "$key=$value"
+  done < <(secret_lines)
+  exec "$@"
+}
+
+# --- mcp --------------------------------------------------------------------
+
+mcp_file() { printf '%s/%s/.mcp.json' "$SRC" "$1"; }
+
+cmd_mcp() {
+  need jq
+  local sub="${1:-list}"; shift || true
+  local to=core name="" url="" headers='{}' env='{}' file
+  case "$sub" in
+    list)
+      for to in core $ROLES; do
+        file="$(mcp_file "$to")"; [ -f "$file" ] || continue
+        jq -r --arg p "$to" '.mcpServers // {} | to_entries[] |
+          "\($p)\t\(.key)\t\(.value.url // ([.value.command] + (.value.args // []) | join(" ")))"' "$file"
+      done | awk -F'\t' '{printf "%-8s %-20s %s\n", $1, $2, $3}'
+      return ;;
+    add|remove) ;;
+    *) usage "usage: fraim config mcp [list|add|remove]" ;;
+  esac
+
+  name="${1:-}"; [ -n "$name" ] || usage "usage: fraim config mcp $sub <name> [--to core|laptop|server] ..."
+  shift
+  local cmd=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --url) url="$2"; shift 2 ;;
+      --header) headers="$(jq -c --arg k "${2%%:*}" --arg v "$(sed -E 's/^[^:]*:[[:space:]]*//' <<<"$2")" '. + {($k): $v}' <<<"$headers")"; shift 2 ;;
+      --env) env="$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '. + {($k): $v}' <<<"$env")"; shift 2 ;;
+      --) shift; cmd=("$@"); break ;;
+      *) usage "unknown option '$1'" ;;
+    esac
+  done
+  [ "$to" = core ] || valid_role "$to"
+  file="$(mcp_file "$to")"
+  [ -f "$file" ] || printf '{"mcpServers":{}}\n' > "$file"
+
+  if [ "$sub" = remove ]; then
+    jq --arg n "$name" 'del(.mcpServers[$n])' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    say "Removed $name from $to"
+    return
+  fi
+
+  local entry
+  if [ -n "$url" ]; then
+    entry="$(jq -nc --arg u "$url" --argjson h "$headers" '{type:"http", url:$u} + (if $h == {} then {} else {headers:$h} end)')"
+  elif [ ${#cmd[@]} -gt 0 ]; then
+    local argv='[]' a
+    for a in "${cmd[@]}"; do argv="$(jq -c --arg a "$a" '. + [$a]' <<<"$argv")"; done
+    entry="$(jq -nc --argjson a "$argv" --argjson e "$env" '{command:$a[0], args:$a[1:]} + (if $e == {} then {} else {env:$e} end)')"
+  else
+    usage "give --url <url> or -- <command> [args]"
+  fi
+  jq --arg n "$name" --argjson e "$entry" '.mcpServers[$n] = $e' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  say "Added $name to $to. Put any \${VAR} it uses in $SECRETS on each machine that needs it."
+  say "On a laptop it becomes active after 'fraim config apply --yes' (it can run code, so it needs the user's yes)."
+}
+
+# --- skill ------------------------------------------------------------------
+
+cmd_skill() {
+  [ "${1:-}" = new ] || usage "usage: fraim config skill new <gerund-name> [--to core|laptop|server]"
+  local name="${2:-}" to=core dir
+  [ -n "$name" ] || usage "usage: fraim config skill new <gerund-name> [--to core|laptop|server]"
+  [ "${3:-}" = --to ] && to="${4:-core}"
+  [ "$to" = core ] || valid_role "$to"
+  [[ "$name" =~ ^[a-z0-9-]{1,64}$ ]] || usage "skill names use lowercase letters, digits and hyphens"
+  dir="$SRC/$to/skills/$name"
+  [ -e "$dir" ] && die "$dir already exists"
+  mkdir -p "$dir"
+  cat > "$dir/SKILL.md" <<EOF
+---
+name: $name
+description: TODO what this skill does. Use when TODO (the words a user would say). Do NOT use for TODO.
+---
+
+# $name
+
+TODO: the steps Claude takes, in order. Keep this file under 500 lines.
+Put long reference material in references/<topic>.md and link it from here.
+Put deterministic work in scripts/ and tell Claude to run it.
+EOF
+  say "Created $dir/SKILL.md. It loads in new sessions (or after /reload-plugins)."
+}
+
+# --- status / hook -----------------------------------------------------------
+
+missing_vars() {
+  local to file var
+  for to in core "$1"; do
+    file="$(mcp_file "$to")"; [ -f "$file" ] || continue
+    grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*(:-)?' "$file" | grep -v ':-$' | sed 's/^\${//' || true
+  done | sort -u | while read -r var; do
+    [ -n "$var" ] || continue
+    secret_lines | grep -q "^$var=" || [ -n "${!var:-}" ] || printf '%s\n' "$var"
+  done
+}
+
+fingerprint() {
+  (cd "$SRC" && find core plugins.json -type f -not -name '.DS_Store' -print0 | sort -z | xargs -0 cat) | hash_of
+}
+
+cmd_status() {
+  local r miss to
+  r="$(role)"
+  printf 'role         %s\n' "$r"
+  printf 'source       %s\n' "$SRC"
+  printf 'fingerprint  %s  (core + plugins.json; equal on every machine when in sync)\n' "$(fingerprint)"
+  for to in core $ROLES; do
+    if [ -L "$LINK_DIR/fraim-$to" ]; then printf 'linked       fraim-%s\n' "$to"; fi
+  done
+  if [ "$r" = laptop ]; then
+    local n risky
+    n="$( { changed_paths "$r"; removed_paths "$r"; } | grep -c . || true)"
+    risky="$(risky_paths "$r" | paste -sd ' ' -)"
+    if [ "$n" = 0 ]; then printf 'applied      in sync with %s\n' "$SRC"
+    else printf 'applied      %s pending change(s)%s\n' "$n" "${risky:+; need review: $risky}"; fi
+  fi
+  if [ -f "$SECRETS" ]; then
+    printf 'secrets      %s (mode %s, %s keys)\n' "$SECRETS" "$(mode_of "$SECRETS")" "$(secret_lines | wc -l | tr -d ' ')"
+  else
+    printf 'secrets      none (%s)\n' "$SECRETS"
+  fi
+  miss="$(missing_vars "$r" | paste -sd ' ' -)"
+  [ -z "$miss" ] || printf 'missing      %s\n' "$miss"
+  echo; cmd_mcp list
+}
+
+# SessionStart hook: fail open, print only what Claude should know.
+cmd_hook() {
+  set +e
+  [ -f "$ROLE_FILE" ] && [ -d "$SRC" ] || exit 0
+  local r miss risky
+  r="$(cat "$ROLE_FILE")"
+  if [ "$r" = laptop ]; then
+    risky="$(risky_paths "$r")"
+    if [ -n "$risky" ]; then
+      printf 'fraim config: the synced Claude config (%s) has changes that can run code on this laptop: %s. They may come from the server and are NOT active. Before using them, show the user what "fraim config apply --review" prints and ask; run "fraim config apply --yes" only after a clear yes.\n' "$SRC" "$(printf '%s' "$risky" | paste -sd, -)"
+    elif [ -n "$( { changed_paths "$r"; removed_paths "$r"; } )" ]; then
+      (QUIET=1 cmd_apply >/dev/null 2>&1 &)
+    fi
+  else
+    (QUIET=1 cmd_apply >/dev/null 2>&1 &)
+  fi
+  miss="$(missing_vars "$r" | paste -sd ' ' -)"
+  [ -z "$miss" ] || printf 'fraim config: these MCP secrets are missing on this machine, so their servers will fail: %s. Add them to %s.\n' "$miss" "$SECRETS"
+  exit 0
+}
+
+print_help() {
+  cat <<EOF
+Usage: fraim config <command>
+
+  init --role laptop|server   Create ~/fraim/claude from the template (if missing) and apply it
+  apply [--force]             Link the plugins and install the third-party plugins in plugins.json
+  apply --review              Laptop: show synced changes that are not active yet
+  apply --yes                 Laptop: also activate changes that can run code (after the user's yes)
+  status                      Role, fingerprint, secrets, missing keys and MCP servers
+  mcp list                    MCP servers per plugin
+  mcp add <name> [--to P] --url <url> [--header 'K: V']
+  mcp add <name> [--to P] [--env K=V] -- <command> [args]
+  mcp remove <name> [--to P]
+  skill new <name> [--to P]   Scaffold a skill (P = core, laptop or server; default core)
+  exec -- <command>           Run a command with this machine's secrets (op:// refs supported)
+  uninstall                   Remove the plugin links and role from this machine (keeps files and secrets)
+EOF
+}
+
+main() {
+  local command="${1:-help}"; shift || true
+  local rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --role) ROLE="$2"; shift 2 ;;
+      --quiet) QUIET=1; shift ;;
+      --force) FORCE=1; shift ;;
+      --yes) YES=1; shift ;;
+      --review) REVIEW=1; shift ;;
+      --) rest+=("$@"); break ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  case "$command" in
+    init) cmd_init ;;
+    apply) cmd_apply ;;
+    status|doctor) cmd_status ;;
+    mcp) cmd_mcp "$@" ;;
+    skill) cmd_skill "$@" ;;
+    exec) cmd_exec "$@" ;;
+    hook) cmd_hook ;;
+    uninstall) cmd_uninstall ;;
+    help|-h|--help) print_help ;;
+    *) usage "unknown command '$command'; run 'fraim config help'" ;;
+  esac
+}
+
+main "$@"

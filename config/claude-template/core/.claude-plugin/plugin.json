@@ -1,0 +1,5 @@
+{
+  "name": "fraim-core",
+  "version": "0.1.0",
+  "description": "Skills, agents, hooks and MCP servers loaded on every fraimwork machine (laptop and server)."
+}

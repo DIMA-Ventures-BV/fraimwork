@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/fraim-config\" hook || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
