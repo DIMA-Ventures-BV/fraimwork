@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY gateway.mjs ./
+COPY gateway.mjs lib.mjs ./
 
 RUN install -d -o node -g node /data /data/auth
 USER node

@@ -1,0 +1,7 @@
+# Rules fraimwork breaks on purpose.
+ignored:
+  - DL3008 # apt packages follow the pinned Debian base image; pinning each one breaks on every point release
+  - DL3003 # `cd dir && npm ci` in one RUN is clearer than a WORKDIR switch and back
+  - DL3025 # HEALTHCHECK CMD needs shell form for the inline node -e script
+  - DL3066 # the node image defines the user "node"
+  - DL4006 # the only piped RUN ends in `sha256sum -c`, which sets the exit code

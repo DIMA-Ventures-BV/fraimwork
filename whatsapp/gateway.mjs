@@ -7,7 +7,7 @@
 //   POST /send-file         { chat_id | to, path: "fraim/..." | "pc/...", caption }
 //   POST /pair              { number } -> { code } pairing code for "Link with phone number"
 //   GET  /qr.png            current linking QR code as PNG (404 when linked)
-import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
 import makeWASocket, {
@@ -20,6 +20,15 @@ import makeWASocket, {
 import pino from 'pino'
 import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
+import {
+  allowedSender,
+  digits,
+  httpError,
+  isGroupOrBroadcast,
+  parseAllowlist,
+  resolveChat as resolveChatFor,
+  resolveSharedPath,
+} from './lib.mjs'
 
 const PORT = Number(process.env.PORT || 8080)
 const TOKEN = process.env.GATEWAY_TOKEN || ''
@@ -32,11 +41,8 @@ const INBOX = '/inbox'
 const MAX_TEXT = 4000
 const QUEUE_LIMIT = 100
 
-const digits = (value) => String(value || '').replace(/\D/g, '').replace(/^00/, '')
 const OWNER = digits(process.env.WHATSAPP_OWNER)
-const ALLOW = new Set(
-  [OWNER, ...String(process.env.WHATSAPP_ALLOW || '').split(',')].map(digits).filter(Boolean),
-)
+const ALLOW = parseAllowlist(OWNER, process.env.WHATSAPP_ALLOW)
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const waLogger = logger.child({ module: 'baileys' })
@@ -61,19 +67,6 @@ const queue = []
 const knownChats = new Set([...ALLOW].map((d) => `${d}@s.whatsapp.net`))
 const lastQueuedNotice = new Map()
 
-function phoneOf(jid) {
-  return jid && jid.endsWith('@s.whatsapp.net') ? digits(jid.split('@')[0].split(':')[0]) : ''
-}
-
-function senderPhone(key) {
-  const candidates = [key.remoteJid, key.remoteJidAlt, key.participant, key.participantAlt, key.senderPn]
-  for (const jid of candidates) {
-    const phone = phoneOf(jid)
-    if (phone) return phone
-  }
-  return ''
-}
-
 function unwrap(message) {
   let m = message
   while (m?.ephemeralMessage || m?.viewOnceMessage || m?.viewOnceMessageV2 || m?.documentWithCaptionMessage) {
@@ -93,19 +86,7 @@ function emit(event) {
   return true
 }
 
-function resolveChat(body) {
-  const jid = body.chat_id ? String(body.chat_id) : body.to ? `${digits(body.to)}@s.whatsapp.net` : ''
-  if (!jid) throw httpError(400, 'chat_id or to is required')
-  const phone = phoneOf(jid)
-  if (!knownChats.has(jid) && !(phone && ALLOW.has(phone))) {
-    throw httpError(403, 'recipient is not on the allowlist')
-  }
-  return jid
-}
-
-function httpError(status, message) {
-  return Object.assign(new Error(message), { status })
-}
+const resolveChat = (body) => resolveChatFor(body, knownChats, ALLOW)
 
 async function sendText(jid, text) {
   if (!connected) throw httpError(503, 'WhatsApp is not connected')
@@ -125,12 +106,7 @@ const MIME = {
 
 async function sendFile(jid, sharedPath, caption) {
   if (!connected) throw httpError(503, 'WhatsApp is not connected')
-  const parts = String(sharedPath).split('/')
-  const twoLevel = `${parts[0]}/${parts[1]}`
-  const [root, rest] = ROOTS[twoLevel] ? [ROOTS[twoLevel], parts.slice(2)] : [ROOTS[parts[0]], parts.slice(1)]
-  if (!root || rest.length === 0) throw httpError(400, 'path must start with fraim/ or pc/')
-  const absolute = await realpath(path.join(root, ...rest)).catch(() => null)
-  if (!absolute || !absolute.startsWith(root + path.sep)) throw httpError(404, 'file not found')
+  const absolute = await resolveSharedPath(sharedPath, ROOTS)
   const data = await readFile(absolute)
   const fileName = path.basename(absolute)
   const mimetype = MIME[path.extname(fileName).toLowerCase()] || 'application/octet-stream'
@@ -159,11 +135,10 @@ async function saveMedia(msg, inner) {
 
 async function onMessage(msg) {
   const key = msg.key || {}
-  if (key.fromMe || !key.remoteJid) return
-  if (key.remoteJid.endsWith('@g.us') || key.remoteJid === 'status@broadcast') return
+  if (key.fromMe || !key.remoteJid || isGroupOrBroadcast(key.remoteJid)) return
 
-  const phone = senderPhone(key)
-  if (!phone || !ALLOW.has(phone)) {
+  const phone = allowedSender(key, ALLOW)
+  if (!phone) {
     logger.info({ jid: key.remoteJid }, 'dropped message from a sender not on the allowlist')
     return
   }
