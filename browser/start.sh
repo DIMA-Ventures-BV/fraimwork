@@ -13,9 +13,6 @@ fi
 
 : "${VNC_PASSWORD:?VNC_PASSWORD is empty; run install.sh to generate one}"
 export DISPLAY=:99
-# No D-Bus in the container: without this Chromium logs harmless "Failed to connect to the
-# bus" errors that look like real problems to anyone reading the logs.
-export DBUS_SESSION_BUS_ADDRESS=disabled:
 WIDTH="${SCREEN_WIDTH:-1440}"
 HEIGHT="${SCREEN_HEIGHT:-900}"
 
@@ -41,6 +38,8 @@ socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 &
       --no-default-browser-check \
       --disable-dev-shm-usage \
       --no-sandbox \
+      --disable-gpu \
+      --log-level=3 \
       --window-position=0,0 \
       --window-size="${WIDTH},${HEIGHT}" \
       --start-maximized \
