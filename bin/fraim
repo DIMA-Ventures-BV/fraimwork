@@ -189,7 +189,28 @@ ssh_opts() {
   else
     printf -- ' -o UserKnownHostsFile=%s -o LogLevel=ERROR' "$KNOWN_HOSTS"
   fi
+  # A space whose port the tailnet policy does not allow yet: go through the admin login.
+  if [ -n "${SPACE_JUMP_CONFIG:-}" ]; then printf -- ' -F %s' "$SPACE_JUMP_CONFIG"; fi
 }
+
+# Tailscale policies made before spaces only allow port 2222. When a space's own SSH port
+# does not answer but the admin login (Tailscale SSH as root) works, fraim reaches the space
+# through the server itself: an ssh config with a ProxyCommand over the admin login.
+use_space_jump() {
+  [ "$FRAIM_ACCESS" = tailscale ] && [ "$FRAIM_SPACE" != main ] || return 0
+  port_open "$FRAIM_HOST" "$FRAIM_SSH_PORT" && return 0
+  local cfg="$STATE_DIR/ssh-jump-$FRAIM_TARGET"
+  mkdir -p "$STATE_DIR"
+  {
+    printf 'Host *\n'
+    printf '  ProxyCommand ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=%s' "$KNOWN_HOSTS"
+    [ -z "${FRAIM_SSH_KEY:-}" ] || printf ' -o IdentitiesOnly=yes -i %s' "$FRAIM_SSH_KEY"
+    # The server resolves its own name to 127.0.1.1; the space listens on its Tailscale address.
+    printf ' -W %s:%%p %s\n' "$(space_get BIND_IP '%h')" "$FRAIM_ADMIN"
+  } > "$cfg"
+  SPACE_JUMP_CONFIG="$cfg"
+}
+port_open() { nc -z -G 3 "$1" "$2" >/dev/null 2>&1 || nc -z -w 3 "$1" "$2" >/dev/null 2>&1; }
 
 # Without a terminal, long output (docker builds) goes to a log file; only stage lines,
 # the summary and the log path are printed, so an agent can read the result.
@@ -286,7 +307,7 @@ space_env_local() {
 }
 space_env_remote() { if [ "$1" = main ]; then printf '.env'; else printf '.env.space-%s' "$1"; fi; }
 
-SPACE_KEYS='SSH_PORT|MOSH_PORTS|VNC_PORT|SYNC_GUI_PORT|SYNC_PORT|BROWSER_IP|PREVIEW_PORTS|SPACE_INDEX|COMPOSE_PROFILES|MCP_DENY|CLAUDEAI_CONNECTORS'
+SPACE_KEYS='BIND_IP|SSH_PORT|MOSH_PORTS|VNC_PORT|SYNC_GUI_PORT|SYNC_PORT|BROWSER_IP|PREVIEW_PORTS|SPACE_INDEX|COMPOSE_PROFILES|MCP_DENY|CLAUDEAI_CONNECTORS'
 SPACE_INFO=""
 # One read per run of the selected space's ports and settings.
 space_info() {
@@ -308,6 +329,7 @@ apply_space() {
   SPACE_INFO=""
   COMPOSE_ARGS=""
   REMOTE_ENV=.env
+  SPACE_JUMP_CONFIG=""
   [ "$FRAIM_SPACE" != main ] || return 0
   if [ "$FRAIM_ACCESS" = local ]; then
     ENV_FILE="$(space_env_local "$FRAIM_SPACE")"
@@ -318,6 +340,7 @@ apply_space() {
   fi
   FRAIM_SSH_PORT="$(space_info SSH_PORT)"
   [ -n "$FRAIM_SSH_PORT" ] || usage "there is no space '$FRAIM_SPACE' on $FRAIM_HOST; see: fraim space list"
+  use_space_jump
 }
 
 # Names of the extra spaces (not main), one per line.
@@ -1046,6 +1069,7 @@ cmd_update() {
 cmd_login() {
   parse_flags "$@"
   load_config
+  if [ -n "$(flag from-space)" ]; then login_from_space "$(flag from-space)"; return; fi
   if [ -n "$(flag full)" ]; then login_full_start; return; fi
   if [ -n "$(flag code)" ]; then login_full_code; return; fi
   if [ -n "$(flag status)" ]; then
@@ -1067,6 +1091,24 @@ cmd_login() {
     return
   fi
   need_login_step
+}
+
+# Reuses another space's setup-token login (same Claude account). The token goes from one
+# container to the other on the server; it never reaches the laptop or a command line.
+login_from_space() {
+  local source="$1" src_args="" dst_args=""
+  valid_space "$source" || usage "--from-space must be a space name"
+  [ "$source" != "$FRAIM_SPACE" ] || usage "--from-space must name another space than --space"
+  [ "$FRAIM_ACCESS" != local ] || usage "--from-space works on a server; locally, run fraim login --space $FRAIM_SPACE"
+  [ "$source" = main ] || src_args="-p fraimwork-$source --env-file $(space_env_remote "$source")"
+  [ "$FRAIM_SPACE" = main ] || dst_args="-p fraimwork-$FRAIM_SPACE --env-file $REMOTE_ENV"
+  local saved="$COMPOSE_ARGS"
+  COMPOSE_ARGS=""
+  admin "docker compose $src_args exec -T -u claude workspace sh -c 'test -s ~/.config/fraim/claude-token && cat ~/.config/fraim/claude-token' | docker compose $dst_args exec -T -u claude workspace sh -c 'umask 077 && mkdir -p ~/.config/fraim && cat > ~/.config/fraim/claude-token && test -s ~/.config/fraim/claude-token && pkill -x claude; true'" \
+    || { COMPOSE_ARGS="$saved"; die "space $source has no setup-token login to copy"; }
+  COMPOSE_ARGS="$saved"
+  server_logged_in || die "copying the login from space $source did not work; run: fraim login --space $FRAIM_SPACE"
+  say "Space $FRAIM_SPACE uses the Claude login of space $source. Its Claude session restarts with it."
 }
 
 # A full login (claude auth login) gives Remote Control and the claude.ai connectors; a
@@ -1709,6 +1751,7 @@ takes --space NAME; without it a command works on the main space. See docs/space
   fraim space up NAME                        start a stopped space
   fraim space policy NAME [--deny 'claude.ai Gmail,NAME'|none] [--claudeai on|off] [--modules m,m]
   fraim space rm NAME [--wipe --yes]         stop a space; --wipe deletes all its data
+  fraim login --from-space main              reuse another space's setup-token login (stays on the server)
   fraim login --full | --code [--stdin] | --status
                                              full Claude login: Remote Control and claude.ai connectors
   fraim repo token [--stdin]                 GitHub token for the space (git, API, GitHub MCP via the proxy)
