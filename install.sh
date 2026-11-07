@@ -155,7 +155,14 @@ if has_module sync; then
   # shellcheck disable=SC2016
   docker compose exec -T -e PW="$(get_env SYNCTHING_GUI_PASSWORD)" syncthing sh -c '
     key=$(sed -n "s:.*<apikey>\(.*\)</apikey>.*:\1:p" /var/syncthing/config/config.xml)
-    st() { syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@"; }
+    # Changing a GUI setting restarts the GUI listener, so the next call can briefly get
+    # "connection refused": retry each call for up to about 20 seconds.
+    st() {
+      i=0
+      until syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@" 2>/dev/null; do
+        i=$((i + 1)); [ "$i" -lt 20 ] || return 1; sleep 1
+      done
+    }
     st config gui user set fraim && st config gui password set "$PW"
   ' || die "could not set the Syncthing GUI password; the GUI must not stay open without one. Run install.sh again."
 fi

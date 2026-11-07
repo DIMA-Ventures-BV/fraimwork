@@ -38,6 +38,8 @@ socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 &
       --no-default-browser-check \
       --disable-dev-shm-usage \
       --no-sandbox \
+      --disable-gpu \
+      --log-level=3 \
       --window-position=0,0 \
       --window-size="${WIDTH},${HEIGHT}" \
       --start-maximized \
