@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# fraim-hosts: SSH access from this space to other machines (a dev box, a build server).
+# Each host gets its own key, made here and used only for that host, so removing a host
+# (or the space) revokes exactly that access. The key never leaves this space.
+#
+#   fraim-hosts add NAME --address HOST [--user USER] [--port PORT]   prints the public key
+#   fraim-hosts test NAME          exit 0 when `ssh NAME` works without a prompt
+#   fraim-hosts list [--json]
+#   fraim-hosts rm NAME
+#
+# After `add`, `ssh NAME`, `rsync`, `scp` and tools such as mutagen reach the host by NAME.
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env 2>/dev/null || true
+
+usage() { echo "fraim-hosts: $*" >&2; exit 2; }
+die() { echo "fraim-hosts: $*" >&2; exit 1; }
+
+dir="$HOME/.ssh/fraim-hosts"
+config="$HOME/.ssh/config"
+mkdir -p "$dir"
+chmod 700 "$HOME/.ssh" "$dir"
+touch "$config"
+chmod 600 "$config"
+
+valid_name() { printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$'; }
+valid_address() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9.:-]{1,253}$'; }
+valid_user() { printf '%s' "$1" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$'; }
+
+# The config block of one host sits between two marker lines, so it can be replaced or removed.
+drop_block() {
+  local tmp
+  tmp="$(mktemp)"
+  awk -v n="$1" '
+    $0 == "# fraim-host " n " begin" { skip = 1; next }
+    $0 == "# fraim-host " n " end" { skip = 0; next }
+    !skip { print }
+  ' "$config" > "$tmp"
+  cat "$tmp" > "$config"
+  rm -f "$tmp"
+}
+
+action="${1:-}"
+[ $# -gt 0 ] && shift
+case "$action" in
+  add)
+    name="${1:-}"; [ $# -gt 0 ] && shift
+    valid_name "$name" || usage "NAME must be lowercase letters, digits and dashes"
+    address="" user="" port=22
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --address) address="${2:-}"; shift 2 ;;
+        --user) user="${2:-}"; shift 2 ;;
+        --port) port="${2:-}"; shift 2 ;;
+        *) usage "unknown option $1" ;;
+      esac
+    done
+    valid_address "$address" || usage "--address must be a host name or IP address"
+    [ -z "$user" ] || valid_user "$user" || usage "--user must be a plain user name"
+    printf '%s' "$port" | grep -Eq '^[0-9]{1,5}$' || usage "--port must be a number"
+    key="$dir/$name"
+    [ -f "$key" ] || ssh-keygen -q -t ed25519 -N "" -C "fraim-${FRAIM_SPACE:-main}-$name" -f "$key"
+    drop_block "$name"
+    {
+      printf '# fraim-host %s begin\n' "$name"
+      printf 'Host %s\n  HostName %s\n  Port %s\n' "$name" "$address" "$port"
+      [ -z "$user" ] || printf '  User %s\n' "$user"
+      printf '  IdentityFile %s\n  IdentitiesOnly yes\n' "$key"
+      printf '  StrictHostKeyChecking accept-new\n  ServerAliveInterval 30\n'
+      printf '# fraim-host %s end\n' "$name"
+    } >> "$config"
+    cat "$key.pub"
+    ;;
+  test)
+    name="${1:-}"
+    valid_name "$name" || usage "test NAME"
+    grep -qx "# fraim-host $name begin" "$config" || die "no host named $name; add it first"
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$name" true
+    ;;
+  list)
+    if [ "${1:-}" = --json ]; then
+      awk '
+        /^# fraim-host .* begin$/ { name = $3; host = ""; user = ""; port = "22" }
+        /^  HostName / { host = $2 }
+        /^  User / { user = $2 }
+        /^  Port / { port = $2 }
+        /^# fraim-host .* end$/ { printf "%s\t%s\t%s\t%s\n", name, host, user, port }
+      ' "$config" | jq -R -s 'split("\n") | map(select(. != "") | split("\t") | {name: .[0], address: .[1], user: .[2], port: (.[3] | tonumber)})'
+    else
+      awk '/^# fraim-host .* begin$/ { print $3 }' "$config"
+    fi
+    ;;
+  rm)
+    name="${1:-}"
+    valid_name "$name" || usage "rm NAME"
+    drop_block "$name"
+    rm -f "$dir/$name" "$dir/$name.pub"
+    echo "Removed host $name. Also remove its key line (fraim-${FRAIM_SPACE:-main}-$name) from the host's authorized_keys."
+    ;;
+  *) usage "add NAME --address HOST [--user USER] [--port PORT] | test NAME | list [--json] | rm NAME" ;;
+esac

@@ -120,6 +120,7 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 3. `$F status --json` must show `claude-login` ok. Then `$F ask "Reply with: pong" --json` proves the server answers.
 4. `claude-token-not-expiring` fails a month before the one-year token ends: give the user the step 1 message, then on "copied" run `pbpaste | $F login --token-stdin` and `pbcopy </dev/null` (plain `$F login` stops early because the server is still logged in). Then delete the old Keychain copy: `security delete-generic-password -s fraim-claude-token`.
 5. When the user postpones the login, continue and list it as missing in Finish. Later, any `$F ask` exits 3 with the same step: say "your server is not signed in yet" and offer it again.
+6. Offer the full login next: the setup-token only lets Claude answer, a full login also gives Remote Control (use the server from the Claude phone app) and the user's claude.ai connectors (Gmail, Drive, ...). Run it with the managing-fraim-spaces skill ("Full login"). Work and personal things in separate spaces: the same skill.
 
 ## WhatsApp
 

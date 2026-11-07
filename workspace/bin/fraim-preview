@@ -1,0 +1,157 @@
+#!/usr/bin/env node
+// fraim-preview: show a dev server that runs in this workspace on the user's phone or laptop.
+//
+//   fraim-preview start PORT [--name LABEL]   forward a free preview slot to 127.0.0.1:PORT, print the URL
+//   fraim-preview list [--json]
+//   fraim-preview stop PORT|all
+//
+// The workspace publishes container ports 3100-3109 on the server (tailnet only in tailscale
+// mode, 127.0.0.1 in public mode). A dev server usually listens on 127.0.0.1 inside the
+// container, which Docker cannot publish; this forwarder bridges the two.
+// Exit codes: 0 ok, 1 failure, 2 usage.
+import net from "node:net";
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+
+const SLOT_BASE = 3100;
+const SLOTS = 10;
+const stateDir = path.join(process.env.HOME || "/home/claude", ".local/state/fraim/previews");
+
+function runtimeEnv() {
+  const env = {};
+  try {
+    for (const line of fs.readFileSync("/etc/fraim/runtime.env", "utf8").split("\n")) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/);
+      if (m) env[m[1]] = m[2].replace(/^'(.*)'$/, "$1").replace(/\\(.)/g, "$1");
+    }
+  } catch {}
+  return { ...env, ...process.env };
+}
+
+function fail(msg, code = 1) {
+  process.stderr.write(`fraim-preview: ${msg}\n`);
+  process.exit(code);
+}
+
+function hostPort(slot) {
+  const env = runtimeEnv();
+  const start = parseInt(String(env.FRAIM_PREVIEW_PORTS || "3100-3109").split("-")[0], 10);
+  return start + (slot - SLOT_BASE);
+}
+
+function urlFor(slot) {
+  const env = runtimeEnv();
+  const port = hostPort(slot);
+  if (env.FRAIM_PREVIEW_HOST) return `http://${env.FRAIM_PREVIEW_HOST}:${port}`;
+  const mode = env.FRAIM_ACCESS_MODE || "";
+  if (mode === "tailscale") return `http://${env.FRAIM_HOSTNAME || "fraim"}:${port}`;
+  if (mode === "local") return `http://localhost:${port}`;
+  return `http://localhost:${port} (on the laptop, after: fraim preview --space ${env.FRAIM_SPACE || "main"})`;
+}
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function readState() {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const out = [];
+  for (const f of fs.readdirSync(stateDir)) {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(stateDir, f), "utf8"));
+      if (alive(s.pid)) out.push(s);
+      else fs.rmSync(path.join(stateDir, f), { force: true });
+    } catch {}
+  }
+  return out.sort((a, b) => a.slot - b.slot);
+}
+
+function serve(slot, target) {
+  const server = net.createServer((client) => {
+    const upstream = net.connect(target, "127.0.0.1");
+    client.pipe(upstream).pipe(client);
+    const close = () => { client.destroy(); upstream.destroy(); };
+    client.on("error", close);
+    upstream.on("error", close);
+  });
+  server.on("error", (e) => fail(`slot ${slot}: ${e.message}`));
+  server.listen(slot, "0.0.0.0");
+}
+
+function slotFree(slot) {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once("error", () => resolve(false));
+    s.listen(slot, "0.0.0.0", () => s.close(() => resolve(true)));
+  });
+}
+
+function targetUp(port) {
+  return new Promise((resolve) => {
+    const c = net.connect(port, "127.0.0.1");
+    c.once("connect", () => { c.destroy(); resolve(true); });
+    c.once("error", () => resolve(false));
+  });
+}
+
+async function start(port, label) {
+  const existing = readState().find((s) => s.target === port);
+  if (existing) {
+    console.log(urlFor(existing.slot));
+    return;
+  }
+  if (!(await targetUp(port))) {
+    process.stderr.write(`fraim-preview: note: nothing listens on 127.0.0.1:${port} yet; the link works once the dev server runs\n`);
+  }
+  for (let slot = SLOT_BASE; slot < SLOT_BASE + SLOTS; slot++) {
+    if (!(await slotFree(slot))) continue;
+    const child = spawn(process.execPath, [new URL(import.meta.url).pathname, "serve", String(slot), String(port)], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    fs.writeFileSync(path.join(stateDir, String(slot)), JSON.stringify({ slot, target: port, pid: child.pid, label: label || "" }));
+    await new Promise((r) => setTimeout(r, 300));
+    if (!alive(child.pid)) fail(`could not open preview slot ${slot}`);
+    console.log(urlFor(slot));
+    return;
+  }
+  fail(`all ${SLOTS} preview slots are in use; stop one with: fraim-preview stop PORT`);
+}
+
+const [action, arg, ...rest] = process.argv.slice(2);
+const flagIndex = rest.indexOf("--name");
+const label = flagIndex >= 0 ? rest[flagIndex + 1] : "";
+
+switch (action) {
+  case "serve":
+    serve(parseInt(arg, 10), parseInt(rest[0], 10));
+    break;
+  case "start": {
+    const port = parseInt(arg, 10);
+    if (!(port > 0 && port < 65536)) fail("usage: fraim-preview start PORT [--name LABEL]", 2);
+    await start(port, label);
+    break;
+  }
+  case "list": {
+    const items = readState().map((s) => ({ port: s.target, url: urlFor(s.slot), label: s.label }));
+    if (arg === "--json") console.log(JSON.stringify(items));
+    else if (items.length === 0) console.log("No previews running.");
+    else for (const i of items) console.log(`${i.port}\t${i.url}${i.label ? `\t${i.label}` : ""}`);
+    break;
+  }
+  case "stop": {
+    if (!arg) fail("usage: fraim-preview stop PORT|all", 2);
+    for (const s of readState()) {
+      if (arg === "all" || String(s.target) === arg) {
+        try { process.kill(s.pid); } catch {}
+        fs.rmSync(path.join(stateDir, String(s.slot)), { force: true });
+        console.log(`Stopped the preview of port ${s.target}.`);
+      }
+    }
+    break;
+  }
+  default:
+    fail("usage: fraim-preview start PORT [--name LABEL] | list [--json] | stop PORT|all", 2);
+}

@@ -33,10 +33,14 @@
       "ip": ["*"],
     },
     {
-      // workspace SSH, mosh, noVNC, Syncthing GUI and sync
+      // workspace SSH, mosh, noVNC, Syncthing GUI and sync, for the main space and up to
+      // four more spaces (space n uses port + n, mosh + 20n), plus dev server previews
       "src": ["group:fraim-users"],
       "dst": ["tag:fraim"],
-      "ip": ["tcp:2222", "udp:60000-60010", "tcp:6080", "tcp:8384", "tcp:22000", "udp:22000"],
+      "ip": [
+        "tcp:2222-2226", "udp:60000-60090", "tcp:6080-6084", "tcp:8384-8388",
+        "tcp:22000-22004", "udp:22000-22004", "tcp:3100-3149",
+      ],
     },
     {
       // Tailscale SSH for admins: the ssh rule below authorizes the login, but the

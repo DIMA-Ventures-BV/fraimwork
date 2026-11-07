@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# fraim-repo: GitHub repositories in this space. Git talks to GitHub through the secrets
+# proxy (service "github"), so the access token never sits in this space: git sends the
+# space's session token and the proxy swaps in the real one.
+#
+#   fraim-repo setup [--name NAME --email EMAIL]   point git at the proxy (safe to run again)
+#   fraim-repo add OWNER/REPO [--dir DIR]          clone into ~/code/REPO (or DIR), or fetch if it is there
+#   fraim-repo list [--json]
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+# shellcheck source=/dev/null
+. /etc/fraim/runtime.env 2>/dev/null || true
+
+usage() { echo "fraim-repo: $*" >&2; exit 2; }
+die() { echo "fraim-repo: $*" >&2; exit 1; }
+
+code="$HOME/code"
+
+setup() {
+  [ -n "${FRAIM_SECRETS_URL:-}" ] && [ -n "${FRAIM_SECRETS_TOKEN:-}" ] || die "this space has no secrets proxy settings; recreate the workspace (fraim reset-workspace)"
+  curl -fsS --max-time 10 "$FRAIM_SECRETS_URL/_services" | awk '$1 == "github"' | grep -q . \
+    || die "the secrets proxy has no GitHub token for this space yet; on the laptop: fraim repo token"
+  local base="$FRAIM_SECRETS_URL/github/"
+  git config --global --unset-all "url.$base.insteadOf" || true
+  git config --global --add "url.$base.insteadOf" "https://github.com/"
+  git config --global --add "url.$base.insteadOf" "git@github.com:"
+  git config --global --replace-all "http.$base.extraHeader" "Authorization: Basic $FRAIM_SECRETS_TOKEN"
+  git config --global init.defaultBranch main
+  [ -z "${1:-}" ] || git config --global user.name "$1"
+  [ -z "${2:-}" ] || git config --global user.email "$2"
+  git config --global user.name >/dev/null || git config --global user.name "fraim (${FRAIM_SPACE:-main})"
+  git config --global user.email >/dev/null || git config --global user.email "fraim-${FRAIM_SPACE:-main}@users.noreply.github.com"
+}
+
+action="${1:-}"
+[ $# -gt 0 ] && shift
+case "$action" in
+  setup)
+    name="" email=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="${2:-}"; shift 2 ;;
+        --email) email="${2:-}"; shift 2 ;;
+        *) usage "unknown option $1" ;;
+      esac
+    done
+    setup "$name" "$email"
+    echo "git reaches GitHub through the secrets proxy as $(git config --global user.name) <$(git config --global user.email)>."
+    ;;
+  add)
+    repo="${1:-}"; [ $# -gt 0 ] && shift
+    printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || usage "add OWNER/REPO [--dir DIR]"
+    repo="${repo%.git}"
+    dir="$code/${repo#*/}"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dir) dir="${2:-}"; shift 2 ;;
+        *) usage "unknown option $1" ;;
+      esac
+    done
+    git config --global --get-all "url.$FRAIM_SECRETS_URL/github/.insteadOf" >/dev/null || setup "" ""
+    mkdir -p "$(dirname "$dir")"
+    if [ -d "$dir/.git" ]; then
+      git -C "$dir" fetch --quiet --all --prune
+      echo "$dir (already there, fetched)"
+    else
+      git clone --quiet "https://github.com/$repo.git" "$dir" || die "could not clone $repo; check that the token can read it (fraim repo token)"
+      echo "$dir"
+    fi
+    ;;
+  list)
+    found=()
+    for d in "$code"/*/.git; do
+      [ -d "$d" ] || continue
+      found+=("$(dirname "$d")")
+    done
+    if [ "${1:-}" = --json ]; then
+      for d in "${found[@]}"; do
+        jq -n --arg dir "$d" --arg remote "$(git -C "$d" remote get-url origin 2>/dev/null)" --arg branch "$(git -C "$d" branch --show-current)" \
+          '{dir: $dir, remote: $remote, branch: $branch}'
+      done | jq -s .
+    else
+      for d in "${found[@]}"; do printf '%s\t%s\n' "$d" "$(git -C "$d" branch --show-current)"; done
+    fi
+    ;;
+  *) usage "setup [--name NAME --email EMAIL] | add OWNER/REPO [--dir DIR] | list [--json]" ;;
+esac

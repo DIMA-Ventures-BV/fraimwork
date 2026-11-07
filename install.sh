@@ -8,19 +8,78 @@ say()  { printf '\n==> %s\n' "$*"; }
 warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
 die()  { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
-get_env() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
+# ENV_FILE: .env (the main space) or .env.space-NAME (another space, see docs/spaces.md).
+ENV_FILE=.env
+get_env() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }
 set_env() {
-  if grep -qE "^$1=" .env; then
-    sed -i "s|^$1=.*|$1=$2|" .env
+  if grep -qE "^$1=" "$ENV_FILE"; then
+    sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
   else
-    printf '%s=%s\n' "$1" "$2" >> .env
+    printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
   fi
 }
 has_module() { case ",$(get_env COMPOSE_PROFILES)," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+# Runs `docker compose` for the space in ENV_FILE.
+space_compose() {
+  if [ "$ENV_FILE" = .env ]; then
+    docker compose "$@"
+  else
+    docker compose -p "fraimwork-${ENV_FILE#.env.space-}" --env-file "$ENV_FILE" "$@"
+  fi
+}
+
+# Sets a fresh Syncthing GUI password, so the GUI is never open without one.
+secure_syncthing() {
+  for _ in $(seq 30); do
+    space_compose exec -T syncthing test -s /var/syncthing/config/config.xml 2>/dev/null && break
+    sleep 2
+  done
+  # shellcheck disable=SC2016
+  space_compose exec -T -e PW="$(get_env SYNCTHING_GUI_PASSWORD)" syncthing sh -c '
+    key=$(sed -n "s:.*<apikey>\(.*\)</apikey>.*:\1:p" /var/syncthing/config/config.xml)
+    # Changing a GUI setting restarts the GUI listener, so the next call can briefly get
+    # "connection refused": retry each call for up to about 20 seconds.
+    st() {
+      i=0
+      until syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@" 2>/dev/null; do
+        i=$((i + 1)); [ "$i" -lt 20 ] || return 1; sleep 1
+      done
+    }
+    st config gui user set fraim && st config gui password set "$PW"
+  ' || die "could not set the Syncthing GUI password of $ENV_FILE; the GUI must not stay open without one. Run install.sh again."
+}
+
+# Brings one extra space in line with the main .env (access mode, Tailscale address,
+# version) and starts it. Usage: start_space NAME
+start_space() {
+  local name="$1" key
+  ENV_FILE=".env.space-$name"
+  [ -f "$ENV_FILE" ] || die "no space $name ($ENV_FILE is missing); create it with: fraim space add $name"
+  chmod 600 "$ENV_FILE"
+  for key in ACCESS_MODE BIND_IP PRIVATE_BIND_IP FRAIM_HOSTNAME FRAIM_VERSION FRAIM_COMMIT FRAIM_RELEASES_REPO; do
+    local value
+    value="$(ENV_FILE=.env get_env "$key")"
+    [ -z "$value" ] || set_env "$key" "$value"
+  done
+  if [ "$(get_env ACCESS_MODE)" = tailscale ]; then
+    set_env BROWSER_VIEW_URL "http://$(get_env FRAIM_HOSTNAME):$(get_env VNC_PORT)/vnc.html"
+  fi
+  [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
+  [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
+  [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
+  [ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
+  if has_module whatsapp && [ -z "$(get_env WHATSAPP_OWNER)" ]; then
+    die "space $name has the whatsapp module but no WHATSAPP_OWNER"
+  fi
+  say "Starting space $name"
+  space_compose up -d --build --remove-orphans
+  if has_module sync; then secure_syncthing; fi
+  ENV_FILE=.env
+}
 
 [ "$(id -u)" = 0 ] || die "run as root"
 
-if [ "${1:-}" != --lock-public-ssh ] && [ -d .update-lock ] && [ "${FRAIM_LOCK_HELD:-}" != 1 ]; then
+if [ "${1:-}" != --lock-public-ssh ] && [ "${1:-}" != --space ] && [ -d .update-lock ] && [ "${FRAIM_LOCK_HELD:-}" != 1 ]; then
   die "an update is running or did not finish ($(cat .update-lock/info 2>/dev/null)); run 'fraim update --recover' from the laptop"
 fi
 
@@ -29,6 +88,17 @@ if [ "${1:-}" = --lock-public-ssh ]; then
   ufw delete allow OpenSSH >/dev/null 2>&1 || true
   touch .public-ssh-locked
   echo "Public SSH closed. The server is reachable over Tailscale only."
+  exit 0
+fi
+
+# `fraim space add/up/policy`: start one extra space with the host as it is.
+if [ "${1:-}" = --space ]; then
+  [ -n "${2:-}" ] || die "usage: install.sh --space NAME"
+  [ -f .env ] || die "no .env found; deploy the main space first"
+  [ ! -d .update-lock ] || [ "${FRAIM_LOCK_HELD:-}" = 1 ] || die "an update is running or did not finish ($(cat .update-lock/info 2>/dev/null)); try again after it"
+  printf '%s' "$2" | grep -Eq '^[a-z][a-z0-9-]{0,15}$' || die "invalid space name $2"
+  start_space "$2"
+  echo "Space $2 is running."
   exit 0
 fi
 # shellcheck source=/dev/null
@@ -150,24 +220,14 @@ docker compose up -d --build --remove-orphans
 
 if has_module sync; then
   say "Securing the Syncthing GUI"
-  for _ in $(seq 30); do
-    docker compose exec -T syncthing test -s /var/syncthing/config/config.xml 2>/dev/null && break
-    sleep 2
-  done
-  # shellcheck disable=SC2016
-  docker compose exec -T -e PW="$(get_env SYNCTHING_GUI_PASSWORD)" syncthing sh -c '
-    key=$(sed -n "s:.*<apikey>\(.*\)</apikey>.*:\1:p" /var/syncthing/config/config.xml)
-    # Changing a GUI setting restarts the GUI listener, so the next call can briefly get
-    # "connection refused": retry each call for up to about 20 seconds.
-    st() {
-      i=0
-      until syncthing cli --gui-address=127.0.0.1:8384 --gui-apikey="$key" "$@" 2>/dev/null; do
-        i=$((i + 1)); [ "$i" -lt 20 ] || return 1; sleep 1
-      done
-    }
-    st config gui user set fraim && st config gui password set "$PW"
-  ' || die "could not set the Syncthing GUI password; the GUI must not stay open without one. Run install.sh again."
+  secure_syncthing
 fi
+
+# Every other space (work, personal, ...) runs the same code with its own env file.
+for space_env in .env.space-*; do
+  [ -f "$space_env" ] || continue
+  start_space "${space_env#.env.space-}"
+done
 
 cat <<EOF
 

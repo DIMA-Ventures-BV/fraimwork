@@ -21,10 +21,32 @@ write_runtime_env() {
     printf 'FRAIM_AUTO_CONFIRM_CHANNEL=%q\n' "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}"
     printf 'FRAIM_VERSION=%q\n' "${FRAIM_VERSION:-dev}"
     printf 'FRAIM_RELEASES_REPO=%q\n' "${FRAIM_RELEASES_REPO:-}"
+    printf 'FRAIM_SPACE=%q\n' "${FRAIM_SPACE:-main}"
+    printf 'FRAIM_ACCESS_MODE=%q\n' "${FRAIM_ACCESS_MODE:-}"
+    printf 'FRAIM_SECRETS_URL=%q\n' "${FRAIM_SECRETS_URL:-}"
+    printf 'FRAIM_SECRETS_TOKEN=%q\n' "${FRAIM_SECRETS_TOKEN:-}"
+    printf 'FRAIM_PREVIEW_PORTS=%q\n' "${FRAIM_PREVIEW_PORTS:-3100-3109}"
+    printf 'FRAIM_PREVIEW_HOST=%q\n' "${FRAIM_PREVIEW_HOST:-}"
   } > /etc/fraim/runtime.env
   chown root:claude /etc/fraim/runtime.env
   chmod 0640 /etc/fraim/runtime.env
   umask 022
+}
+
+# Per-space MCP policy as a managed-settings drop-in: root-owned, so Claude in the space
+# cannot loosen it. FRAIM_MCP_DENY is a comma list of server names (claude.ai connectors
+# are named like "claude.ai Gmail"); FRAIM_CLAUDEAI_CONNECTORS=off turns all of them off.
+write_space_policy() {
+  local dir=/etc/claude-code/managed-settings.d deny_json disable=false
+  install -d -m 0755 "$dir"
+  # --arg, not stdin: jq 1.6 prints nothing for empty input.
+  deny_json="$(jq -cn --arg s "${FRAIM_MCP_DENY:-}" '$s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != "")) | map({serverName: .})')" \
+    || deny_json='[]'
+  [ "${FRAIM_CLAUDEAI_CONNECTORS:-on}" != off ] || disable=true
+  jq -n --argjson deny "$deny_json" --argjson disable "$disable" \
+    '{deniedMcpServers: $deny} + (if $disable then {disableClaudeAiConnectors: true} else {} end)' \
+    > "$dir/50-fraim-space.json"
+  chmod 0644 "$dir/50-fraim-space.json"
 }
 
 has_module() {
@@ -63,6 +85,7 @@ register_mcp() {
 case "$role" in
   workspace)
     write_runtime_env
+    write_space_policy
     prepare_home
 
     install -d -m 0755 /etc/ssh/keys /run/sshd
@@ -107,6 +130,7 @@ case "$role" in
 
   scheduler)
     write_runtime_env
+    write_space_policy
     prepare_home
     exec su claude -s /bin/bash -c "cd ~ && exec fraim-scheduler"
     ;;
