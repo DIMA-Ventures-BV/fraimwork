@@ -54,4 +54,4 @@ Every key reaches the server through stdin or a hidden prompt in the user's own 
 
 ## Tailscale
 
-The policy from `fraim tailscale policy` allows the ports of main plus four spaces and the preview ports. A tailnet with an older policy only allows the main space: merge the new grant.
+The policy from `fraim tailscale policy` allows the ports of main plus four spaces and the preview ports. A tailnet with an older policy only allows port 2222. Then fraim reaches a space's SSH port through the admin login (Tailscale SSH as root, with a ProxyCommand to the space's Tailscale address), so `fraim ... --space NAME` still works for admins. Previews, the browser view and mosh of that space need the new grant.

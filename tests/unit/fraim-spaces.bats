@@ -323,3 +323,46 @@ esac'
   done
   [[ "$output" == *"--space NAME"* ]]
 }
+
+# --- reaching a space before the tailnet policy allows its port --------------------------
+
+@test "use_space_jump goes through the admin login to the space's Tailscale address" {
+  # shellcheck source=/dev/null
+  source "$FRAIM"
+  set +e
+  FRAIM_ACCESS=tailscale FRAIM_SPACE=work FRAIM_TARGET=default FRAIM_ADMIN=root@fraim-test
+  FRAIM_HOST=fraim-test FRAIM_SSH_PORT=2223 FRAIM_SSH_KEY="" KNOWN_HOSTS="$HOME/kh"
+  port_open() { return 1; }
+  space_get() { echo 100.64.0.9; }
+  use_space_jump
+  [ -n "$SPACE_JUMP_CONFIG" ]
+  grep -q 'ProxyCommand ssh .*-W 100.64.0.9:%p root@fraim-test' "$SPACE_JUMP_CONFIG"
+  [[ "$(ssh_opts)" == *"-F $SPACE_JUMP_CONFIG"* ]]
+}
+
+@test "use_space_jump stays direct when the space port answers, and for main" {
+  # shellcheck source=/dev/null
+  source "$FRAIM"
+  set +e
+  FRAIM_ACCESS=tailscale FRAIM_SPACE=work FRAIM_SSH_PORT=2223 FRAIM_HOST=fraim-test SPACE_JUMP_CONFIG=""
+  port_open() { return 0; }
+  use_space_jump
+  [ -z "$SPACE_JUMP_CONFIG" ]
+  FRAIM_SPACE=main
+  port_open() { return 1; }
+  use_space_jump
+  [ -z "$SPACE_JUMP_CONFIG" ]
+}
+
+@test "login --from-space copies the token container to container on the server" {
+  ssh_handler 'case "$REMOTE" in *"grep -E"*".env.space-personal"*) printf "SSH_PORT=2224\n" ;; esac'
+  run "$FRAIM" login --space personal --from-space main
+  [ "$status" -eq 0 ]
+  grep -qF "exec -T -u claude workspace sh -c 'test -s ~/.config/fraim/claude-token && cat ~/.config/fraim/claude-token' | docker compose -p fraimwork-personal --env-file .env.space-personal exec -T -u claude workspace" "$SSH_LOG"
+  ! grep -q 'sk-ant' "$SSH_LOG"
+}
+
+@test "login --from-space refuses the same space" {
+  run "$FRAIM" login --from-space main
+  [ "$status" -eq 2 ]
+}
