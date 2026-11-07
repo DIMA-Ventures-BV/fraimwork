@@ -8,6 +8,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { parseVerdict } from './verdict.mjs'
 
 function loadEnvFile(file) {
   const out = {}
@@ -30,7 +31,6 @@ const OWNER = (env.WHATSAPP_OWNER || '').replace(/\D/g, '')
 const VIEW_URL = env.FRAIM_BROWSER_VIEW_URL || 'the browser view'
 const HOME = homedir()
 const SHARED_ROOTS = { [path.join(HOME, 'fraim')]: 'fraim', [path.join(HOME, 'pc')]: 'pc' }
-const VERDICT_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
 const log = (...parts) => process.stderr.write(`[whatsapp-channel] ${parts.join(' ')}\n`)
 
@@ -152,15 +152,9 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
 
 async function handleEvent(event) {
   if (event.type !== 'message') return
-  const verdict = VERDICT_RE.exec(event.text ?? '')
-  if (verdict && event.sender === OWNER) {
-    await mcp.notification({
-      method: 'notifications/claude/channel/permission',
-      params: {
-        request_id: verdict[2].toLowerCase(),
-        behavior: verdict[1].toLowerCase().startsWith('y') ? 'allow' : 'deny',
-      },
-    })
+  const verdict = parseVerdict(event, OWNER)
+  if (verdict) {
+    await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
     return
   }
   await mcp.notification({

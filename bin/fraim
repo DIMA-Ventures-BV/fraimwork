@@ -927,7 +927,9 @@ cmd_support_bundle() {
       -e 's/sk-ant-[A-Za-z0-9_-]+/sk-ant-[REDACTED]/g' \
       -e 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' \
       -e 's/((TOKEN|PASSWORD|AUTHKEY|SECRET|KEY)[A-Z_]*=)[^ ]+/\1[REDACTED]/g' \
-      -e 's/(^|[^0-9])(31|32|49|44|1)[0-9]{8,11}([^0-9]|$)/\1[PHONE]\3/g' \
+      -e 's/\+[0-9][0-9 ()-]{6,}[0-9]/[PHONE]/g' \
+      -e 's/(^|[^0-9])[0-9]{10,15}([^0-9]|$)/\1[PHONE]\2/g' \
+      -e 's/(^|[^0-9])[0-9]{10,15}([^0-9]|$)/\1[PHONE]\2/g' \
     > "$out"
   say "$out"
   say "This file has passwords, tokens and phone numbers removed. It can be sent to whoever helps you."
@@ -1035,4 +1037,5 @@ main() {
   esac
 }
 
-main "$@"
+# Sourcing (tests) loads the functions without running a command.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi
