@@ -18,9 +18,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && echo 'LANG=C.UTF-8' > /etc/default/locale
 
-# GitHub's host keys, so plugin marketplaces can fall back to SSH without a prompt.
-RUN ssh-keyscan -t ed25519,ecdsa,rsa github.com >> /etc/ssh/ssh_known_hosts 2>/dev/null \
- && grep -q 'github.com ssh-ed25519' /etc/ssh/ssh_known_hosts
+# GitHub's published host keys (api.github.com/meta, "ssh_keys"), so plugin marketplaces can
+# fall back to SSH without a prompt. A file, not ssh-keyscan: no network needed at build time.
+COPY github_known_hosts /etc/ssh/ssh_known_hosts
 
 RUN case "${TARGETARCH}" in \
       amd64) sha="${SUPERCRONIC_SHA256_AMD64}" ;; \
