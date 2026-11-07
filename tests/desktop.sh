@@ -10,6 +10,8 @@ DESKTOP="$REPO/bin/fraim-desktop"
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fraim-desktop-test.XXXXXX")"
 trap 'rm -rf "$ROOT"' EXIT
 
+# macOS ships bash 3.2; test against it. FRAIM_TEST_BASH=... picks another bash.
+TEST_BASH="${FRAIM_TEST_BASH:-/bin/bash}"
 JQ="$(command -v jq)" || { echo "tests need jq"; exit 1; }
 PASS=0; FAIL=0
 OUT=""; CODE=0
@@ -34,11 +36,13 @@ fresh() {
   cat > "$FAKEBIN/fraim" <<'EOF'
 #!/bin/sh
 echo "fraim $*" >> "$CALLS"
-if [ "$1 $2" = "browser --print-url" ]; then
-  [ -n "$FAKE_BROWSER_URL" ] || { echo "no fraim target" >&2; exit 2; }
-  echo "$FAKE_BROWSER_URL"
-  echo "vnc-password-s3cret"
-fi
+case "$1 $2" in
+  "browser --url-only")
+    [ -n "$FAKE_BROWSER_URL" ] || { echo "no fraim target" >&2; exit 2; }
+    echo "$FAKE_BROWSER_URL" ;;
+  "browser --print-url")
+    echo "$FAKE_BROWSER_URL"; echo "vnc-password-s3cret" ;;
+esac
 EOF
   chmod +x "$FAKEBIN/fraim"
   export CALLS
@@ -47,6 +51,7 @@ EOF
 # run <cmd...>: no terminal, 10 s limit. Sets OUT and CODE (124 = timeout).
 run() {
   OUT="$ROOT/$T.out"
+  [ "$1" = "$DESKTOP" ] && set -- "$TEST_BASH" "$@"
   "$@" </dev/null >"$OUT" 2>&1 &
   local pid=$! waited=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -130,6 +135,36 @@ test_no_secrets() {
   ok
 }
 
+test_dock_no_tunnel() {
+  fresh; run "$DESKTOP" dock
+  grep -q 'browser --url-only' "$CALLS" || { bad "did not ask for the URL"; return; }
+  ! grep -q 'browser --print-url' "$CALLS" || { bad "opened a tunnel and fetched the password"; return; }
+  ok
+}
+
+test_dock_quote_apostrophe() {
+  fresh
+  local odd="$ROOT/$T/Michael's code/fraim bin"
+  mkdir -p "$odd"; cp "$FAKEBIN/fraim" "$odd/fraim"; export FRAIM_BIN="$odd/fraim"
+  run "$DESKTOP" dock
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  : > "$CALLS"
+  "$TEST_BASH" -c "$(jq -r '.controls[0].command' "$DOCK")" </dev/null >/dev/null 2>&1
+  grep -qx 'fraim shell' "$CALLS" || { bad "agent command did not run: $(jq -r '.controls[0].command' "$DOCK")"; return; }
+  ok
+}
+
+test_dock_symlink_kept() {
+  fresh
+  mkdir -p "$HOME/dotfiles"; printf '%s\n' "$USER_DOCK" > "$HOME/dotfiles/dock.json"
+  ln -s "$HOME/dotfiles/dock.json" "$DOCK"
+  run "$DESKTOP" dock
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  [ -L "$DOCK" ] || { bad "dock.json is no longer a symlink"; return; }
+  [ "$(jq -r '.controls|length' "$HOME/dotfiles/dock.json")" = 4 ] || { bad "link target not updated"; return; }
+  ok
+}
+
 test_dock_commands_use_fraim_bin() {
   fresh; run "$DESKTOP" dock
   jq -r '.controls[0].command' "$DOCK" | grep -qF "$FRAIM_BIN" || { bad "agent command does not use FRAIM_BIN"; return; }
@@ -194,7 +229,8 @@ test_install_no_tty() {
 
 # --- Task 3: open ---
 
-# fake_cmux: logs every call. Running when $STATE/running exists; `open -a` starts it.
+# fake_cmux: logs every call. Running when $STATE/running exists; with
+# FAKE_CMUX_DENY=1 it runs but refuses callers from outside cmux.
 fake_cmux() {
   STATE="$ROOT/$T.state"; mkdir -p "$STATE"; export STATE
   export FAKE_WS='{"workspaces":[{"ref":"workspace:1","title":"notes","custom_title":null}]}'
@@ -203,7 +239,10 @@ fake_cmux() {
 #!/bin/sh
 echo "cmux $*" >> "$CALLS"
 case "$1" in
-  ping) [ -e "$STATE/running" ] && echo PONG && exit 0; exit 1 ;;
+  ping)
+    [ -e "$STATE/running" ] || { echo "Error: cmux is not running" >&2; exit 1; }
+    [ -z "$FAKE_CMUX_DENY" ] || { echo "Error: ERROR: Access denied - only processes started inside cmux can connect" >&2; exit 1; }
+    echo PONG ;;
   workspace) [ "$2" = list ] && printf '%s\n' "$FAKE_WS" ;;
 esac
 exit 0
@@ -211,7 +250,8 @@ EOF
   cat > "$FAKEBIN/open" <<'EOF'
 #!/bin/sh
 echo "open $*" >> "$CALLS"
-[ -z "$FAKE_NEVER_STARTS" ] && touch "$STATE/running"
+[ -n "$FAKE_OPEN_FAILS" ] && exit 1
+touch "$STATE/running"
 exit 0
 EOF
   chmod +x "$FAKEBIN/cmux" "$FAKEBIN/open"
@@ -231,17 +271,26 @@ test_open_not_running() {
   fresh; fake_cmux
   run "$DESKTOP" open
   [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
-  [ "$(grep -n "^open -a $FRAIM_CMUX_APP" "$CALLS" | cut -d: -f1)" -lt "$(grep -n 'new-workspace' "$CALLS" | cut -d: -f1)" ] \
-    || { bad "cmux not launched before new-workspace"; cat "$CALLS"; return; }
+  grep -qxF "open -a $FRAIM_CMUX_APP $HOME/fraim" "$CALLS" || { bad "cmux not opened on ~/fraim"; cat "$CALLS"; return; }
+  ! grep -q new-workspace "$CALLS" || { bad "new-workspace called"; return; }
   ok
 }
 
-test_open_never_starts() {
-  fresh; fake_cmux; export FAKE_NEVER_STARTS=1
+test_open_outside_cmux() {
+  fresh; fake_cmux; touch "$STATE/running"; export FAKE_CMUX_DENY=1
   run "$DESKTOP" open
-  unset FAKE_NEVER_STARTS
-  [ "$CODE" = 1 ] || { bad "exit $CODE, wanted 1"; return; }
+  unset FAKE_CMUX_DENY
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  grep -qxF "open -a $FRAIM_CMUX_APP $HOME/fraim" "$CALLS" || { bad "cmux not opened on ~/fraim"; cat "$CALLS"; return; }
   ! grep -q new-workspace "$CALLS" || { bad "new-workspace called"; return; }
+  ok
+}
+
+test_open_launch_fails() {
+  fresh; fake_cmux; export FAKE_OPEN_FAILS=1
+  run "$DESKTOP" open
+  unset FAKE_OPEN_FAILS
+  [ "$CODE" = 1 ] || { bad "exit $CODE, wanted 1"; return; }
   ok
 }
 

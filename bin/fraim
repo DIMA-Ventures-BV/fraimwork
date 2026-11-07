@@ -1819,9 +1819,18 @@ cmd_browser() {
   case "${POSITIONAL[0]:-open}" in
     stop) tunnel stop "$vnc"; return ;;
     open|start) ;;
-    *) usage "fraim browser [--print-url] | stop" ;;
+    *) usage "fraim browser [--print-url | --url-only] | stop" ;;
   esac
   local url
+  # --url-only: a fixed URL for bookmarks and the cmux Dock. No tunnel, no password.
+  if [ -n "$(flag url-only)" ]; then
+    case "$FRAIM_ACCESS" in
+      tailscale) say "http://$FRAIM_HOST:6080/vnc.html" ;;
+      local) say "http://localhost:$(env_get VNC_PORT | grep . || echo 6080)/vnc.html" ;;
+      *) die "public mode has no fixed browser URL; use fraim browser --print-url" ;;
+    esac
+    return
+  fi
   if [ "$FRAIM_ACCESS" = tailscale ]; then
     url="http://$FRAIM_HOST:$vnc/vnc.html"
   else
@@ -2209,6 +2218,7 @@ Operate
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
   fraim whatsapp status|link [--number N]|relink|test
   fraim browser [--print-url] | stop         server browser view URL and VNC password
+  fraim browser --url-only                   only the fixed URL (no tunnel, no password; not in public mode)
   fraim chrome start|stop|status             lend a separate local Chrome profile to the server
   fraim sync [--print-url] | stop            Syncthing GUI URL and password
   fraim sync pair [--dir DIR]                pair this laptop's Syncthing with the space (~/fraim)

@@ -10,7 +10,6 @@ CMUX_DIR="$HOME/.config/cmux"
 DOCK="$CMUX_DIR/dock.json"
 CMUX_APP="${FRAIM_CMUX_APP:-/Applications/cmux.app}"
 CMUX="${FRAIM_CMUX_BIN:-$CMUX_APP/Contents/Resources/bin/cmux}"
-CMUX_WAIT="${FRAIM_CMUX_WAIT:-15}"
 WORKSPACE_NAME="fraim"
 WORKSPACE_DIR="$HOME/fraim"
 
@@ -32,14 +31,15 @@ die() { printf 'fraim-desktop: %s\n' "$*" >&2; exit 1; }
 
 need_jq() { command -v jq >/dev/null || die "jq is missing. Install it with: brew install jq"; }
 
-# Single-quoted for the shell that runs the Dock command.
-shell_quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+# Single-quoted for the shell that runs the Dock command. The replacement goes
+# through a variable: bash 3.2 mangles a quoted replacement written inline.
+shell_quote() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
 
 dock_controls() {
   local fraim url
   fraim="$(shell_quote "$FRAIM_BIN")"
-  # Line 1 is the URL, line 2 the VNC password, which must never reach dock.json.
-  url="$("$FRAIM_BIN" browser --print-url 2>/dev/null </dev/null)" || url=""
+  # --url-only opens no tunnel and never prints the VNC password.
+  url="$("$FRAIM_BIN" browser --url-only 2>/dev/null </dev/null)" || url=""
   url="${url%%$'\n'*}"
   case "$url" in http://*|https://*) ;; *) url="" ;; esac
   jq -n --arg fraim "$fraim" --arg url "$url" '
@@ -62,7 +62,9 @@ write_dock() {
   mkdir -p "$CMUX_DIR"
   tmp="$(mktemp "$CMUX_DIR/.dock.json.XXXXXX")"
   printf '%s\n' "$current" | jq "$@" > "$tmp" || { rm -f "$tmp"; die "could not update $DOCK"; }
-  mv "$tmp" "$DOCK"
+  # Write through the file: a dotfiles symlink stays a link and the mode stays the same.
+  cat "$tmp" > "$DOCK"
+  rm -f "$tmp"
 }
 
 cmd_dock() {
@@ -95,13 +97,13 @@ cmux_q() { CMUX_QUIET=1 "$CMUX" "$@" </dev/null; }
 cmd_open() {
   need_jq
   [ -x "$CMUX" ] || die "cmux is not installed. Run: fraim-desktop install"
+  mkdir -p "$WORKSPACE_DIR"
+  # cmux only takes commands from its own terminals by default. From anywhere
+  # else, or when it is not running, open the folder; the Dock has the agent.
   if ! cmux_q ping >/dev/null 2>&1; then
-    open -a "$CMUX_APP" || die "could not start cmux"
-    local waited=0
-    until cmux_q ping >/dev/null 2>&1; do
-      [ "$waited" -lt "$CMUX_WAIT" ] || die "cmux did not start within ${CMUX_WAIT}s"
-      sleep 1; waited=$((waited + 1))
-    done
+    open -a "$CMUX_APP" "$WORKSPACE_DIR" || die "could not start cmux"
+    echo "opened cmux on $WORKSPACE_DIR; the Agent tab in the right panel talks to your server"
+    return 0
   fi
   local ref
   ref="$(cmux_q workspace list --json 2>/dev/null \
@@ -111,7 +113,6 @@ cmd_open() {
     echo "switched to the fraim workspace"
     return 0
   fi
-  mkdir -p "$WORKSPACE_DIR"
   cmux_q new-workspace --name "$WORKSPACE_NAME" --cwd "$WORKSPACE_DIR" \
     --command "$(shell_quote "$FRAIM_BIN") shell" >/dev/null || die "could not open the fraim workspace"
   echo "opened the fraim workspace"
