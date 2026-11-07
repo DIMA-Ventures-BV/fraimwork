@@ -190,6 +190,69 @@ test_install_no_tty() {
   ok
 }
 
+# --- Task 3: open ---
+
+# fake_cmux: logs every call. Running when $STATE/running exists; `open -a` starts it.
+fake_cmux() {
+  STATE="$ROOT/$T.state"; mkdir -p "$STATE"; export STATE
+  export FAKE_WS='{"workspaces":[{"ref":"workspace:1","title":"notes","custom_title":null}]}'
+  export FRAIM_CMUX_WAIT=2
+  cat > "$FAKEBIN/cmux" <<'EOF'
+#!/bin/sh
+echo "cmux $*" >> "$CALLS"
+case "$1" in
+  ping) [ -e "$STATE/running" ] && echo PONG && exit 0; exit 1 ;;
+  workspace) [ "$2" = list ] && printf '%s\n' "$FAKE_WS" ;;
+esac
+exit 0
+EOF
+  cat > "$FAKEBIN/open" <<'EOF'
+#!/bin/sh
+echo "open $*" >> "$CALLS"
+[ -z "$FAKE_NEVER_STARTS" ] && touch "$STATE/running"
+exit 0
+EOF
+  chmod +x "$FAKEBIN/cmux" "$FAKEBIN/open"
+}
+
+test_open_running() {
+  fresh; fake_cmux; touch "$STATE/running"
+  run "$DESKTOP" open
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  grep -qF "cmux new-workspace --name fraim --cwd $HOME/fraim --command '$FRAIM_BIN' shell" "$CALLS" || { bad "no new-workspace call"; cat "$CALLS"; return; }
+  [ -d "$HOME/fraim" ] || { bad "no ~/fraim folder"; return; }
+  ! grep -q '^open ' "$CALLS" || { bad "launched cmux while it ran"; return; }
+  ok
+}
+
+test_open_not_running() {
+  fresh; fake_cmux
+  run "$DESKTOP" open
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  [ "$(grep -n "^open -a $FRAIM_CMUX_APP" "$CALLS" | cut -d: -f1)" -lt "$(grep -n 'new-workspace' "$CALLS" | cut -d: -f1)" ] \
+    || { bad "cmux not launched before new-workspace"; cat "$CALLS"; return; }
+  ok
+}
+
+test_open_never_starts() {
+  fresh; fake_cmux; export FAKE_NEVER_STARTS=1
+  run "$DESKTOP" open
+  unset FAKE_NEVER_STARTS
+  [ "$CODE" = 1 ] || { bad "exit $CODE, wanted 1"; return; }
+  ! grep -q new-workspace "$CALLS" || { bad "new-workspace called"; return; }
+  ok
+}
+
+test_open_existing() {
+  fresh; fake_cmux; touch "$STATE/running"
+  export FAKE_WS='{"workspaces":[{"ref":"workspace:7","title":"fraim","custom_title":"fraim"}]}'
+  run "$DESKTOP" open
+  [ "$CODE" = 0 ] || { bad "exit $CODE"; return; }
+  ! grep -q new-workspace "$CALLS" || { bad "new-workspace called"; return; }
+  grep -qF "cmux select-workspace --workspace workspace:7" "$CALLS" || { bad "no select-workspace"; cat "$CALLS"; return; }
+  ok
+}
+
 ALL=$(declare -F | awk '{print $3}' | grep '^test_' | sed 's/^test_//')
 [ $# -gt 0 ] || set -- $ALL
 for T in "$@"; do "test_$T"; done
