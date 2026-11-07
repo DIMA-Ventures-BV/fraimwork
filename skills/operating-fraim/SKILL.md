@@ -34,9 +34,12 @@ and exits 1 when any check fails (also `claude-login` before the first login: th
 | `syncthing` | `$F restart syncthing`, then `$F sync --print-url` |
 | `disk-below-90-percent` | `$F exec -- sh -c 'du -sh ~/fraim/*'` and tell the user what is large |
 | `jobs-ok` | The last run of a job failed. The reason is in `recent_alerts`; act on it (login, usage limit, timeout, missing prompt file), then run the job once: `$F exec -- fraim-job <name>` |
+| `plugins-ok` | Loading the Claude config at start failed (usually GitHub was unreachable). Read `$F exec -- cat .local/state/fraim/config-init.log`, then `$F restart workspace` to retry. Everything else keeps working meanwhile |
 | a service not `running` | `$F logs <service> --tail 80`, read it, then `$F restart <service>` |
 
-Always read `recent_alerts` too (the last 5 problems, newest last; normal job answers never land there). Report the ones from the last 7 days in plain words, also when every check is ok, because a user without WhatsApp sees them only here.
+For "what did my jobs say?", read `recent_job_results` (the last 3 answers, with time and job name). Older answers are in `~/fraim/outbox.md` (last 100): `$F exec -- tail -80 fraim/outbox.md`. When that file does not exist, no job has answered yet: say so.
+
+Always read `recent_alerts` too (the last 5 problems, newest last; normal job answers never land there). Report the ones from the last 7 days in plain words, also when every check is ok, because a user without WhatsApp sees them only here. Alerts are history: an alert about a job that was since fixed or removed is not a current problem. The live state is the checks (`jobs-ok`, `plugins-ok`, ...).
 
 The scheduler has a container health check, not a doctor check: read its `status` in `services[]` (`unhealthy` means supercronic stopped; `$F restart scheduler`).
 
@@ -65,6 +68,21 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 | File sync GUI | `$F sync --print-url`; `$F sync stop` after |
 | Claude config | `$F config status` (see managing-fraim-config) |
 
+## Make a job
+
+A job runs on the server at set times, also while the laptop is off. Steps, each its own command:
+
+1. Confirm the schedule in words ("every weekday at 8:00, server time zone `health.timezone`") and what the answer should contain. Pick a short name in lowercase letters and dashes.
+2. Write the prompt: `$F exec -- sh -c 'cat > fraim/jobs/<name>.md' <<'EOF'` ... `EOF`. Tell it to answer exactly `SILENT` when there is nothing to report. Never add fraim-notify: fraim-job delivers the answer itself.
+3. When it needs more than reading files and web search, list tools one per line in `fraim/jobs/<name>.tools`. A website needs `WebFetch(domain:<site>)` for each site (WebFetch is never pre-approved; for weather, for example, `WebFetch(domain:wttr.in)`).
+4. Add the schedule line: `$F exec -- sh -c 'echo "<min> <hour> * * <dow> fraim-job <name>" >> fraim/jobs/crontab'` (weekdays at 8:00: `0 8 * * 1-5`). The scheduler picks it up by itself.
+5. Run it once: `$F exec -- fraim-job <name>`, then show the user the answer from `$F status --json` (`recent_job_results`).
+6. Add the job to the user's guide (`~/fraim/fraim-guide.md`): name, schedule, what it does.
+
+Where answers go: WhatsApp when it is linked, and always `~/fraim/outbox.md`. Without WhatsApp, say up front: "Job results wait on the server until you ask me what they said."
+
+To stop a job: remove its line from `fraim/jobs/crontab` and delete `fraim/jobs/<name>.md`.
+
 ## Locked out (server unreachable)
 
 When: Tailscale mode, `$F status` cannot reach the server, and `tailscale status` on this Mac shows the Mac connected but the fraim machine offline (public SSH is closed by design).
@@ -82,7 +100,7 @@ First check the simple causes: the Mac's Tailscale icon says Connected; the serv
 
 ## Updating
 
-Triggers: the user says "a fraimwork update is available" (the server sends this on WhatsApp once a week), "update fraim", or you see it yourself with `$F exec -- fraim-version-check` (exit 10 = an update exists, 0 = up to date).
+Triggers: the user says "a fraimwork update is available" (the server sends this on WhatsApp once a week), "update fraim", or you see it yourself with `$F exec -- fraim-version-check` (exit 10 = an update exists, 0 = up to date, 3 = could not check: tell the user "I could not check for updates", never "up to date").
 1. Tell the user: "Updating fraim, this takes a few minutes. Your files stay."
 2. `$F update` in the background (`--to vX.Y.Z` for a given version). On a server it reinstalls, so allow several minutes. It prints stage lines and a summary; the full log path is on its "Full log:" line. On failure, read the 15 lines it prints first.
 3. Exit 0: report the new version and run `$F status --json`.

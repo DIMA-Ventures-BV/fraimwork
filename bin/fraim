@@ -612,6 +612,8 @@ healthy_after_update() {
 cmd_update() {
   parse_flags "$@"
   load_config
+  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "this fraimwork folder ($REPO) was not downloaded with git, so it cannot update itself. Download it again with: git clone https://github.com/${FRAIM_RELEASES_REPO:-DIMA-Ventures-BV/fraimwork}.git"
   git -C "$REPO" diff --quiet && git -C "$REPO" diff --cached --quiet \
     || usage "the fraimwork folder has local changes; fraim update needs a clean checkout"
   git -C "$REPO" fetch --tags --quiet origin || die "could not fetch releases from GitHub"
@@ -661,7 +663,10 @@ cmd_update() {
     say "The server's current version (${current:0:18}) is unknown here: if this update fails there is no rollback."
     current=""
   fi
-  if [ "$current" = "$target_commit" ] && [ -z "$(flag force)" ]; then say "Already on $target."; return; fi
+  if [ "$current" = "$target_commit" ] && [ -z "$(flag force)" ]; then
+    if [ -n "$(flag to)" ]; then say "Already on $target."; else say "Already on $target, the newest release."; fi
+    return
+  fi
 
   local before
   before="$(failing_checks)"
@@ -871,13 +876,15 @@ cmd_status() {
     health="$(workspace_ssh 'fraim-doctor --json' || true)"
     local alerts
     alerts="$(workspace_ssh "grep '^- ' ~/fraim/alerts.md 2>/dev/null | tail -5" 2>/dev/null || true)"
+    local outbox
+    outbox="$(workspace_ssh "awk '/^## /{n++} {print}' ~/fraim/outbox.md 2>/dev/null | tail -60" 2>/dev/null || true)"
     [ -n "$health" ] || health='{"ok":false,"checks":[],"error":"workspace unreachable"}'
     local instance="" offset=""
     if [ "$FRAIM_ACCESS" = local ]; then instance="$FRAIM_INSTANCE"; offset="$(env_get PORT_OFFSET)"; fi
     jq -n --arg target "$FRAIM_TARGET" --arg host "$FRAIM_HOST" --arg access "$FRAIM_ACCESS" \
       --arg instance "$instance" --arg offset "$offset" \
       --arg ssh "$FRAIM_SSH_PORT" --arg vnc "$( { [ "$FRAIM_ACCESS" = local ] && env_get VNC_PORT; } | grep . || echo 6080)" \
-      --arg public_host "${FRAIM_PUBLIC_HOST:-}" --arg update_lock "$update_lock" --arg alerts "$alerts" \
+      --arg public_host "${FRAIM_PUBLIC_HOST:-}" --arg update_lock "$update_lock" --arg alerts "$alerts" --arg outbox "$outbox" \
       --argjson services "$services" --argjson health "$health" \
       '{target: $target, host: $host, access: $access,
         instance: (if $instance == "" then null else $instance end),
@@ -886,6 +893,10 @@ cmd_status() {
         unfinished_update: (if $update_lock == "" then null else $update_lock end),
         recent_alerts: ($alerts | split("\n") | map(select(. != "") | sub("^- "; "")
           | {time: .[0:16], text: .[17:]})),
+        recent_job_results: ($outbox | split("\n## ") | map(select(test("^(## )?[0-9]{4}-")) | sub("^## "; "")
+          | (split("\n") | .[0]) as $head
+          | {time: $head[0:16], job: $head[17:], text: (split("\n") | .[1:] | join("\n") | gsub("^\\s+|\\s+$"; "") | .[0:500])})
+          | .[-3:]),
         ports: {ssh: ($ssh | tonumber), browser_view: ($vnc | tonumber)},
         ok: $health.ok, services: $services, health: $health}'
     printf '%s' "$health" | jq -e .ok >/dev/null
@@ -927,7 +938,16 @@ cmd_logs() {
   load_config
   local follow=""
   if [ -n "$(flag follow)" ] && is_tty; then follow="-f"; fi
-  admin "docker compose logs --no-color $follow --tail $(flag tail | grep . || echo 100) ${POSITIONAL[*]:-}"
+  local cmd
+  cmd="docker compose logs --no-color $follow --tail $(flag tail | grep . || echo 100) ${POSITIONAL[*]:-}"
+  if [ -n "$follow" ]; then admin "$cmd"; return; fi
+  local out
+  out="$(admin "$cmd" 2>&1)" || { printf '%s\n' "$out"; return 1; }
+  if [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+    printf '%s\n' "$out"
+  else
+    say "No log output yet. $(admin "docker compose ps --format '{{.Service}}: {{.Status}}' ${POSITIONAL[*]:-}" 2>/dev/null | paste -sd ';' -)"
+  fi
 }
 
 cmd_help() {

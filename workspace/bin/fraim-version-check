@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compares the running fraimwork version with the newest vX.Y.Z release on GitHub.
 #   --notify  WhatsApp the owner once per new release
-# Exit 0 up to date or unknown, 10 update available.
+# Exit 0 up to date, 3 unknown (could not check), 10 update available.
 set -u
 # shellcheck source=/dev/null
 . /etc/fraim/runtime.env 2>/dev/null || true
@@ -12,7 +12,7 @@ current="${FRAIM_VERSION:-dev}"
 
 latest="$(curl -fsS --max-time 15 "https://api.github.com/repos/$repo/tags?per_page=100" 2>/dev/null \
   | jq -r '.[].name' 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-[ -n "$latest" ] || { echo "fraim-version-check: no releases found (repo private or offline)"; exit 0; }
+[ -n "$latest" ] || { echo "unknown: could not check for releases (repo private, no releases yet, or offline)"; exit 3; }
 
 if [ "$current" = "$latest" ] || [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" = "$current" ]; then
   echo "up to date ($current)"
