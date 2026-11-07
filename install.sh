@@ -49,6 +49,8 @@ say "Generating secrets"
 # VNC only uses the first 8 characters of a password.
 [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
 [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
+# Session token between Claude's workspace and the secrets proxy (see docs/secrets.md).
+[ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 # Wait for Ubuntu's own apt runs (unattended-upgrades, apt-daily) instead of failing.

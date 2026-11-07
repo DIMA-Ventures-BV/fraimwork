@@ -8,6 +8,11 @@ name: fraimwork
 # messages from anyone). They only get their own drop folder (downloads, inbox), never
 # the rest of ~/fraim, and each sits on its own network with the workspace, so neither
 # can reach the other.
+#
+# Secrets: API keys live only in the secrets container (secrets-store volume). Claude's
+# workspace calls http://secrets:8080/NAME/... with a session token, and the proxy swaps in
+# the real key. Only the workspace and scheduler share the internal `secrets` network with
+# it, so the browser (any web page) and the WhatsApp gateway cannot reach it.
 
 x-defaults: &defaults
   restart: unless-stopped
@@ -28,6 +33,8 @@ x-workspace-env: &workspace-env
   FRAIM_AUTO_CONFIRM_CHANNEL: ${AUTO_CONFIRM_CHANNEL:-1}
   FRAIM_VERSION: ${FRAIM_VERSION:-dev}
   FRAIM_RELEASES_REPO: ${FRAIM_RELEASES_REPO:-DIMA-Ventures-BV/fraimwork}
+  FRAIM_SECRETS_URL: http://secrets:8080
+  FRAIM_SECRETS_TOKEN: ${SECRETS_TOKEN:-}
 
 x-workspace-volumes: &workspace-volumes
   - home:/home/claude
@@ -60,7 +67,7 @@ services:
       - ./server-plugin:/opt/fraim/server-plugin:ro
       - ssh-host-keys:/etc/ssh/keys
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
-    networks: [fraim, wa, sync]
+    networks: [fraim, wa, sync, secrets]
 
   scheduler:
     <<: *defaults
@@ -75,7 +82,7 @@ services:
     depends_on: [workspace]
     environment: *workspace-env
     volumes: *workspace-volumes
-    networks: [fraim, wa, sync]
+    networks: [fraim, wa, sync, secrets]
 
   browser:
     <<: *defaults
@@ -114,6 +121,17 @@ services:
       - downloads:/downloads:ro
       - pc:/pc:ro
     networks: [wa]
+
+  secrets:
+    <<: *defaults
+    build: ./secrets
+    image: fraimwork/secrets:${FRAIM_IMAGE_TAG:-local}
+    environment:
+      SECRETS_TOKEN: ${SECRETS_TOKEN:-}
+      TZ: ${TZ:-Europe/Amsterdam}
+    volumes:
+      - secrets-store:/data/secrets
+    networks: [secrets, secrets-out]
 
   syncthing:
     <<: *defaults
@@ -154,6 +172,17 @@ networks:
     ipam:
       config:
         - subnet: ${FRAIM_SUBNET_SYNC:-172.31.128.0/24}
+  # workspace + scheduler + secrets proxy. Internal: no route to the internet.
+  secrets:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${FRAIM_SUBNET_SECRETS:-172.31.64.0/24}
+  # the secrets proxy's own way out to the APIs it forwards to
+  secrets-out:
+    ipam:
+      config:
+        - subnet: ${FRAIM_SUBNET_SECRETS_OUT:-172.31.192.0/24}
 
 volumes:
   home:
@@ -165,3 +194,4 @@ volumes:
   browser-profile:
   whatsapp-auth:
   syncthing-config:
+  secrets-store:
