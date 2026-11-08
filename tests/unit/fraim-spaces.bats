@@ -277,6 +277,37 @@ esac'
   [[ "$output" == *"fraim connect sentry --redirect"* ]]
 }
 
+@test "connect --oauth falls back to pasting when the callback port cannot be tunneled" {
+  ssh_handler 'case "$REMOTE" in *"fraim-connect login"*) echo "https://sentry.example/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A52103%2Fcallback&state=s" ;; esac'
+  run "$FRAIM" connect sentry --url https://mcp.sentry.dev/mcp --oauth
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"fraim connect sentry --redirect"* ]]
+  grep -q -- '-L 127.0.0.1:52103:127.0.0.1:52103' "$SSH_LOG"
+}
+
+@test "connect --finish reloads Claude once the sign-in succeeded" {
+  ssh_handler 'case "$REMOTE" in *"fraim-tty wait mcp-sentry"*) exit 0 ;; esac'
+  run "$FRAIM" connect sentry --finish
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sentry is signed in"* ]]
+  grep -q 'fraim-tty stop mcp-sentry; fraim-connect reload' "$SSH_LOG"
+}
+
+@test "connect --finish before Approve says what to do" {
+  ssh_handler 'case "$REMOTE" in *"fraim-tty wait mcp-sentry"*) exit 1 ;; esac'
+  run "$FRAIM" connect sentry --finish
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"click Approve"* ]]
+  ! grep -q 'fraim-connect reload' "$SSH_LOG"
+}
+
+@test "the OAuth callback port comes from a localhost redirect_uri only" {
+  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$FRAIM'); oauth_callback_port 'https://x/a?redirect_uri=http%3A%2F%2Flocalhost%3A52103%2Fcallback'"
+  [ "$output" = 52103 ]
+  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$FRAIM'); oauth_callback_port 'https://x/a?redirect_uri=https%3A%2F%2Fevil.example%3A443%2Fcb'"
+  [ -z "$output" ]
+}
+
 @test "login --full hands the human the sign-in link and the code command for the space" {
   ssh_handler '
 case "$REMOTE" in

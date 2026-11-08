@@ -3,6 +3,8 @@
 # A full login made by `fraim login --full` (marker file plus ~/.claude/.credentials.json)
 # needs no token, and the token would outrank it, so then the token is left out. A stray
 # credentials file from an old manual /login does not count: it may have expired.
+# Tools added with `fraim tool add` live in the home volume.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 token_file="$HOME/.config/fraim/claude-token"
 full_login() { [ -f "$HOME/.config/fraim/full-login" ] && [ -s "$HOME/.claude/.credentials.json" ]; }
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$token_file" ] && ! full_login; then

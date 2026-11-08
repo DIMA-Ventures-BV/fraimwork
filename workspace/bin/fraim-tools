@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Extra command-line tools for this space. They go in the home volume (~/.local), so they
+# survive restarts and image updates, and every space chooses its own.
+# A tool is npm:PACKAGE@VERSION or uv:PACKAGE@VERSION, always with an exact version.
+#   fraim-tools add SPEC...   install and remember
+#   fraim-tools list          the remembered tools
+#   fraim-tools rm SPEC|NAME  uninstall and forget
+#   fraim-tools sync          install every remembered tool again
+set -euo pipefail
+
+LIST="$HOME/.config/fraim/tools"
+UV_VERSION="${FRAIM_UV_VERSION:-0.8.0}"
+PREFIX="$HOME/.local"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'fraim-tools: %s\n' "$*" >&2; exit 1; }
+usage() { printf 'usage: fraim-tools %s\n' "$*" >&2; exit 2; }
+
+valid_spec() { printf '%s' "$1" | grep -Eq '^(npm|uv):@?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?@[0-9][A-Za-z0-9.+-]*$'; }
+kind() { printf '%s' "${1%%:*}"; }
+pkg() { local s="${1#*:}"; printf '%s' "${s%@*}"; }
+ver() { printf '%s' "${1##*@}"; }
+
+# uv itself comes from PyPI into its own venv, pinned like every other tool.
+ensure_uv() {
+  [ -x "$PREFIX/bin/uv" ] && return 0
+  python3 -m venv "$PREFIX/share/fraim-uv" >/dev/null
+  "$PREFIX/share/fraim-uv/bin/pip" install --quiet --disable-pip-version-check "uv==$UV_VERSION"
+  mkdir -p "$PREFIX/bin"
+  ln -sf "$PREFIX/share/fraim-uv/bin/uv" "$PREFIX/bin/uv"
+  ln -sf "$PREFIX/share/fraim-uv/bin/uvx" "$PREFIX/bin/uvx"
+}
+
+install_one() {
+  case "$(kind "$1")" in
+    npm) npm install -g --prefix "$PREFIX" --no-fund --no-audit --no-update-notifier --loglevel=error "$(pkg "$1")@$(ver "$1")" >/dev/null ;;
+    uv)
+      ensure_uv
+      "$PREFIX/bin/uv" tool install --quiet --force --python 3.12 "$(pkg "$1")==$(ver "$1")"
+      ;;
+  esac
+}
+
+remember() {
+  mkdir -p "$(dirname "$LIST")"
+  touch "$LIST"
+  local rest
+  rest="$(grep -v -F -x -e "$1" "$LIST" | awk -F'@' -v k="$(kind "$1"):$(pkg "$1")" '{ s = $0; sub(/@[^@]*$/, "", s); if (s != k) print }' || true)"
+  printf '%s\n%s\n' "$rest" "$1" | sed '/^$/d' > "$LIST.tmp"
+  mv "$LIST.tmp" "$LIST"
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  add)
+    [ $# -gt 0 ] || usage "add npm:PACKAGE@VERSION|uv:PACKAGE@VERSION ..."
+    for spec in "$@"; do valid_spec "$spec" || usage "add: '$spec' is not npm:PACKAGE@VERSION or uv:PACKAGE@VERSION"; done
+    for spec in "$@"; do
+      install_one "$spec" || die "could not install $spec"
+      remember "$spec"
+      say "Installed $spec."
+    done
+    ;;
+  list) [ -s "$LIST" ] && cat "$LIST" || true ;;
+  rm)
+    target="${1:-}"
+    [ -n "$target" ] || usage "rm SPEC|NAME"
+    [ -s "$LIST" ] || die "no tools installed"
+    spec="$(awk -v t="$target" '{ s = $0; sub(/@[^@]*$/, "", s); n = s; sub(/^[a-z]+:/, "", n); b = n; sub(/^.*\//, "", b); if ($0 == t || s == t || n == t || b == t) print; }' "$LIST" | head -1)"
+    [ -n "$spec" ] || die "no tool '$target'; see: fraim-tools list"
+    case "$(kind "$spec")" in
+      npm) npm uninstall -g --prefix "$PREFIX" --loglevel=error "$(pkg "$spec")" >/dev/null || true ;;
+      uv) [ -x "$PREFIX/bin/uv" ] && "$PREFIX/bin/uv" tool uninstall "$(pkg "$spec")" >/dev/null 2>&1 || true ;;
+    esac
+    grep -v -F -x -e "$spec" "$LIST" > "$LIST.tmp" || true
+    mv "$LIST.tmp" "$LIST"
+    say "Removed $spec."
+    ;;
+  sync)
+    [ -s "$LIST" ] || exit 0
+    while IFS= read -r spec; do
+      [ -n "$spec" ] || continue
+      install_one "$spec" || die "could not install $spec"
+    done < "$LIST"
+    say "Installed $(grep -c . "$LIST") tools."
+    ;;
+  *) usage "add SPEC... | list | rm SPEC|NAME | sync" ;;
+esac
