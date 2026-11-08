@@ -195,7 +195,7 @@ ${output:0:3500}$review"
     local reason="exit $code"
     [ "$code" -ne 124 ] || reason="it ran longer than ${FRAIM_GOAL_TIMEOUT:-14400} seconds and was stopped"
     case "$output$(tail -20 "$dir/log.txt" 2>/dev/null)" in
-      *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*)
+      *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*)
         reason="the server is not signed in to Claude" ;;
       *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
         reason="the Claude plan's usage limit was reached" ;;

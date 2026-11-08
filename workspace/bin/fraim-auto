@@ -268,7 +268,7 @@ failure_reason() {
   local code="$1" text="$2" t="$3"
   [ "$code" -ne 124 ] || { echo "it ran longer than $t seconds and was stopped"; return; }
   case "$text" in
-    *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*)
+    *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*)
       echo "the server is not signed in to Claude; ask Claude on your laptop to log the server in" ;;
     *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
       echo "the Claude plan's usage limit was reached; it works again when the limit resets" ;;

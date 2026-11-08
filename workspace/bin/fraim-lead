@@ -259,7 +259,7 @@ cmd_run() {
     local reason="exit $code"
     [ "$code" -ne 124 ] || reason="it ran longer than ${FRAIM_LEAD_TIMEOUT:-1800} seconds"
     case "$output$(tail -20 "$log.err" 2>/dev/null)" in
-      *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*) reason="the server is not signed in to Claude" ;;
+      *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*) reason="the server is not signed in to Claude" ;;
       *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*) reason="the Claude plan's usage limit was reached" ;;
     esac
     printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/last"
