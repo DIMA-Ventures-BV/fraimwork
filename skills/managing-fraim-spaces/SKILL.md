@@ -82,10 +82,15 @@ git, the GitHub API (`$FRAIM_SECRETS_URL/github-api/...`) and the `github-mcp` M
 
 ## An SSH host (a dev box)
 
-1. `$F host add NAME --address HOST --user USER --space S --authorize-via LAPTOP_SSH_ALIAS` when this laptop can already log in to the host (`ssh LAPTOP_SSH_ALIAS` works): fraim installs the space's own key there.
-2. Without `--authorize-via`, it exits 3 with the key line for the user to add to the host's `~/.ssh/authorized_keys`. Then `$F host test NAME --space S`.
+1. `$F host add NAME --like LAPTOP_SSH_ALIAS --space S` when `ssh LAPTOP_SSH_ALIAS` works on this laptop: fraim copies the address, user, port and the host keys this laptop trusts, makes the space its own key and installs it through that alias.
+2. `$F host add NAME --address HOST --user USER --space S [--authorize-via ALIAS]` for a host the laptop has no alias for. Without `--authorize-via`, it exits 3 with the key line for the user to add to the host's `~/.ssh/authorized_keys`. Then `$F host test NAME --space S`.
+3. A Tailscale address (100.64.0.0/10): the tailnet policy keeps fraim servers away from other devices, so `host add` exits 3. Ask the user, then `$F tailscale reach tag:TAG` (or the address); it shows the policy change and waits for `--yes`.
 
-In the space, `ssh NAME`, `rsync` and tools such as mutagen reach the host. `$F host rm NAME --space S --authorize-via ALIAS` revokes it again.
+Production hosts: installing the key changes the host's `authorized_keys`, and the space can then write there. Ask the user before each step. In the space, `ssh NAME`, `rsync` and tools such as mutagen reach the host. `$F host rm NAME --space S --authorize-via ALIAS` revokes it again.
+
+## A whole setup from one file (fraim mirror)
+
+`$F mirror FILE --space S` runs every line of a mirror file (docs/mirror.md): plugins, repos, tools, keys from this laptop, MCP servers and SSH hosts. Lines that are done are skipped, so after a human step run it again. Use `--dry-run` first and `--only KIND,...` for a part. Show the user any `host` lines before a real run.
 
 ## Previews on the phone
 

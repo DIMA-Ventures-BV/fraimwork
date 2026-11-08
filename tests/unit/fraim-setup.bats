@@ -143,6 +143,39 @@ with_ts_key() { printf 'tskey-api-SECRETVALUE' > "$SECURITY_STORE"; }
   [[ "$output" == *"--email"* ]]
 }
 
+# --- tailscale reach -----------------------------------------------------------------
+
+@test "tailscale reach adds one grant from fraim servers and keeps the rest" {
+  with_ts_key
+  echo '{"grants":[{"src":["group:dev"],"dst":["tag:prod"],"ip":["tcp:22"]}]}' > "$TS_POLICY"
+  run "$FRAIM" tailscale reach tag:prod
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"fraim tailscale reach tag:prod --port 22 --yes"* ]]
+  [ ! -e "$CURL_POSTED" ]
+  run "$FRAIM" tailscale reach tag:prod --yes
+  [ "$status" -eq 0 ]
+  jq -e '.grants | length == 2' "$CURL_POSTED"
+  jq -e '.grants[1] == {src: ["tag:fraim"], dst: ["tag:prod"], ip: ["tcp:22"]}' "$CURL_POSTED"
+}
+
+@test "tailscale reach only adds a missing port to an existing grant" {
+  with_ts_key
+  echo '{"grants":[{"src":["tag:fraim"],"dst":["tag:prod"],"ip":["tcp:22"]}]}' > "$TS_POLICY"
+  run "$FRAIM" tailscale reach tag:prod --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already allows"* ]]
+  run "$FRAIM" tailscale reach tag:prod --port 5432 --yes
+  [ "$status" -eq 0 ]
+  jq -e '.grants == [{src: ["tag:fraim"], dst: ["tag:prod"], ip: ["tcp:22", "tcp:5432"]}]' "$CURL_POSTED"
+}
+
+@test "tailscale reach refuses anything but a tag or a tailnet address" {
+  for dst in '*' 'autogroup:member' 8.8.8.8 'tag:prod,tag:x' ''; do
+    run "$FRAIM" tailscale reach "$dst" --yes
+    [ "$status" -eq 2 ] || { echo "accepted: $dst"; return 1; }
+  done
+}
+
 # --- login --full ----------------------------------------------------------------------
 
 @test "login --full reuses a sign-in that is already waiting" {
