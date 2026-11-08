@@ -1,10 +1,14 @@
-FROM python:3.13-slim
+FROM python:3.13.9-slim
 
 # Google (Gmail, Drive, Calendar) as an MCP server that any agent can use: Claude, Codex or
 # another MCP client. The Google tokens live in the google-store volume, which only this
 # container mounts, so the agent's workspace never holds them. See docs/google.md.
-ARG WORKSPACE_MCP_VERSION=2.3.0
-RUN pip install --no-cache-dir "workspace-mcp[disk]==${WORKSPACE_MCP_VERSION}" \
+# Every package is pinned with its hash (requirements.txt, made from requirements.in with
+# `uv pip compile google/requirements.in --generate-hashes --python-version 3.13 --universal
+# -o google/requirements.txt`), so a changed or new upstream release never gets in unseen.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt \
  && useradd --create-home --uid 1000 app \
  && install -d -o app -g app -m 0700 /data/google
 
