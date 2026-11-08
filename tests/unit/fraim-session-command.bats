@@ -13,7 +13,12 @@ setup() {
 case "$1" in
   has-session) [ -z "${NO_SESSION:-}" ] ;;
   capture-pane) cat "$SCREEN" ;;
-  send-keys) shift 3; [ "$1" = -l ] && shift 2; printf '%s\n' "$*" >> "$KEYS" ;;
+  send-keys)
+    shift 3; [ "$1" = -l ] && shift 2; printf '%s\n' "$*" >> "$KEYS"
+    # DIALOG=1: the first Enter opens a "Switch model?" menu, the next Enter closes it.
+    if [ "$*" = Enter ] && [ -n "${DIALOG:-}" ]; then
+      if grep -q 'Switch model' "$SCREEN"; then printf '> \n' > "$SCREEN"; else printf 'Switch model?\n  \xe2\x9d\xaf 1. Yes, switch\n    2. No\n' > "$SCREEN"; fi
+    fi ;;
 esac
 EOF
   cat > "$T/bin/fraim-gateway" <<'EOF'
@@ -40,6 +45,13 @@ EOF
   [ "$status" -eq 2 ]
   run "$CMD" model
   [ "$status" -eq 2 ]
+}
+
+@test "a Switch model? menu gets Yes" {
+  DIALOG=1 run "$CMD" model sonnet
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KEYS")" = "$(printf '/model sonnet\nEnter\nEnter')" ]
+  ! grep -q 'Switch model' "$SCREEN"
 }
 
 @test "compact focus loses newlines and control characters" {

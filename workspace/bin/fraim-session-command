@@ -46,6 +46,15 @@ deliver() {
   tmux send-keys -t "$session" -l -- "$line"
   sleep 0.3
   tmux send-keys -t "$session" Enter
+  # Some commands ask first ("Switch model?" with "1. Yes" selected). The owner already
+  # asked for it, so pick Yes; no menu means the command ran.
+  for _ in 1 2 3 4 5; do
+    sleep 1
+    if screen | grep -Eq '❯ *1\. *Yes'; then
+      tmux send-keys -t "$session" Enter
+      break
+    fi
+  done
   confirm "$chat" "Done: $line"
 }
 
