@@ -1517,15 +1517,21 @@ cmd_host() {
         printf '%s' "$like" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || usage "--like must be a host name from your ~/.ssh/config"
         local cfg
         cfg="$(ssh -G -- "$like" 2>/dev/null)" || die "ssh on this computer does not know host $like"
-        # ssh -G answers for any name; a short name it maps to itself is not in ~/.ssh/config.
-        case "$like" in *.*) ;; *)
-          [ "$(ssh_g_value "$cfg" hostname)" != "$like" ] || die "this computer has no host $like in ~/.ssh/config; add it there (or use --address) and check that 'ssh $like' works"
-        esac
+        # ssh -G answers for any name. Without the config files it gives the defaults; when
+        # both agree, ~/.ssh/config says nothing about this name.
+        local bare g k
+        bare="$(ssh -F /dev/null -G -- "$like" 2>/dev/null || true)"
+        g=""
+        for k in hostname user port hostkeyalias proxyjump; do
+          [ "$(ssh_g_value "$cfg" "$k")" = "$(ssh_g_value "$bare" "$k")" ] || g=1
+        done
+        [ -n "$g" ] || die "this computer has no host $like in ~/.ssh/config; add it there, or use: fraim host add $name --address HOST --user USER"
         address="${address:-$(ssh_g_value "$cfg" hostname)}"
         user="${user:-$(ssh_g_value "$cfg" user)}"
         port="${port:-$(ssh_g_value "$cfg" port)}"
         alias="$(ssh_g_value "$cfg" hostkeyalias)"
-        known="$(laptop_known_hosts "$cfg" "${alias:-$address}" "${port:-22}")"
+        known="$(laptop_known_hosts "$cfg" "$address" "${port:-22}")"
+        [ -n "$known" ] || say "Note: this computer has no known host key for $like, so the space trusts the key it sees first." >&2
         # shellcheck disable=SC2034  # read through flag authorize-via below
         [ -n "$(flag authorize-via)" ] || FLAG_AUTHORIZE_VIA="$like"
       fi
@@ -1586,10 +1592,12 @@ cmd_host() {
 
 # One value from `ssh -G` output (lowercase keys), or nothing.
 ssh_g_value() { printf '%s\n' "$1" | awk -v k="$2" '$1 == k { $1 = ""; sub(/^ /, ""); print; exit }'; }
-# The known_hosts lines this computer has for NAME (and PORT), from the files `ssh -G` lists.
+# The known_hosts lines this computer has for the host, from the files `ssh -G` lists. ssh
+# looks a HostKeyAlias up as it is, without the port; otherwise NAME, or [NAME]:PORT.
 laptop_known_hosts() {  # SSH_G_OUTPUT NAME PORT
   local key="$2" f files
   [ "$3" = 22 ] || key="[$2]:$3"
+  [ -z "$(ssh_g_value "$1" hostkeyalias)" ] || key="$(ssh_g_value "$1" hostkeyalias)"
   files="$(ssh_g_value "$1" userknownhostsfile)"
   for f in $files; do
     f="${f/#\~/$HOME}"
@@ -1771,23 +1779,44 @@ cmd_tool() {
 # from this computer (an environment variable or a file in the home folder) when the line
 # runs. Every line calls the same building block as the command of that kind, and a line
 # that is already done is skipped, so running the file again only does what is missing.
+# A mirror file can be shared, so nothing runs before the user has seen the plan (--yes).
 # See docs/mirror.md.
 MIRROR_KINDS="plugin repo tool env file connect host"
 
+# Home-folder paths a file line may not read here or write there: login keys, and files
+# that control the shell, git, Claude Code or fraim in the space.
+mirror_file_allowed() {
+  case "$1" in
+    .ssh|.ssh/*|.gnupg|.gnupg/*|.claude|.claude/*|.claude.json|.config/fraim|.config/fraim/*) return 1 ;;
+    .config/git|.config/git/*|.gitconfig|.local/bin|.local/bin/*) return 1 ;;
+    .bashrc|.bash_profile|.bash_login|.profile|.zshrc|.zshenv|.zprofile|.zlogin|.inputrc) return 1 ;;
+  esac
+}
+
 # mirror_check KIND ARGS...: exit 0 when the line is well formed.
 mirror_check() {
-  local kind="$1"; shift
+  local kind="$1" a; shift
+  # No word may look like an option: the words reach the building blocks as arguments.
+  for a in "$@"; do case "$a" in -*) return 1 ;; esac; done
   case "$kind" in
     plugin) [ $# -eq 2 ] && printf '%s' "$1" | grep -Eq '^https://[^[:space:]]+$' && printf '%s' "$2" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' ;;
     repo) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ;;
-    tool) [ $# -ge 1 ] && printf '%s\n' "$@" | grep -Evq '^(npm|uv):@?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?@[0-9][A-Za-z0-9.+-]*$' && return 1; [ $# -ge 1 ] ;;
+    tool) [ $# -ge 1 ] && ! printf '%s\n' "$@" | grep -Evq '^(npm|uv):@?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?@[0-9][A-Za-z0-9.+-]*$' ;;
     env) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' ;;
-    file) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' && case "/$1/" in */../*|*/./*) false ;; *) true ;; esac ;;
+    file)
+      [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
+      case "/$1/" in */../*|*/./*) return 1 ;; esac
+      mirror_file_allowed "$1"
+      ;;
     connect)
-      [ $# -ge 3 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "$2" | grep -Eq '^https://[^[:space:]]+$' || return 1
+      [ $# -ge 3 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "$2" | grep -Eq '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^[:space:]]*)?$' || return 1
       case "$3" in
         oauth) [ $# -eq 3 ] ;;
-        key) [ $# -ge 4 ] && [ $# -le 6 ] && printf '%s' "$4" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' ;;
+        key)
+          [ $# -ge 4 ] && [ $# -le 6 ] && printf '%s' "$4" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' || return 1
+          [ -z "${5:-}" ] || printf '%s' "$5" | grep -Eq '^[A-Za-z][A-Za-z0-9-]{0,63}$' || return 1
+          [ -z "${6:-}" ] || { printf '%s' "$6" | grep -Eq '^[^[:space:]]{1,64}$' && case "$6" in *%s*) true ;; *) false ;; esac; }
+          ;;
         *) false ;;
       esac
       ;;
@@ -1796,45 +1825,71 @@ mirror_check() {
   esac
 }
 
-# mirror_step KIND ARGS...: runs one line. Prints one status line; exit 0 done, 4 skipped,
-# 3 a human step (its text on stdout), anything else failed.
+# mirror_plan KIND ARGS...: one line saying what the line does and where keys go.
+mirror_plan() {
+  local kind="$1"; shift
+  case "$kind" in
+    plugin) say "plugin  install $2 from $1 (its skills, hooks and MCP servers run in the space)" ;;
+    repo) say "repo    clone or fetch $1" ;;
+    tool) say "tool    install $*" ;;
+    env) say "env     copy \$$1 from this computer into the space (Claude there can read it)" ;;
+    file) say "file    copy ~/$1 from this computer into the space (Claude there can read it)" ;;
+    connect)
+      if [ "$3" = oauth ]; then say "connect add MCP server $1 ($2) and sign in to it"
+      else say "connect add MCP server $1: the key in \$$4 goes to $(printf '%s' "$2" | sed -E 's#^https://([^/:]+).*#\1#') with every request"; fi
+      ;;
+    host) say "host    give the space SSH access to ${2:-$1} as this computer reaches it (adds a key to its authorized_keys)" ;;
+  esac
+}
+
+# A value with something other than white space in it.
+mirror_has_value() { [ -n "$(printf '%s' "$1" | tr -d '[:space:]')" ]; }
+
+# mirror_step KIND ARGS...: runs one line, in a subshell with set -e. Exit 0 done, 4 skipped
+# (the last output line says why), 3 a human step, anything else failed.
 mirror_step() {
   local kind="$1"; shift
   # Flags of `fraim mirror` itself must not reach the building blocks.
   unset "${!FLAG_@}"
   case "$kind" in
     plugin)
-      workspace_ssh "claude plugin marketplace add $(printf '%q' "$1") >/dev/null 2>&1; claude plugin install $(printf '%q' "$2")" < /dev/null >/dev/null
+      grep -qxF "$2" <<<"$MIRROR_PLUGINS" && { echo "installed"; return 4; }
+      workspace_ssh "claude plugin marketplace add $(printf '%q' "$1") >/dev/null 2>&1; claude plugin install $(printf '%q' "$2")" < /dev/null
       ;;
-    repo) cmd_repo add "$1" < /dev/null >/dev/null ;;
+    repo) cmd_repo add "$1" < /dev/null ;;
     tool)
       local spec missing=()
       for spec in "$@"; do grep -qxF "$spec" <<<"$MIRROR_TOOLS" || missing+=("$spec"); done
-      [ "${#missing[@]}" -gt 0 ] || return 4
-      cmd_tool add "${missing[@]}" < /dev/null >/dev/null
+      [ "${#missing[@]}" -gt 0 ] || { echo "installed"; return 4; }
+      cmd_tool add "${missing[@]}" < /dev/null
       ;;
     env)
-      [ -n "${!1:-}" ] || { printf 'not set on this computer\n'; return 4; }
-      printenv "$1" | workspace_ssh "fraim-env set $(printf '%q' "$1")" >/dev/null
+      mirror_has_value "${!1:-}" || { echo "not set on this computer"; return 4; }
+      local out
+      out="$(printenv "$1" | workspace_ssh "fraim-env set $(printf '%q' "$1")")"
+      case "$out" in Unchanged*) echo "unchanged"; return 4 ;; esac
       ;;
     file)
-      [ -s "$HOME/$1" ] || { printf 'not on this computer\n'; return 4; }
-      workspace_ssh "fraim-env file $(printf '%q' "$1")" < "$HOME/$1" >/dev/null
+      [ -s "$HOME/$1" ] || { echo "not on this computer"; return 4; }
+      local out
+      out="$(workspace_ssh "fraim-env file $(printf '%q' "$1")" < "$HOME/$1")"
+      case "$out" in Unchanged*) echo "unchanged"; return 4 ;; esac
       ;;
     connect)
       if [ "$3" = oauth ]; then
-        grep -qxF "$1" <<<"$MIRROR_CONNECTED" && return 4
+        grep -qxF "$1" <<<"$MIRROR_SIGNED_IN" && { echo "signed in"; return 4; }
         cmd_connect "$1" --url "$2" --oauth < /dev/null
         return
       fi
-      [ -n "${!4:-}" ] || { printf 'key %s not set on this computer\n' "$4"; return 4; }
+      grep -qxF "$1" <<<"$MIRROR_CONNECTED" && { echo "connected; a new key: fraim connect $1 --url $2 --key"; return 4; }
+      mirror_has_value "${!4:-}" || { echo "key $4 not set on this computer"; return 4; }
       local extra=()
       [ -z "${5:-}" ] || extra+=(--header "$5")
       [ -z "${6:-}" ] || extra+=(--format "$6")
-      printenv "$4" | cmd_connect "$1" --url "$2" --key --stdin ${extra[@]+"${extra[@]}"} >/dev/null
+      printenv "$4" | cmd_connect "$1" --url "$2" --key --stdin ${extra[@]+"${extra[@]}"}
       ;;
     host)
-      workspace_ssh "fraim-hosts test $(printf '%q' "$1")" < /dev/null >/dev/null 2>&1 && return 4
+      workspace_ssh "fraim-hosts test $(printf '%q' "$1")" < /dev/null >/dev/null 2>&1 && { echo "reachable"; return 4; }
       cmd_host add "$1" --like "${2:-$1}" < /dev/null
       ;;
   esac
@@ -1843,7 +1898,7 @@ mirror_step() {
 cmd_mirror() {
   parse_flags "$@"
   local file="${POSITIONAL[0]:-}"
-  local usage_line="fraim mirror FILE [--only KIND,KIND...] [--dry-run]   (kinds: $MIRROR_KINDS)"
+  local usage_line="fraim mirror FILE [--only KIND,KIND...] [--dry-run] [--yes]   (kinds: $MIRROR_KINDS)"
   [ -n "$file" ] || usage "$usage_line"
   [ -f "$file" ] || usage "no mirror file $file"
   local only k
@@ -1862,7 +1917,7 @@ cmd_mirror() {
     if mirror_check "${words[@]}"; then lines+=("${words[*]}"); else bad="$bad
   line $n: ${words[*]}"; fi
   done < "$file"
-  [ -z "$bad" ] || usage "these lines in $file are not valid (see docs/mirror.md):$bad"
+  [ -z "$bad" ] || usage "these lines in $file are not valid (see docs/mirror.md; no option-like words, no ~/.ssh, ~/.claude or shell files):$bad"
   # ${a[@]+"${a[@]}"}: an empty array under set -u on macOS's bash 3.2.
   local selected=() line
   for line in ${lines[@]+"${lines[@]}"}; do
@@ -1870,25 +1925,40 @@ cmd_mirror() {
     [ -z "$only" ] || case ",$only," in *",$k,"*) ;; *) continue ;; esac
     selected+=("$line")
   done
-  if [ -n "$(flag dry-run)" ]; then
-    for line in ${selected[@]+"${selected[@]}"}; do say "would run: $line"; done
-    return
+  [ "${#selected[@]}" -gt 0 ] || { say "Nothing to do."; return; }
+  if [ -n "$(flag dry-run)" ] || [ -z "$(flag yes)" ]; then
+    for line in "${selected[@]}"; do
+      read -r -a words <<<"$line"
+      mirror_plan "${words[@]}"
+    done
+    [ -n "$(flag dry-run)" ] && return
+    human "Show the user the plan above (a mirror file can come from someone else: check where each key goes, and every host line). On yes, Claude runs: fraim mirror $file --yes${only:+ --only $only}$(space_hint)"
   fi
   load_config
-  [ "${#selected[@]}" -gt 0 ] || { say "Nothing to do."; return; }
   MIRROR_TOOLS="$(workspace_ssh 'fraim-tools list' < /dev/null 2>/dev/null || true)"
   MIRROR_CONNECTED="$(workspace_ssh 'fraim-connect list --json' < /dev/null 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
-  local out rc done=0 skipped=0 failed=0 steps="" reload=""
-  for line in "${selected[@]}"; do  # not empty: checked above
+  MIRROR_SIGNED_IN=""
+  case " ${selected[*]} " in *" oauth "*)
+    MIRROR_SIGNED_IN="$(workspace_ssh 'fraim-connect list' < /dev/null 2>/dev/null | sed -n 's/^\([a-z][a-z0-9-]*\): .* Connected$/\1/p' || true)" ;;
+  esac
+  MIRROR_PLUGINS="$(workspace_ssh 'jq -r ".plugins // {} | keys[]" ~/.claude/plugins/installed_plugins.json' < /dev/null 2>/dev/null || true)"
+  local out rc tmp done=0 skipped=0 failed=0 steps="" reload=""
+  tmp="$(mktemp)"
+  for line in "${selected[@]}"; do
     read -r -a words <<<"$line"
-    rc=0
-    out="$(mirror_step "${words[@]}" 2>&1)" || rc=$?
+    # A subshell with set -e, not inside `||` or `if`: there bash ignores set -e, and a
+    # failed step would carry on and count as done.
+    set +e
+    (set -e; mirror_step "${words[@]}") > "$tmp" 2>&1
+    rc=$?
+    set -e
+    out="$(cat "$tmp")"
     case "$rc" in
       0)
         done=$((done + 1)); say "done    $line"
         case "${words[0]}" in env|plugin) reload=1 ;; esac
         ;;
-      4) skipped=$((skipped + 1)); say "skip    $line${out:+ ($(printf '%s' "$out" | tail -1))}" ;;
+      4) skipped=$((skipped + 1)); say "skip    $line${out:+ ($(printf '%s\n' "$out" | tail -1))}" ;;
       3)
         say "waiting $line"
         steps="$steps
@@ -1900,9 +1970,11 @@ cmd_mirror() {
         ;;
     esac
   done
+  rm -f "$tmp"
+  # Only when something changed: a reload restarts the space's Claude session.
   [ -z "$reload" ] || workspace_ssh 'fraim-connect reload >/dev/null' < /dev/null || true
   say "Space $FRAIM_SPACE: $done done, $skipped skipped, $failed failed."
-  [ -z "$steps" ] || human "Some lines need the user (run fraim mirror $file again afterwards; done lines are skipped):$steps"
+  [ -z "$steps" ] || human "Some lines need the user (run fraim mirror $file --yes again afterwards; done lines are skipped):$steps"
   [ "$failed" -eq 0 ] || exit 1
 }
 
@@ -2510,7 +2582,7 @@ Operate
   fraim secret file PATH [--stdin]           credentials file at ~/PATH in the workspace
                                              (env and file keys are readable by Claude, as on a laptop)
   fraim tool add npm:PKG@VER|uv:PKG@VER ... | list | rm NAME   extra command-line tools for the space
-  fraim mirror FILE [--only KIND,...] [--dry-run]   set up the space from a mirror file (docs/mirror.md)
+  fraim mirror FILE [--yes] [--only KIND,...] [--dry-run]   set up the space from a mirror file (docs/mirror.md)
   fraim shell [NAME]                         humans only: attach to the Claude tmux session
 
 Spaces: separate fraims on one server (own Claude, browser, keys, files). Every command
