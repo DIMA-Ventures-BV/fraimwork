@@ -68,6 +68,7 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 | Background goal (a longer task; result on WhatsApp) | `$F goal "TASK"`, `$F goal list`, `$F goal show g1`, `$F goal stop g1`. On WhatsApp the owner types `goal: TASK`, `goals`, `stop g1`. Tools: `~/fraim/goals/tools` on the server (default Read, Glob, Grep, Edit, Write, WebSearch, Bash; edits are accepted, other tools are refused) |
 | File sync GUI | `$F sync --print-url`; `$F sync stop` after |
 | Claude config | `$F config status` (see managing-fraim-config) |
+| Open the user's workspace (macOS) | `<checkout>/bin/fraim-desktop open`; `fraim-desktop install` first when cmux is missing, `fraim-desktop dock` after the server changed |
 
 ## Make a job
 

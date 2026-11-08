@@ -139,6 +139,17 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 3. `$F config status` here and `$F exec -- fraim-config status` on the server. Both must show their role linked.
    With sync, the fingerprints must match once sync has run. Without sync (and in a Mac trial) they match right after setup but are independent copies: a later change on one side does not reach the other.
 
+## Workspace (macOS, no user input)
+
+Gives the user a ready cmux window: their server's Claude on the left, a Dock with server status and the server browser on the right.
+cmux is installed unmodified; `fraim-desktop` never changes the user's own cmux settings, only Dock controls whose id starts with `fraim-`.
+
+1. Run `<checkout>/bin/fraim-desktop install`. Exit 3: pass the HUMAN STEP on in plain words, wait, run it again. Exit 1 naming `dock.json is not plain JSON`: ask the user before you touch that file.
+2. Run `<checkout>/bin/fraim-desktop open`.
+3. Tell the user in one line: "Your workspace is open in cmux. Talk to your server's Claude on the left; the right panel shows your server."
+
+Skip this stage on Linux and Windows. Run it again after a move to a new server, so the Dock points at the new one.
+
 ## Finish
 
 Report, in this order:

@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# jq filters are single-quoted on purpose.
+# shellcheck disable=SC2016
+# fraim-desktop: a ready fraim workspace on top of stock cmux. Built to be run by Claude.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FRAIM_BIN="${FRAIM_BIN:-$REPO/bin/fraim}"
+CMUX_DIR="$HOME/.config/cmux"
+DOCK="$CMUX_DIR/dock.json"
+CMUX_APP="${FRAIM_CMUX_APP:-/Applications/cmux.app}"
+CMUX="${FRAIM_CMUX_BIN:-$CMUX_APP/Contents/Resources/bin/cmux}"
+WORKSPACE_NAME="fraim"
+WORKSPACE_DIR="$HOME/fraim"
+
+usage() {
+  cat <<'EOF'
+fraim-desktop: a ready fraim workspace on top of stock cmux. Built to be run by Claude.
+
+Conventions: never prompts; exit codes 0 ok, 1 failure, 2 usage, 3 human step needed.
+cmux is GPL-3.0 and installed unmodified. Your own cmux settings are never changed.
+
+  fraim-desktop install     get stock cmux (Homebrew) and add the fraim Dock controls
+  fraim-desktop dock        add the fraim controls to the cmux Dock (~/.config/cmux/dock.json)
+  fraim-desktop open        open (or switch to) the fraim workspace in cmux
+  fraim-desktop uninstall   remove the fraim controls; your own Dock controls stay
+EOF
+}
+
+die() { printf 'fraim-desktop: %s\n' "$*" >&2; exit 1; }
+
+need_jq() { command -v jq >/dev/null || die "jq is missing. Install it with: brew install jq"; }
+
+# Single-quoted for the shell that runs the Dock command. The replacement goes
+# through a variable: bash 3.2 mangles a quoted replacement written inline.
+shell_quote() { local q="'\\''"; printf "'%s'" "${1//\'/$q}"; }
+
+dock_controls() {
+  local fraim url
+  fraim="$(shell_quote "$FRAIM_BIN")"
+  # --url-only opens no tunnel and never prints the VNC password.
+  url="$("$FRAIM_BIN" browser --url-only 2>/dev/null </dev/null)" || url=""
+  url="${url%%$'\n'*}"
+  case "$url" in http://*|https://*) ;; *) url="" ;; esac
+  jq -n --arg fraim "$fraim" --arg url "$url" '
+    [ {id: "fraim-agent", title: "Agent", command: ($fraim + " shell")},
+      {id: "fraim-status", title: "Server",
+       command: ("while :; do clear; " + $fraim + " status; sleep 60; done")} ]
+    + (if $url == "" then []
+       else [{id: "fraim-browser", title: "Server browser", type: "browser", url: $url, chrome: false}] end)'
+}
+
+# write_dock FILTER [ARGS...]: apply a jq filter to dock.json, keeping a backup.
+write_dock() {
+  local current='{}' tmp
+  if [ -e "$DOCK" ]; then
+    jq -e 'type == "object"' "$DOCK" >/dev/null 2>&1 \
+      || die "$DOCK: dock.json is not plain JSON (comments or a typo). Fix or remove it, then run this again."
+    current="$(cat "$DOCK")"
+    cp "$DOCK" "$DOCK.fraim-backup"
+  fi
+  mkdir -p "$CMUX_DIR"
+  tmp="$(mktemp "$CMUX_DIR/.dock.json.XXXXXX")"
+  printf '%s\n' "$current" | jq "$@" > "$tmp" || { rm -f "$tmp"; die "could not update $DOCK"; }
+  # Write through the file: a dotfiles symlink stays a link and the mode stays the same.
+  cat "$tmp" > "$DOCK"
+  rm -f "$tmp"
+}
+
+cmd_dock() {
+  need_jq
+  local ours
+  ours="$(dock_controls)"
+  write_dock --argjson ours "$ours" \
+    '.controls = ([.controls[]? | select((.id // "") | startswith("fraim-") | not)] + $ours)'
+  echo "fraim controls added to the cmux Dock"
+}
+
+cmd_install() {
+  need_jq
+  if [ -d "$CMUX_APP" ]; then
+    echo "cmux is already installed"
+  elif command -v brew >/dev/null; then
+    echo "installing cmux with Homebrew"
+    NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask cmux </dev/null >&2 \
+      || die "Homebrew could not install cmux. Run: brew install --cask cmux"
+    [ -d "$CMUX_APP" ] || die "Homebrew finished but $CMUX_APP is missing"
+  else
+    echo "HUMAN STEP: download cmux from https://cmux.com, drag it into Applications, open it once, then say done."
+    exit 3
+  fi
+  cmd_dock
+}
+
+cmux_q() { CMUX_QUIET=1 "$CMUX" "$@" </dev/null; }
+
+cmd_open() {
+  need_jq
+  [ -x "$CMUX" ] || die "cmux is not installed. Run: fraim-desktop install"
+  mkdir -p "$WORKSPACE_DIR"
+  # cmux only takes commands from its own terminals by default. From anywhere
+  # else, or when it is not running, open the folder; the Dock has the agent.
+  if ! cmux_q ping >/dev/null 2>&1; then
+    open -a "$CMUX_APP" "$WORKSPACE_DIR" || die "could not start cmux"
+    echo "opened cmux on $WORKSPACE_DIR; the Agent tab in the right panel talks to your server"
+    return 0
+  fi
+  local ref
+  ref="$(cmux_q workspace list --json 2>/dev/null \
+    | jq -r --arg n "$WORKSPACE_NAME" '[.workspaces[]? | select(.custom_title == $n or .title == $n)][0].ref // empty')" || ref=""
+  if [ -n "$ref" ]; then
+    cmux_q select-workspace --workspace "$ref" >/dev/null || die "could not switch to the fraim workspace"
+    echo "switched to the fraim workspace"
+    return 0
+  fi
+  cmux_q new-workspace --name "$WORKSPACE_NAME" --cwd "$WORKSPACE_DIR" \
+    --command "$(shell_quote "$FRAIM_BIN") shell" >/dev/null || die "could not open the fraim workspace"
+  echo "opened the fraim workspace"
+}
+
+cmd_uninstall() {
+  need_jq
+  [ -e "$DOCK" ] || { echo "nothing to remove"; return 0; }
+  write_dock '.controls = [.controls[]? | select((.id // "") | startswith("fraim-") | not)]'
+  if jq -e '.controls == [] and (keys - ["controls"]) == []' "$DOCK" >/dev/null; then
+    rm -f "$DOCK"
+  fi
+  echo "fraim controls removed from the cmux Dock"
+}
+
+case "${1:-help}" in
+  install) cmd_install ;;
+  dock) cmd_dock ;;
+  open) cmd_open ;;
+  uninstall) cmd_uninstall ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
