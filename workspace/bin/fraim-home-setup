@@ -23,7 +23,8 @@ done
 settings="$home/.claude/settings.json"
 if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 2>&1; then
   tmp="$(mktemp)"
-  jq 'if .permissions.allow then .permissions.allow |= map(select(. != "WebFetch")) else . end' "$settings" > "$tmp" \
+  # Background goals (fraim-goal) are started without a prompt, also in older homes.
+  jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch")) | if index("Bash(fraim-goal:*)") then . else . + ["Bash(fraim-goal:*)"] end) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
   rm -f "$tmp"
 fi

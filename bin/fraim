@@ -1764,6 +1764,20 @@ cmd_ask() {
   workspace_ssh "$remote"
 }
 
+cmd_goal() {
+  load_config
+  local action="${1:-}"
+  case "$action" in
+    list|"") workspace_ssh "fraim-goal list" ;;
+    show|stop)
+      [ -n "${2:-}" ] || usage "fraim goal $action ID"
+      workspace_ssh "fraim-goal $action $(printf '%q' "$2")" ;;
+    *)
+      server_logged_in || need_login_step
+      workspace_ssh "fraim-goal start -- $(printf '%q' "$*")" ;;
+  esac
+}
+
 cmd_shell() {
   load_config
   is_tty || usage "fraim shell is interactive and for humans; use 'fraim exec' or 'fraim ask' instead"
@@ -2191,6 +2205,7 @@ Operate
   fraim status [--json]                      services and health checks
   fraim login [--token-stdin]                store a Claude login token on the server
   fraim ask "PROMPT" [--allow TOOLS] [--json]  one-off claude -p run on the server
+  fraim goal "TASK" | list | show ID | stop ID  background task on the server; result on WhatsApp
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
   fraim whatsapp status|link [--number N]|relink|test
   fraim browser [--print-url] | stop         server browser view URL and VNC password
@@ -2288,6 +2303,7 @@ main() {
     tailscale) cmd_tailscale "$@" ;;
     exec) cmd_exec "$@" ;;
     ask) cmd_ask "$@" ;;
+    goal) cmd_goal "$@" ;;
     shell) cmd_shell "$@" ;;
     chrome) cmd_chrome "$@" ;;
     browser) cmd_browser "$@" ;;

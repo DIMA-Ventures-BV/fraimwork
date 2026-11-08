@@ -12,7 +12,8 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(fraim-notify:*)",
-      "Bash(fraim-doctor:*)"
+      "Bash(fraim-doctor:*)",
+      "Bash(fraim-goal:*)"
     ]
   }
 }

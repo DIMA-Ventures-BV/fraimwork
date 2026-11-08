@@ -1,6 +1,6 @@
 ---
 name: operating-fraim
-description: Run an existing fraimwork setup for the user with the fraim CLI - check health, read logs, restart, update, run something on the server, ask the server's Claude, open the server browser, lend laptop Chrome, check WhatsApp and file sync, switch between local and server. Use when the user says "is my server up", "restart fraim", "update fraim", "what is the server doing", "ask my server to ...", "open the server browser", "WhatsApp stopped working", "move fraim to a new server", "remove fraim", "a fraimwork update is available", or anything about a running fraim. The user never types fraim; you run it. Do NOT use for first-time setup (use setting-up-fraim), for adding skills shared by every machine (use managing-fraim-config), or for spaces, repos, hosts, MCP servers per space, full login and previews (use managing-fraim-spaces).
+description: Run an existing fraimwork setup for the user with the fraim CLI - check health, read logs, restart, update, run something on the server, ask the server's Claude, open the server browser, lend laptop Chrome, check WhatsApp and file sync, switch between local and server. Use when the user says "is my server up", "restart fraim", "update fraim", "what is the server doing", "ask my server to ...", "start a goal on my server", "open the server browser", "WhatsApp stopped working", "move fraim to a new server", "remove fraim", "a fraimwork update is available", or anything about a running fraim. The user never types fraim; you run it. Do NOT use for first-time setup (use setting-up-fraim), for adding skills shared by every machine (use managing-fraim-config), or for spaces, repos, hosts, MCP servers per space, full login and previews (use managing-fraim-spaces).
 ---
 
 # Operating fraim
@@ -65,6 +65,7 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 | Server browser for the user | `$F browser --print-url`. Line 1 is the URL (its port can differ from 6080: fraim picks a free one), line 2 the VNC password. Give the user both lines. The tunnel stays open until `$F browser stop`; run that when the user is done |
 | Lend laptop Chrome to the server | `$F chrome start`, `$F chrome status`, `$F chrome stop` when the job is done |
 | WhatsApp | `$F whatsapp status`, `$F whatsapp test` |
+| Background goal (a longer task; result on WhatsApp) | `$F goal "TASK"`, `$F goal list`, `$F goal show g1`, `$F goal stop g1`. On WhatsApp the owner types `goal: TASK`, `goals`, `stop g1`. Tools: `~/fraim/goals/tools` on the server (default Read, Glob, Grep, Edit, Write, WebSearch, Bash; edits are accepted, other tools are refused) |
 | File sync GUI | `$F sync --print-url`; `$F sync stop` after |
 | Claude config | `$F config status` (see managing-fraim-config) |
 

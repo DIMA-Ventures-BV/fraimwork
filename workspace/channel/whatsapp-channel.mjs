@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Claude Code channel: forwards WhatsApp messages from the fraim gateway into the
 // Claude session, exposes reply tools, and relays permission prompts to the owner.
+import { execFile } from 'node:child_process'
 import { readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -8,6 +9,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { goalArgs, parseGoalCommand } from './goal-command.mjs'
 import { parseVerdict } from './verdict.mjs'
 
 function loadEnvFile(file) {
@@ -70,6 +72,8 @@ const mcp = new Server(
       'Files the sender attaches are saved under ~/fraim/inbox; the message text names the path.',
       `If a website needs a login, ask the sender to log in at ${VIEW_URL} and wait. Never ask for passwords or codes.`,
       'For long tasks, first reply that you started, then reply again with the result.',
+      'For a task that takes more than a few minutes, run it as a background goal: fraim-goal start --chat <chat_id> -- "<the task>".',
+      'It prints the goal id; reply with it. The goal sends its own result. The owner can also type "goal: <task>", "goals" and "stop g1".',
     ].join(' '),
   },
 )
@@ -150,11 +154,37 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   }
 })
 
+function runGoal(args) {
+  return new Promise((resolve) => {
+    execFile('fraim-goal', args, { timeout: 30000 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err?.message || '').trim() })
+    })
+  })
+}
+
+async function handleGoalCommand(command, event) {
+  const result = await runGoal(goalArgs(command, event.chat_id))
+  let text
+  if (command.action === 'start') {
+    text = result.ok
+      ? `Goal *${result.out}* started. I send the result here when it is done. Stop it with: stop ${result.out}`
+      : `The goal could not start: ${result.err}`
+  } else {
+    text = result.ok ? result.out || 'Done.' : result.err || 'That did not work.'
+  }
+  await gateway('/send', { chat_id: event.chat_id, text })
+}
+
 async function handleEvent(event) {
   if (event.type !== 'message') return
   const verdict = parseVerdict(event, OWNER)
   if (verdict) {
     await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
+    return
+  }
+  const goal = parseGoalCommand(event, OWNER)
+  if (goal) {
+    await handleGoalCommand(goal, event)
     return
   }
   await mcp.notification({
