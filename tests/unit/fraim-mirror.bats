@@ -46,6 +46,15 @@ esac'
   [[ "$output" == *"fraim tailscale reach"* ]]
 }
 
+@test "host add --like stops before touching the space when this computer has no such alias" {
+  ssh_handler '
+if [ "$1" = -G ]; then printf "user someone\nhostname prod-app\nport 22\n"; exit 0; fi'
+  run "$FRAIM" host add prod-app --like prod-app
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no host prod-app in ~/.ssh/config"* ]]
+  ! grep -q fraim-hosts "$SSH_LOG"
+}
+
 @test "host add --like refuses an alias that looks like an option" {
   run "$FRAIM" host add prod-app --like=-oProxyCommand=x
   [ "$status" -eq 2 ]
@@ -81,6 +90,32 @@ esac'
   [[ "$output" == *"line 3: env lower_case"* ]]
   [[ "$output" == *"line 4: connect x http://insecure.example key K"* ]]
   [ ! -s "$SSH_LOG" ]
+}
+
+@test "mirror reads a file with Windows line endings" {
+  printf 'repo acme/app\r\ntool npm:left-pad@1.3.0 \r\n' > "$MIRROR"
+  run "$FRAIM" mirror "$MIRROR" --dry-run
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'would run: repo acme/app\nwould run: tool npm:left-pad@1.3.0')" ]
+}
+
+@test "mirror works on macOS's own bash 3.2 with an empty file and an empty selection" {
+  [ -x /bin/bash ] && /bin/bash -c '[ "${BASH_VERSINFO[0]}" -lt 4 ]' || skip "no bash 3 here"
+  printf '# only comments\n' > "$MIRROR"
+  run /bin/bash "$FRAIM" mirror "$MIRROR" --dry-run
+  [ "$status" -eq 0 ]
+  printf 'repo acme/app\n' > "$MIRROR"
+  run /bin/bash "$FRAIM" mirror "$MIRROR" --only connect
+  [ "$status" -eq 0 ]
+  [ "$output" = "Nothing to do." ]
+  ssh_handler '
+case "$REMOTE" in
+  "fraim-connect list --json") echo "[]" ;;
+esac'
+  printf 'connect posthog https://mcp.example.com/mcp key PH_KEY\n' > "$MIRROR"
+  PH_KEY=ph-SECRET run /bin/bash "$FRAIM" mirror "$MIRROR"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"done    connect posthog"* ]]
 }
 
 @test "mirror --dry-run lists the lines of the chosen kinds only" {

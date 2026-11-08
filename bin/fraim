@@ -1517,6 +1517,10 @@ cmd_host() {
         printf '%s' "$like" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || usage "--like must be a host name from your ~/.ssh/config"
         local cfg
         cfg="$(ssh -G -- "$like" 2>/dev/null)" || die "ssh on this computer does not know host $like"
+        # ssh -G answers for any name; a short name it maps to itself is not in ~/.ssh/config.
+        case "$like" in *.*) ;; *)
+          [ "$(ssh_g_value "$cfg" hostname)" != "$like" ] || die "this computer has no host $like in ~/.ssh/config; add it there (or use --address) and check that 'ssh $like' works"
+        esac
         address="${address:-$(ssh_g_value "$cfg" hostname)}"
         user="${user:-$(ssh_g_value "$cfg" user)}"
         port="${port:-$(ssh_g_value "$cfg" port)}"
@@ -1827,7 +1831,7 @@ mirror_step() {
       local extra=()
       [ -z "${5:-}" ] || extra+=(--header "$5")
       [ -z "${6:-}" ] || extra+=(--format "$6")
-      printenv "$4" | cmd_connect "$1" --url "$2" --key --stdin "${extra[@]}" >/dev/null
+      printenv "$4" | cmd_connect "$1" --url "$2" --key --stdin ${extra[@]+"${extra[@]}"} >/dev/null
       ;;
     host)
       workspace_ssh "fraim-hosts test $(printf '%q' "$1")" < /dev/null >/dev/null 2>&1 && return 4
@@ -1851,6 +1855,7 @@ cmd_mirror() {
   local lines=() raw n=0 bad="" words
   while IFS= read -r raw || [ -n "$raw" ]; do
     n=$((n + 1))
+    raw="${raw//$'\r'/}"
     raw="${raw%%#*}"
     read -r -a words <<<"$raw" || true
     [ "${#words[@]}" -gt 0 ] || continue
@@ -1858,14 +1863,15 @@ cmd_mirror() {
   line $n: ${words[*]}"; fi
   done < "$file"
   [ -z "$bad" ] || usage "these lines in $file are not valid (see docs/mirror.md):$bad"
+  # ${a[@]+"${a[@]}"}: an empty array under set -u on macOS's bash 3.2.
   local selected=() line
-  for line in "${lines[@]}"; do
+  for line in ${lines[@]+"${lines[@]}"}; do
     k="${line%% *}"
     [ -z "$only" ] || case ",$only," in *",$k,"*) ;; *) continue ;; esac
     selected+=("$line")
   done
   if [ -n "$(flag dry-run)" ]; then
-    for line in "${selected[@]}"; do say "would run: $line"; done
+    for line in ${selected[@]+"${selected[@]}"}; do say "would run: $line"; done
     return
   fi
   load_config
@@ -1873,7 +1879,7 @@ cmd_mirror() {
   MIRROR_TOOLS="$(workspace_ssh 'fraim-tools list' < /dev/null 2>/dev/null || true)"
   MIRROR_CONNECTED="$(workspace_ssh 'fraim-connect list --json' < /dev/null 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
   local out rc done=0 skipped=0 failed=0 steps="" reload=""
-  for line in "${selected[@]}"; do
+  for line in "${selected[@]}"; do  # not empty: checked above
     read -r -a words <<<"$line"
     rc=0
     out="$(mirror_step "${words[@]}" 2>&1)" || rc=$?
