@@ -27,14 +27,17 @@ check "claude-token-not-expiring" token_fresh
 check "disk-below-90-percent" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
 # The interactive session lives in the workspace container; the scheduler cannot see it.
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "claude-session-running" pgrep -x claude
-# Failed last run of a job that still exists. State of deleted jobs is removed.
+# An automation that failed or was blocked on its last run, or was paused after failures.
+# State of deleted automations (and of old-style jobs) is removed.
 jobs_ok() {
-  local f name failed=0
-  for f in "$HOME"/.local/state/fraim/jobs/*; do
-    [ -f "$f" ] || continue
-    name="$(basename "$f")"
-    if [ ! -f "$HOME/fraim/jobs/$name.md" ]; then rm -f "$f"; continue; fi
-    grep -q '^failed' "$f" && failed=1
+  local d name failed=0
+  rm -rf "$HOME/.local/state/fraim/jobs"
+  for d in "$HOME"/.local/state/fraim/automations/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    if [ ! -f "$HOME/fraim/automations/$name/automation.md" ]; then rm -rf "$d"; continue; fi
+    grep -qE '^(failed|blocked)' "$d/last_status" 2>/dev/null && failed=1
+    grep -q '^after' "$d/paused" 2>/dev/null && failed=1
   done
   [ "$failed" = 0 ]
 }

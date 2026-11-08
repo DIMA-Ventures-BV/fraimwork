@@ -1,6 +1,6 @@
 ---
 name: running-the-fraim-server
-description: How to be the owner's fraim server - check your own health, send the owner a message or a file, add, change or debug a scheduled job, find files, and handle a job that failed. Use when the owner asks over WhatsApp, the phone app or the terminal "are you ok", "send me that file", "remind me every morning", "run this every Monday", "why didn't my job run", "what's in my inbox", or when a scheduled job of yours failed. Do NOT use on the owner's laptop (there, use operating-fraim).
+description: How to be the owner's fraim server - check your own health, send the owner a message or a file, add, change, pause or debug an automation (scheduled work in ~/fraim/automations, formerly jobs), find files, and handle an automation that failed. Use when the owner asks over WhatsApp, the phone app or the terminal "are you ok", "send me that file", "remind me every morning", "run this every Monday", "check every 15 minutes if...", "why didn't my automation run", "what's in my inbox", or when an automation of yours failed. Do NOT use on the owner's laptop (there, use operating-fraim).
 ---
 
 # Running the fraim server
@@ -18,7 +18,7 @@ Answer in plain words, short, without command output unless they ask for it.
 | --- | --- |
 | `claude-login` | My Claude login expired. Ask your laptop Claude to "log fraim in again" |
 | `disk-below-90-percent` | The disk is almost full. Run `du -sh ~/fraim/*` and name the largest folders |
-| `jobs-ok` | A job's last run failed. Read `~/fraim/alerts.md` for the reason and follow "A job failed" below |
+| `jobs-ok` | An automation's last run failed or it paused itself. Follow "An automation failed" below |
 | `whatsapp-connected` | WhatsApp is disconnected. The owner may need to relink: ask the laptop Claude |
 | `server-browser` | The server browser is down. Ask the laptop Claude to "restart the fraim browser" |
 | `syncthing` | File sync to the laptop is down |
@@ -37,30 +37,61 @@ You cannot update or restart yourself (no Docker access). When the owner asks ab
   Load `WHATSAPP_OWNER` first: `. /etc/fraim/runtime.env`. Images arrive as photos, everything else as a document.
 - Without the WhatsApp module both commands do nothing. Then put the file in `~/fraim/outbox/` and say where it is.
 
-## Scheduled jobs
+## Automations (scheduled work)
 
-A job is two things in `~/fraim/jobs/`:
-1. `<name>.md`: the prompt, written as an instruction to you. When nothing needs the owner's attention, the job must answer exactly `SILENT`: then no message goes out.
-2. A line in `~/fraim/jobs/crontab`: `minute hour day month weekday fraim-job <name>`. Times use the server time zone. The scheduler reloads the file by itself.
+An automation is one file: `~/fraim/automations/<name>/automation.md`. The scheduler picks up a new or changed file within a minute. Example:
 
-`fraim-job` sends the job's final answer to the owner on WhatsApp by itself. Never put `fraim-notify` in a job prompt: the owner would get every message twice.
-When there is nothing worth telling, the prompt makes the job answer exactly `SILENT`; do not send "nothing new" messages unless the owner asks for them.
-"9:00" means the server's time zone (`date +%Z`, set at install from the owner's Mac). Do not ask the owner which time zone.
+```markdown
+---
+description: Mails that need an answer, every weekday morning
+schedule: "0 8 * * 1-5"
+tools: Read, Grep, mcp__google__search_gmail_messages
+output: whatsapp
+---
+Read the mail that arrived since {{since}}. List the mails that need an answer from me, one line each.
+If nothing needs an answer, answer with exactly: SILENT
+```
 
-Optional `<name>.tools` lists extra allowed tools, one per line (default: Read, Glob, Grep, WebSearch, WebFetch).
-Give a job only the tools it needs. Ask the owner before you add a tool that sends, buys, posts or deletes.
+| Setting | Meaning |
+|---|---|
+| `schedule: "<cron>"` | Cron line in the server time zone (weekdays 8:00: `"0 8 * * 1-5"`). Without `schedule` or `every`, it only runs by hand |
+| `every: 30m` | Fixed interval: 5m, 10m, 15m, 30m, 1h, 2h, 3h, 4h, 6h, 12h or 1d |
+| `tools: Read, Grep` | Allowed tools (default Read, Glob, Grep, WebSearch). A site needs `WebFetch(domain:<site>)`; an API needs `Bash(fraim-api NAME:*)` |
+| `output: whatsapp, file: reports/{date}.md` | Where the answer goes: `whatsapp`, `whatsapp:<chat id>`, `file:<path in ~/fraim>` (`{date}`, `{time}`, `{name}`), or `none`. Every answer also lands in `~/fraim/outbox.md` unless `none` |
+| `hours: 08:00-22:00` | Scheduled runs outside this window are skipped |
+| `remember: true` | `{{previous}}` in the prompt is the last answer, for "what changed since last time" |
+| `skill: <name>` | The run follows that skill |
+| `timeout: 15m`, `model: sonnet`, `enabled: false` | Limits, model, switched off |
 
-Add a job for the owner:
-1. Repeat the schedule in plain words and get a yes ("every weekday at 8:00, right?").
-2. Write `<name>.md` and the crontab line. Use a short lowercase name.
-3. Run it once now: `fraim-job <name>`, and show the owner the result.
+Prompt placeholders: `{{since}}` (last good run), `{{now}}`, `{{previous}}`, `{{input}}` (text given to a manual run), `{{check}}`.
+A `check.sh` next to `automation.md` runs first. When it prints nothing, the run is skipped and costs no tokens; what it prints is `{{check}}`. With `script_only: true` its output is the answer and Claude is not called. Use this for "every 15 minutes, check if X happened".
 
-## A job failed
+Rules:
+- The runner sends the answer itself. Never put `fraim-notify` in a prompt: the owner would get it twice.
+- When nothing is worth telling, the prompt makes it answer exactly `SILENT`; no "nothing new" messages unless the owner asks for them.
+- "9:00" means the server's time zone (`date +%Z`). Do not ask the owner which time zone.
+- Give it only the tools it needs. Ask the owner before you add a tool that sends, buys, posts or deletes.
+- A run cannot change automations. Only you, in a session with the owner, edit them.
 
-1. Read the newest log: `ls -t ~/fraim/logs/jobs/<name>-* | head -1`, then read that file.
-2. Name the cause in one sentence: missing tool, site needs a login, timeout (30 minutes by default), Claude login expired.
-3. Fix what you can (the prompt, the tools file) and run `fraim-job <name>` once to prove it.
-4. What you cannot fix (a login, a 2FA code), tell the owner as one concrete step.
+Make one for the owner:
+1. Repeat the trigger and the output in plain words and get a yes ("every weekday at 8:00, to WhatsApp, right?").
+2. Write `automation.md`. Use a short lowercase name with dashes.
+3. Run `fraim-auto check <name>` and fix every mistake it names.
+4. Run it once: `fraim-auto run <name> --dry`. Show the owner the answer, which went nowhere yet. Adjust the prompt until the owner is happy.
+5. Run `fraim-auto sync` so the schedule is live now, and add it to `~/fraim/fraim-guide.md`.
+
+Other commands: `fraim-auto list`, `fraim-auto show <name>`, `fraim-auto runs <name>`, `fraim-auto run <name>`, `fraim-auto pause <name>`, `fraim-auto resume <name>`. To remove one, delete its folder.
+Old-style jobs (`~/fraim/jobs/<name>.md` plus a `fraim-job` crontab line) are moved into automations when the scheduler starts. `fraim-job <name>` still works.
+
+## An automation failed
+
+The owner gets one message per new kind of failure. After 5 failures in a row the automation pauses itself.
+
+1. `fraim-auto show <name>` gives the reason and the last answer.
+2. The runs are in `~/fraim/automations/<name>/runs/<time>/`: `prompt.md`, `output.md`, `status`, `stderr.txt`, `log.jsonl` (the full transcript). Read `stderr.txt` and the end of `log.jsonl`.
+3. Name the cause in one sentence: missing tool, site needs a login, timeout (30 minutes by default), Claude login expired, usage limit.
+4. Fix what you can (the prompt, `tools:`), then `fraim-auto run <name>` once to prove it, then `fraim-auto resume <name>` when it was paused.
+5. What you cannot fix (a login, a 2FA code), tell the owner as one concrete step.
 
 ## Where things are
 
@@ -69,9 +100,9 @@ Add a job for the owner:
 | `~/fraim` | Shared with the owner's laptop |
 | `~/fraim/inbox` | Files the owner sent over WhatsApp |
 | `~/fraim/downloads` | Downloads from the server browser |
-| `~/fraim/jobs` | Jobs and the crontab |
-| `~/fraim/logs/jobs` | One log per job run |
-| `~/fraim/fraim-guide.md` | The owner's one-page guide. Keep it current when you add a job |
+| `~/fraim/automations` | One folder per automation, with its runs |
+| `~/fraim/outbox.md` | The last 100 answers of automations |
+| `~/fraim/fraim-guide.md` | The owner's one-page guide. Keep it current when you add an automation |
 | `~/pc` | Read-only folders from the owner's PC |
 | `~/code` | Git repos of this space (not synced to the laptop) |
 
@@ -102,7 +133,7 @@ You never see API keys. The `secrets` container holds them and adds the real key
 1. See which services exist: `fraim-api` (name, header, format, API).
 2. Call a service with `fraim-api NAME PATH`, for example `fraim-api openai /v1/models`. It adds the session token in the right header itself; never type the token or a variable.
 3. Extra options go to curl. A request body must come from a file: `fraim-api openai /v1/chat/completions -X POST -H 'Content-Type: application/json' -d @body.json`.
-4. A scheduled job that calls an API needs `Bash(fraim-api NAME:*)` in its tools file, one line per service.
+4. An automation that calls an API needs `Bash(fraim-api NAME:*)` in its `tools:` line, one entry per service.
 5. An HTTP MCP server or GitHub: use `fraim-connect` and `fraim-repo`; they already go through the proxy.
 
 A 401 means the service is not set up. Never ask for the key in chat. Tell the owner that Claude on the laptop runs `fraim secret add NAME --upstream https://HOST`, and that the owner then runs `fraim secret set NAME` in their own Terminal app and pastes the key.

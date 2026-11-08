@@ -9,7 +9,7 @@ home="$HOME"
 for p in "$home/.claude" "$home/.claude.json" "$home/.ssh"; do
   [ ! -L "$p" ] || rm -f "$p"
 done
-mkdir -p "$home/fraim/jobs" "$home/fraim/logs/jobs" "$home/.ssh" "$home/.claude"
+mkdir -p "$home/fraim/jobs" "$home/fraim/logs/jobs" "$home/fraim/automations" "$home/.ssh" "$home/.claude"
 chmod 700 "$home/.ssh"
 rm -f "$home/.ssh/authorized_keys"
 
@@ -24,7 +24,9 @@ settings="$home/.claude/settings.json"
 if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 2>&1; then
   tmp="$(mktemp)"
   # Background goals (fraim-goal) are started without a prompt, also in older homes.
-  jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch")) | if index("Bash(fraim-goal:*)") then . else . + ["Bash(fraim-goal:*)"] end) else . end' "$settings" > "$tmp" \
+  # The same for automations (fraim-auto).
+  jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
+        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
   rm -f "$tmp"
 fi
@@ -44,5 +46,8 @@ chmod 0600 "$state"
 
 if [ "${1:-}" = scheduler ] && [ ! -f "$home/fraim/jobs/crontab" ]; then
   install -m 0644 /etc/fraim/skel-jobs/crontab "$home/fraim/jobs/crontab"
-  install -m 0644 /etc/fraim/skel-jobs/example.md "$home/fraim/jobs/example.md"
+fi
+# One switched-off example, only in a home that has no automations yet.
+if [ "${1:-}" = scheduler ] && [ -z "$(ls -A "$home/fraim/automations")" ]; then
+  install -D -m 0644 /etc/fraim/skel-jobs/example-automation.md "$home/fraim/automations/new-files/automation.md"
 fi

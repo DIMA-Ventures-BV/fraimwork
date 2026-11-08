@@ -1,9 +1,5 @@
-# Your scheduled jobs. Edit this file from your laptop: it lives in the synced ~/fraim folder.
-# The scheduler reloads it automatically. Times use the server timezone (TZ in .env).
-# fraim's own health and update checks run separately and need no line here.
+# Old-style scheduled jobs. New work goes in ~/fraim/automations instead:
+# one folder per automation with an automation.md (schedule, tools, output and the prompt).
+# fraim moves every "fraim-job <name>" line below into an automation by itself.
 #
 # Format: minute hour day-of-month month day-of-week command
-# Each job prompt lives in ~/fraim/jobs/<name>.md. Allowed tools go in <name>.tools (optional).
-
-# Example, remove the # to enable:
-# 0 8 * * 1-5 fraim-job example

@@ -175,7 +175,7 @@ Report, in this order:
    To stop or move fraim: ask Claude on your laptop "remove fraim" or "move fraim to a new server"
    Set up on: <date>, server <hostname>, help: <the person who set it up, if any>
 
-   ## Your jobs
+   ## Your automations
    (none yet; ask Claude "every weekday at 8, ..." to add one)
    ```
 

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Runs the read-only system crontab and the owner's crontab side by side.
-# If either scheduler stops, exit so Docker restarts the container.
+# Runs the read-only system crontab, the owner's old jobs crontab and the crontab that
+# fraim-auto writes from ~/fraim/automations, side by side.
+# If any scheduler stops, exit so Docker restarts the container.
+fraim-auto migrate || true
+fraim-auto sync --quiet || true
 supercronic /etc/fraim/system.crontab &
 supercronic -inotify "$HOME/fraim/jobs/crontab" &
+supercronic -inotify "${FRAIM_AUTO_CRONTAB:-$HOME/.local/state/fraim/automations.crontab}" &
 wait -n
 echo "fraim-scheduler: a scheduler stopped, restarting the container" >&2
 exit 1
