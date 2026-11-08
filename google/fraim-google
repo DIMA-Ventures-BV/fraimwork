@@ -1,0 +1,73 @@
+#!/bin/sh
+# fraim-google: runs inside the google container. `fraim google` on the laptop drives it.
+# Secrets (the OAuth client, the sign-in address) only arrive on stdin, never as arguments.
+#
+#   fraim-google configured            exit 0 when an OAuth client and an email are stored
+#   fraim-google set-client EMAIL      OAuth client JSON (client_secret_*.json) on stdin
+#   fraim-google callback              the address from the browser after sign-in, on stdin
+#   fraim-google status                setup and sign-in state, no secrets
+#   fraim-google signout               delete the stored Google tokens
+#   fraim-google health                container health check
+set -eu
+umask 077
+DIR=/data/google
+CLIENT="$DIR/client_secret.json"
+EMAIL_FILE="$DIR/email"
+CREDS="$DIR/credentials"
+
+die() { echo "fraim-google: $*" >&2; exit 1; }
+configured() { [ -s "$CLIENT" ] && [ -s "$EMAIL_FILE" ]; }
+signed_in() { configured && [ -s "$CREDS/$(cat "$EMAIL_FILE").json" ]; }
+
+case "${1:-}" in
+  configured) configured ;;
+  set-client)
+    email="${2:-}"
+    printf '%s' "$email" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$' || die "give the Google account email: set-client you@example.com"
+    python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+client = data.get("installed") or data.get("web")
+if not client or not client.get("client_id") or not client.get("client_secret"):
+    sys.exit("fraim-google: this is not an OAuth client file; download it from Google Cloud > Credentials")
+if "installed" not in data:
+    sys.exit("fraim-google: use a client of type Desktop app, not Web application")
+json.dump(data, open(sys.argv[1], "w"))
+' "$CLIENT.new" || { rm -f "$CLIENT.new"; exit 1; }
+    mv "$CLIENT.new" "$CLIENT"
+    printf '%s\n' "$email" | tr 'A-Z' 'a-z' > "$EMAIL_FILE"
+    echo "Stored the Google OAuth client for $email."
+    ;;
+  callback)
+    configured || die "no OAuth client yet; run fraim google setup first"
+    python3 -c '
+import sys, urllib.parse, urllib.request, urllib.error
+url = sys.stdin.read().strip()
+query = urllib.parse.urlsplit(url).query
+params = urllib.parse.parse_qs(query)
+if "code" not in params or "state" not in params:
+    sys.exit("fraim-google: that address has no sign-in code; copy the full address after Google sends you on")
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8000/oauth2callback?" + query, timeout=30) as r:
+        r.read()
+except urllib.error.HTTPError as e:
+    sys.exit("fraim-google: the sign-in failed (HTTP %d); start again by asking the agent to use Gmail" % e.code)
+'
+    signed_in || die "Google did not store a login; start again by asking the agent to use Gmail"
+    echo "Google is signed in for $(cat "$EMAIL_FILE")."
+    ;;
+  status)
+    if ! configured; then echo "setup: no OAuth client"; exit 0; fi
+    echo "setup: OAuth client stored for $(cat "$EMAIL_FILE")"
+    if signed_in; then echo "signed in: yes"; else echo "signed in: no"; fi
+    ;;
+  signout)
+    rm -rf "${CREDS:?}"/*
+    echo "Deleted the stored Google tokens."
+    ;;
+  health)
+    configured || exit 0
+    python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=4)'
+    ;;
+  *) echo "usage: fraim-google configured|set-client EMAIL|callback|status|signout|health" >&2; exit 2 ;;
+esac

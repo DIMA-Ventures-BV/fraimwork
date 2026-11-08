@@ -146,6 +146,21 @@ services:
       - secrets-store:/data/secrets
     networks: [secrets, secrets-out]
 
+  # Gmail, Drive and Calendar as an MCP server for any agent (Claude, Codex). The Google
+  # tokens stay in google-store; the workspace reaches it at http://google:8000/mcp.
+  google:
+    <<: *defaults
+    build: ./google
+    image: fraimwork/google:${FRAIM_IMAGE_TAG:-local}
+    profiles: [google]
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+      GOOGLE_PERMISSIONS: ${GOOGLE_PERMISSIONS:-gmail:drafts drive:readonly calendar:readonly}
+      WORKSPACE_MCP_ALLOWED_HOSTS: google
+    volumes:
+      - google-store:/data/google
+    networks: [secrets, secrets-out]
+
   syncthing:
     <<: *defaults
     image: syncthing/syncthing:2.1.7
@@ -208,3 +223,4 @@ volumes:
   whatsapp-auth:
   syncthing-config:
   secrets-store:
+  google-store:

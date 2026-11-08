@@ -4,6 +4,7 @@
 #
 #   fraim-connect http NAME URL            a remote MCP server without a key (or with OAuth: then `login`)
 #   fraim-connect proxied NAME [PATH]      a remote MCP server whose key is in the secrets proxy as NAME
+#   fraim-connect internal NAME URL        an MCP server in a container of this space (http://SERVICE:PORT/PATH)
 #   fraim-connect stdio NAME -- CMD [ARGS] a local MCP server program
 #   fraim-connect login NAME               OAuth sign-in: prints the link; the redirect URL goes in with fraim-tty send mcp-NAME
 #   fraim-connect list [--json]
@@ -50,6 +51,15 @@ case "$action" in
     claude mcp add --scope user --transport http "$name" "$FRAIM_SECRETS_URL/$name$path" --header "$header: $value" >/dev/null
     echo "Added MCP server $name through the secrets proxy."
     ;;
+  internal)
+    # An MCP server in a container of this space, on the internal secrets network.
+    name="${1:-}" url="${2:-}"
+    valid_name "$name" || usage "internal NAME http://SERVICE:PORT/PATH"
+    printf '%s' "$url" | grep -Eq '^http://[a-z][a-z0-9-]*:[0-9]{1,5}/[A-Za-z0-9._~/-]*$' || usage "URL must look like http://SERVICE:PORT/PATH"
+    forget "$name"
+    claude mcp add --scope user --transport http "$name" "$url" >/dev/null
+    echo "Added MCP server $name ($url)."
+    ;;
   stdio)
     name="${1:-}"
     valid_name "$name" || usage "stdio NAME -- CMD [ARGS]"
@@ -82,5 +92,5 @@ case "$action" in
     pkill -x claude || true
     echo "The Claude session restarts with the new MCP servers."
     ;;
-  *) usage "http|proxied|stdio|login|list|rm|reload" ;;
+  *) usage "http|proxied|internal|stdio|login|list|rm|reload" ;;
 esac

@@ -61,6 +61,18 @@ Prefer a claude.ai connector when one exists (no key on the server at all). Use 
 
 `$F connect list --space S`, `$F connect rm NAME --space S` (also deletes its key).
 
+## Gmail, Drive and Calendar without a Claude account
+
+`fraim google` runs Gmail, Drive and Calendar as the space's own MCP server, so it works for any agent (Claude or Codex), not only through claude.ai. Use it when the user wants Google independent of their Claude account. Full steps for the user: `docs/google.md`.
+
+1. The user makes a Google OAuth client of type **Desktop app** (docs/google.md, about 15 minutes, once) and downloads its JSON.
+2. `$F google setup --email USER@DOMAIN --file ~/Downloads/client_secret_....json --space S` starts the google container and registers the `google` MCP server. Claude never reads the file itself.
+3. In the space, call a Gmail tool (for example `search_gmail_messages`). It returns a Google sign-in link: give it to the user.
+4. After approving, the browser shows an error page on `localhost:8000`. That is expected. The user runs `fraim google code --space S` in their own Terminal and pastes that address.
+5. `$F google status --space S` shows `signed in: yes`.
+
+Default permissions: Gmail read, label and draft (no send), Drive and Calendar read-only. `GOOGLE_PERMISSIONS` in the space env changes that (for example `gmail:send drive:full calendar:full`); then `$F google signout` and sign in again for the new scopes.
+
 ## A GitHub repo
 
 1. `$F repo token --space S` exits 3 with how to make a fine-grained token (only the needed repos; Contents and Pull requests read and write). The user pastes it in their own Terminal.
