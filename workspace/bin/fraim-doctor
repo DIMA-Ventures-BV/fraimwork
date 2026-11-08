@@ -27,6 +27,7 @@ check "claude-token-not-expiring" token_fresh
 check "disk-below-90-percent" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
 # The interactive session lives in the workspace container; the scheduler cannot see it.
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "claude-session-running" pgrep -x claude
+[ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "queue-page" curl -fsS --max-time 5 http://127.0.0.1:3109/health
 # An automation that failed or was blocked on its last run, or was paused after failures.
 # State of deleted automations (and of old-style jobs) is removed.
 jobs_ok() {

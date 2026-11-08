@@ -14,7 +14,10 @@
       "Bash(fraim-notify:*)",
       "Bash(fraim-doctor:*)",
       "Bash(fraim-goal:*)",
-      "Bash(fraim-auto:*)"
+      "Bash(fraim-auto:*)",
+      "Bash(fraim-queue:*)",
+      "Bash(fraim-lead:*)",
+      "Bash(fraim-brain:*)"
     ]
   }
 }

@@ -7,5 +7,8 @@
 # Health check every hour; WhatsApp only when something breaks or recovers.
 0 * * * * fraim-doctor --notify
 
+# Every Sunday evening: turn new review feedback into rules for goals and leads.
+0 20 * * 0 fraim-brain distill --if-new
+
 # Every Monday: tell the owner once when a new fraimwork release is available.
 0 10 * * 1 fraim-version-check --notify
