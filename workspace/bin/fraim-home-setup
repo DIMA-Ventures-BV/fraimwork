@@ -23,9 +23,9 @@ done
 settings="$home/.claude/settings.json"
 if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 2>&1; then
   tmp="$(mktemp)"
-  # Goals, automations, the queue, leads and the brain run without a prompt, also in older homes.
+  # Goals, automations, the queue, leads, the brain and session commands run without a prompt, also in older homes.
   jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
-        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
+        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)", "mcp__whatsapp__session_command") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
   rm -f "$tmp"
 fi

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Types a Claude Code command into the always-on session (tmux session "main") once the
+# current turn has ended, so the server's Claude can run /clear, /compact or /model when
+# the owner asks in plain words. Only the commands below are allowed.
+#
+#   fraim-session-command clear
+#   fraim-session-command compact [FOCUS]
+#   fraim-session-command model opus|sonnet|haiku|default
+#   --chat CHAT_ID (first)  confirm on that WhatsApp chat once the command ran
+#
+# It returns at once; a background process waits for the session to be idle (up to
+# FRAIM_SESSION_WAIT seconds, default 300). Exit codes: 0 queued, 1 failure, 2 usage.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+usage() { echo "fraim-session-command: $*" >&2; exit 2; }
+die() { echo "fraim-session-command: $*" >&2; exit 1; }
+
+session="${FRAIM_SESSION_TMUX:-main}"
+
+screen() { tmux capture-pane -p -t "$session" 2>/dev/null; }
+busy() { screen | grep -qi 'esc to interrupt'; }
+
+confirm() {
+  local chat="$1" text="$2"
+  [ -n "$chat" ] || return 0
+  case ",${FRAIM_MODULES:-}," in *,whatsapp,*) ;; *) return 0 ;; esac
+  fraim-gateway POST /send "$(jq -cn --arg chat "$chat" --arg text "$text" '{chat_id: $chat, text: $text}')" >/dev/null || true
+}
+
+deliver() {
+  local line="$1" chat="$2" idle=0 waited=0 limit="${FRAIM_SESSION_WAIT:-300}"
+  # Two idle reads in a row: the reply that called this tool must have finished.
+  while [ "$waited" -lt "$limit" ]; do
+    if busy; then idle=0; else idle=$((idle + 1)); fi
+    [ "$idle" -ge 2 ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [ "$idle" -lt 2 ]; then
+    confirm "$chat" "I could not run $line: the session stayed busy for $limit seconds."
+    exit 1
+  fi
+  tmux send-keys -t "$session" -l -- "$line"
+  sleep 0.3
+  tmux send-keys -t "$session" Enter
+  confirm "$chat" "Done: $line"
+}
+
+chat=""
+if [ "${1:-}" = --chat ]; then chat="${2:-}"; shift 2 || usage "--chat needs a chat id"; fi
+command="${1:-}"
+[ $# -eq 0 ] || shift
+
+case "$command" in
+  clear)
+    [ $# -eq 0 ] || usage "clear takes no arguments"
+    line="/clear" ;;
+  compact)
+    focus="$(printf '%s' "$*" | tr '\r\n\t' '   ' | tr -cd '[:print:]' | cut -c1-200)"
+    line="/compact${focus:+ $focus}" ;;
+  model)
+    case "${1:-}" in
+      opus|sonnet|haiku|default) [ $# -eq 1 ] || usage "model takes one name" ;;
+      *) usage "model must be opus, sonnet, haiku or default" ;;
+    esac
+    line="/model $1" ;;
+  *) usage "clear | compact [FOCUS] | model opus|sonnet|haiku|default" ;;
+esac
+
+tmux has-session -t "$session" 2>/dev/null || die "the Claude session ($session) is not running"
+
+if [ -n "${FRAIM_SESSION_FOREGROUND:-}" ]; then
+  deliver "$line" "$chat"
+  exit $?
+fi
+(deliver "$line" "$chat" </dev/null >/dev/null 2>&1 &)
+echo "Queued: $line (runs when the current reply is finished)"
