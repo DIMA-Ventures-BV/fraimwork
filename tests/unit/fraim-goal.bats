@@ -69,7 +69,47 @@ wait_state() {
   grep -qF 'text with $(danger) and "quotes"' "$CLAUDE_ARGS"
   grep -qx -- '--permission-mode' "$CLAUDE_ARGS"
   grep -qx 'acceptEdits' "$CLAUDE_ARGS"
-  grep -qx 'Read,Glob,Grep,Edit,Write,WebSearch,Bash' "$CLAUDE_ARGS"
+  grep -qx 'Read,Glob,Grep,Edit,Write,WebSearch,Bash,mcp__browser' "$CLAUDE_ARGS"
+}
+
+@test "the result lands in the review queue with queue.json and media; the brain rules reach the prompt" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
+  mkdir -p "$FRAIM_BRAIN_DIR"
+  printf '# How the owner wants things\n- Short summaries.\n' > "$FRAIM_BRAIN_DIR/rules.md"
+  # The fake run writes what a real goal writes: queue.json and a screenshot.
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGS"
+mkdir -p "$FRAIM_GOALS_DIR/g1/media"
+printf 'png' > "$FRAIM_GOALS_DIR/g1/media/after.png"
+printf '{"title":"New login page","priority":1,"kind":"review","links":["https://example.com/pr/1"],"on_approve":"merge PR #1"}' > "$FRAIM_GOALS_DIR/g1/queue.json"
+echo "Built the login page."
+EOF
+  "$GOAL" start --lead web -- build the login page
+  wait_state g1 done
+  grep -q 'Short summaries.' "$CLAUDE_ARGS"
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  for _ in $(seq 20); do [ -s "$item" ] && break; sleep 0.1; done
+  [ "$(jq -r .title "$item")" = "New login page" ]
+  [ "$(jq -r .priority "$item")" = 1 ]
+  [ "$(jq -r .goal "$item")" = g1 ]
+  [ "$(jq -r .lead "$item")" = web ]
+  [ "$(jq -r .on_approve "$item")" = "merge PR #1" ]
+  [ "$(jq -c .media "$item")" = '["after.png"]' ]
+  [ "$(jq -c .links "$item")" = '["https://example.com/pr/1"]' ]
+  for _ in $(seq 20); do [ -s "$SENT" ] && break; sleep 0.1; done
+  grep -q 'ok q1' "$SENT"
+}
+
+@test "a failed goal becomes a priority 1 item" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
+  FAKE_FAIL=1 "$GOAL" start -- x
+  wait_state g1 failed
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  for _ in $(seq 20); do [ -s "$item" ] && break; sleep 0.1; done
+  [ "$(jq -r .kind "$item")" = failed ]
+  [ "$(jq -r .priority "$item")" = 1 ]
+  [[ "$(jq -r .title "$item")" == "Failed: x" ]]
 }
 
 @test "a tools file replaces the default tools" {

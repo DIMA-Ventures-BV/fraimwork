@@ -1,0 +1,607 @@
+#!/usr/bin/env node
+// fraim-queue: one prioritized list of everything that needs the owner. Goals and lead
+// agents add items; the owner clears them in batches on a web page, on WhatsApp or here.
+//
+//   fraim-queue add --title T [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
+//                   [--priority 1|2|3] [--source S] [--goal gN] [--lead NAME] [--link URL]...
+//                   [--media FILE]... [--on-approve TEXT] [--quiet]        prints the id (q1, q2, ...)
+//   fraim-queue list [--all] [--json] [--lead NAME]   open items, most urgent first
+//   fraim-queue show ID [--json]
+//   fraim-queue approve ID [--note TEXT]   runs the item's on-approve step as a goal, if it has one
+//   fraim-queue reject ID --note TEXT      saves the reason for the brain; reworks the goal behind it
+//   fraim-queue dismiss ID                 closes the item, nothing else happens
+//   fraim-queue prio ID 1|2|3
+//   fraim-queue serve                      the web page (started by the workspace container)
+//   fraim-queue url                        the page address, with its access token
+//
+// Items live in ~/fraim/queue/<id>/item.json, media next to it. Priority 1 is urgent.
+// Exit codes: 0 ok, 1 failure, 2 usage.
+import { spawnSync } from 'node:child_process'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import http from 'node:http'
+import path from 'node:path'
+
+const HOME = process.env.HOME || '/home/claude'
+const QUEUE = process.env.FRAIM_QUEUE_DIR || path.join(HOME, 'fraim/queue')
+const BRAIN = process.env.FRAIM_BRAIN_DIR || path.join(HOME, 'fraim/brain')
+const GOALS = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim/goals')
+const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
+const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
+const KINDS = ['review', 'decision', 'idea', 'info', 'failed']
+const STATES = ['open', 'approved', 'rejected', 'dismissed']
+const MEDIA_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.webm': 'video/webm', '.mp4': 'video/mp4', '.mov': 'video/quicktime',
+}
+
+class UsageError extends Error {}
+function usage(msg) { throw new UsageError(msg) }
+
+function runtimeEnv() {
+  const env = {}
+  try {
+    for (const line of fs.readFileSync(process.env.FRAIM_RUNTIME_ENV || '/etc/fraim/runtime.env', 'utf8').split('\n')) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/)
+      if (m) env[m[1]] = m[2].replace(/^'(.*)'$/, '$1').replace(/\\(.)/g, '$1')
+    }
+  } catch {}
+  return { ...env, ...process.env }
+}
+
+const now = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+const validId = (id) => /^q\d{1,6}$/.test(id)
+const itemDir = (id) => path.join(QUEUE, id)
+
+function readItem(id) {
+  if (!validId(id)) usage(`'${id}' is not a queue id (q1, q2, ...)`)
+  try {
+    return JSON.parse(fs.readFileSync(path.join(itemDir(id), 'item.json'), 'utf8'))
+  } catch {
+    throw new Error(`no queue item ${id}`)
+  }
+}
+
+function writeItem(item) {
+  const file = path.join(itemDir(item.id), 'item.json')
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(item, null, 2) + '\n')
+  fs.renameSync(`${file}.tmp`, file)
+}
+
+function allItems() {
+  let names = []
+  try { names = fs.readdirSync(QUEUE) } catch { return [] }
+  const out = []
+  for (const name of names) {
+    if (!validId(name)) continue
+    try { out.push(JSON.parse(fs.readFileSync(path.join(QUEUE, name, 'item.json'), 'utf8'))) } catch {}
+  }
+  return out
+}
+
+// Open before closed; then priority 1 first; then the oldest first, so nothing waits forever.
+export function rank(items) {
+  return [...items].sort((a, b) => {
+    const ao = a.state === 'open' ? 0 : 1
+    const bo = b.state === 'open' ? 0 : 1
+    if (ao !== bo) return ao - bo
+    if (ao === 1) return (b.decided || '').localeCompare(a.decided || '')
+    if (a.priority !== b.priority) return a.priority - b.priority
+    return a.created.localeCompare(b.created) || parseInt(a.id.slice(1), 10) - parseInt(b.id.slice(1), 10)
+  })
+}
+
+function newId() {
+  fs.mkdirSync(QUEUE, { recursive: true })
+  const last = path.join(QUEUE, '.last')
+  let n = 1
+  try { n = parseInt(fs.readFileSync(last, 'utf8'), 10) + 1 || 1 } catch {}
+  for (;;) {
+    try {
+      fs.mkdirSync(path.join(QUEUE, `q${n}`))
+      break
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      n++
+    }
+  }
+  fs.writeFileSync(last, `${n}\n`)
+  return `q${n}`
+}
+
+function copyMedia(dir, files) {
+  const names = []
+  if (!files.length) return names
+  fs.mkdirSync(path.join(dir, 'media'), { recursive: true })
+  for (const file of files) {
+    const ext = path.extname(file).toLowerCase()
+    if (!MEDIA_TYPES[ext]) {
+      process.stderr.write(`fraim-queue: skipped ${file}: only images and videos can be attached\n`)
+      continue
+    }
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) {
+      process.stderr.write(`fraim-queue: skipped ${file}: not a file\n`)
+      continue
+    }
+    let name = path.basename(file).replace(/[^\w.-]/g, '_')
+    while (names.includes(name)) name = `1-${name}`
+    fs.copyFileSync(file, path.join(dir, 'media', name))
+    names.push(name)
+  }
+  return names
+}
+
+function queueUrl() {
+  const env = runtimeEnv()
+  const start = parseInt(String(env.FRAIM_PREVIEW_PORTS || '3100-3109').split('-')[0], 10)
+  const port = start + (PORT - 3100)
+  let token = ''
+  try { token = fs.readFileSync(TOKEN_FILE, 'utf8').trim() } catch {}
+  const query = token ? `/?t=${token}` : '/'
+  if (env.FRAIM_PREVIEW_HOST) return `http://${env.FRAIM_PREVIEW_HOST}:${port}${query}`
+  const mode = env.FRAIM_ACCESS_MODE || ''
+  if (mode === 'tailscale') return `http://${env.FRAIM_HOSTNAME || 'fraim'}:${port}${query}`
+  if (mode === 'local') return `http://localhost:${port}${query}`
+  return `on the laptop: fraim queue open${env.FRAIM_SPACE && env.FRAIM_SPACE !== 'main' ? ` --space ${env.FRAIM_SPACE}` : ''}`
+}
+
+function notify(text) {
+  if (process.env.FRAIM_QUEUE_QUIET === '1') return
+  spawnSync('fraim-notify', [text], { env: { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1' }, stdio: 'ignore', timeout: 30000 })
+}
+
+export function addItem(opts) {
+  const title = String(opts.title || '').trim()
+  if (!title) usage('add needs --title')
+  const kind = opts.kind || 'review'
+  if (!KINDS.includes(kind)) usage(`--kind must be one of ${KINDS.join(', ')}`)
+  const priority = parseInt(opts.priority || '2', 10)
+  if (![1, 2, 3].includes(priority)) usage('--priority must be 1, 2 or 3')
+  const id = newId()
+  const dir = itemDir(id)
+  const item = {
+    id,
+    title: title.slice(0, 200),
+    summary: String(opts.summary || '').slice(0, 20000),
+    kind,
+    priority,
+    source: opts.source || (opts.goal ? `goal ${opts.goal}` : opts.lead ? `lead ${opts.lead}` : 'manual'),
+    goal: opts.goal || '',
+    lead: opts.lead || '',
+    links: opts.links || [],
+    media: copyMedia(dir, opts.media || []),
+    on_approve: String(opts.onApprove || ''),
+    state: 'open',
+    note: '',
+    created: now(),
+    decided: '',
+  }
+  writeItem(item)
+  if (!opts.quiet) notify(`New in your queue: ${id} ${item.title}\n${queueUrl()}`)
+  return item
+}
+
+function brainNote(item, verdict, note) {
+  if (!note) return
+  fs.mkdirSync(BRAIN, { recursive: true })
+  const file = path.join(BRAIN, 'log.md')
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, '# What the owner said in reviews\n\nNewest at the bottom. fraim-brain distills this into rules.md.\n\n')
+  }
+  const where = item.lead ? ` (lead ${item.lead})` : ''
+  const line = `- ${now().slice(0, 16).replace('T', ' ')} ${verdict} ${item.id} "${item.title}"${where}: ${note.replace(/\s+/g, ' ').trim()}\n`
+  fs.appendFileSync(file, line)
+}
+
+function startGoal(text, item) {
+  const args = ['start']
+  if (item.lead) args.push('--lead', item.lead)
+  args.push('--queue', item.id, '--', text)
+  const env = { ...process.env, FRAIM_GOAL_FROM_QUEUE: '1' }
+  const res = spawnSync('fraim-goal', args, { encoding: 'utf8', timeout: 30000, env })
+  if (res.status !== 0) throw new Error(`could not start the follow-up goal: ${(res.stderr || res.error?.message || '').trim()}`)
+  return res.stdout.trim()
+}
+
+function readGoalFile(goal, name, max = 4000) {
+  if (!/^g\d{1,6}$/.test(goal)) return ''
+  try { return fs.readFileSync(path.join(GOALS, goal, name), 'utf8').slice(0, max).trim() } catch { return '' }
+}
+
+export function reworkText(item, note) {
+  const original = readGoalFile(item.goal, 'goal.md') || item.title
+  const result = readGoalFile(item.goal, 'result.md') || item.summary
+  return [
+    `Rework after the owner's review of queue item ${item.id} ("${item.title}").`,
+    '',
+    'The original goal:',
+    original,
+    '',
+    'Your previous result:',
+    result,
+    '',
+    "The owner's feedback, which wins over anything above:",
+    note,
+    '',
+    item.goal ? `Earlier notes and files are in ~/fraim/goals/${item.goal}. Build on that work instead of starting over.` : '',
+  ].join('\n').trim()
+}
+
+export function approveText(item, note) {
+  return [
+    `The owner approved queue item ${item.id} ("${item.title}"). Do this approved next step now:`,
+    item.on_approve,
+    note ? `\nThe owner added: ${note}` : '',
+    item.goal ? `\nContext and earlier work: ~/fraim/goals/${item.goal}.` : '',
+  ].join('\n').trim()
+}
+
+// The one place where a decision has effects, used by the CLI, the page and WhatsApp.
+export function decide(id, verdict, note = '') {
+  const item = readItem(id)
+  if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
+  note = String(note || '').trim()
+  if (verdict === 'rejected' && !note) usage('reject needs a reason (--note), so the agent knows what to change')
+  if (!['approved', 'rejected', 'dismissed'].includes(verdict)) usage(`unknown decision ${verdict}`)
+  let followUp = ''
+  if (verdict === 'approved' && item.on_approve) followUp = startGoal(approveText(item, note), item)
+  // A rejected idea only teaches the brain; a rejected piece of work is done again.
+  if (verdict === 'rejected' && item.goal) followUp = startGoal(reworkText(item, note), item)
+  item.state = verdict
+  item.note = note
+  item.decided = now()
+  item.follow_up = followUp
+  writeItem(item)
+  if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
+  return item
+}
+
+export function setPriority(id, priority) {
+  const item = readItem(id)
+  const p = parseInt(priority, 10)
+  if (![1, 2, 3].includes(p)) usage('priority must be 1, 2 or 3')
+  item.priority = p
+  writeItem(item)
+  return item
+}
+
+function line(item) {
+  const flag = item.state === 'open' ? `p${item.priority}` : item.state
+  const extra = item.media.length ? `  [${item.media.length} media]` : ''
+  return `${item.id}  ${flag}  ${item.kind}  ${item.title}  (${item.source})${extra}`
+}
+
+function describe(item) {
+  const parts = [`${item.id}: ${item.title}`, `${item.kind}, priority ${item.priority}, ${item.state}, from ${item.source}, ${item.created}`]
+  if (item.summary) parts.push('', item.summary)
+  if (item.links.length) parts.push('', ...item.links.map((l) => `link: ${l}`))
+  if (item.media.length) parts.push('', ...item.media.map((m) => `media: ${path.join(itemDir(item.id), 'media', m)}`))
+  if (item.on_approve) parts.push('', `On approve: ${item.on_approve}`)
+  if (item.note) parts.push('', `Owner: ${item.note}`)
+  if (item.follow_up) parts.push(`Follow-up goal: ${item.follow_up}`)
+  return parts.join('\n')
+}
+
+// --- the web page ------------------------------------------------------------------------
+
+function token() {
+  try {
+    const t = fs.readFileSync(TOKEN_FILE, 'utf8').trim()
+    if (t) return t
+  } catch {}
+  const t = crypto.randomBytes(24).toString('base64url')
+  fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(TOKEN_FILE, `${t}\n`, { mode: 0o600 })
+  return t
+}
+
+function sameToken(a, b) {
+  const x = Buffer.from(String(a || ''))
+  const y = Buffer.from(String(b || ''))
+  return x.length === y.length && crypto.timingSafeEqual(x, y)
+}
+
+function cookieToken(req) {
+  const m = /(?:^|;\s*)fraim_queue=([^;]+)/.exec(req.headers.cookie || '')
+  return m ? m[1] : ''
+}
+
+function send(res, code, body, type = 'application/json') {
+  res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' })
+  res.end(type === 'application/json' ? JSON.stringify(body) : body)
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    req.on('data', (c) => {
+      data += c
+      if (data.length > 100000) reject(new Error('request too large'))
+    })
+    req.on('end', () => {
+      try { resolve(data ? JSON.parse(data) : {}) } catch { reject(new Error('invalid JSON')) }
+    })
+  })
+}
+
+export function createServer(secret = token()) {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://queue')
+    try {
+      if (url.pathname === '/health') return send(res, 200, { ok: true })
+      if (url.searchParams.has('t')) {
+        if (!sameToken(url.searchParams.get('t'), secret)) return send(res, 403, 'Wrong link. Ask Claude for the queue link again.', 'text/plain')
+        res.writeHead(303, {
+          Location: '/',
+          'Set-Cookie': `fraim_queue=${secret}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`,
+        })
+        return res.end()
+      }
+      if (!sameToken(cookieToken(req), secret)) {
+        return send(res, 401, 'Open the queue with the link that includes ?t=. Ask Claude: "give me my queue link".', 'text/plain')
+      }
+      if (req.method === 'GET' && url.pathname === '/') return send(res, 200, PAGE, 'text/html; charset=utf-8')
+      if (req.method === 'GET' && url.pathname === '/api/items') {
+        const all = url.searchParams.get('all') === '1'
+        return send(res, 200, rank(allItems().filter((i) => all || i.state === 'open')))
+      }
+      const media = /^\/media\/(q\d{1,6})\/([^/]+)$/.exec(url.pathname)
+      if (req.method === 'GET' && media) {
+        const item = readItem(media[1])
+        const name = decodeURIComponent(media[2])
+        if (!item.media.includes(name)) return send(res, 404, { error: 'no such file' })
+        const file = path.join(itemDir(item.id), 'media', name)
+        const type = MEDIA_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream'
+        res.writeHead(200, { 'Content-Type': type, 'Content-Length': fs.statSync(file).size, 'Cache-Control': 'private, max-age=3600' })
+        return fs.createReadStream(file).pipe(res)
+      }
+      const action = /^\/api\/items\/(q\d{1,6})\/(decide|priority)$/.exec(url.pathname)
+      if (req.method === 'POST' && action) {
+        // A custom header: a form on another site cannot send it, so no cross-site posts.
+        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
+        const body = await readBody(req)
+        if (action[2] === 'priority') return send(res, 200, setPriority(action[1], body.priority))
+        return send(res, 200, decide(action[1], body.verdict, body.note))
+      }
+      return send(res, 404, { error: 'not found' })
+    } catch (err) {
+      const code = err instanceof UsageError ? 400 : /^no queue item|already/.test(err.message) ? 409 : 500
+      return send(res, code, { error: err.message })
+    }
+  })
+}
+
+const PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fraim queue</title>
+<style>
+:root { --bg:#f6f5f2; --card:#fff; --ink:#1d1d1b; --muted:#6b6a66; --line:#e3e1dc; --accent:#2f5bd3; --ok:#1f8a4c; --no:#c23b2b; --p1:#d64545; --p2:#d9a420; --p3:#3aa66a; }
+@media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1f1f1d; --ink:#ecebe7; --muted:#9a9893; --line:#33322f; --accent:#7d9cff; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 16px; display:flex; gap:12px; align-items:center; z-index:2; }
+header h1 { font-size:17px; margin:0; flex:1; }
+header button, .actions button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:6px 12px; cursor:pointer; }
+main { max-width:860px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+.item { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.item.sel { outline:2px solid var(--accent); }
+.item.closed { opacity:.6; }
+.top { display:flex; gap:10px; align-items:baseline; }
+.dot { width:10px; height:10px; border-radius:50%; flex:none; align-self:center; }
+.p1 { background:var(--p1); } .p2 { background:var(--p2); } .p3 { background:var(--p3); }
+.title { font-weight:600; flex:1; }
+.meta { color:var(--muted); font-size:13px; }
+.summary { white-space:pre-wrap; margin:8px 0 0; }
+.media { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.media img, .media video { max-width:100%; max-height:360px; border-radius:8px; border:1px solid var(--line); }
+.links a { color:var(--accent); margin-right:12px; word-break:break-all; }
+.approve-step { margin-top:8px; font-size:14px; color:var(--muted); }
+.actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center; }
+.actions textarea { flex:1 1 100%; min-height:60px; font:inherit; border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--bg); color:var(--ink); }
+.actions .ok { border-color:var(--ok); color:var(--ok); } .actions .no { border-color:var(--no); color:var(--no); }
+.actions .rec { border-color:var(--no); background:var(--no); color:#fff; }
+.empty { text-align:center; color:var(--muted); padding:48px 0; }
+.help { color:var(--muted); font-size:13px; }
+kbd { border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:12px; }
+.toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:8px 14px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Queue <span id="count" class="meta"></span></h1>
+  <button id="toggle">Show closed</button>
+</header>
+<main id="list"></main>
+<p class="help" style="text-align:center"><kbd>j</kbd>/<kbd>k</kbd> move <kbd>a</kbd> approve <kbd>r</kbd> reject <kbd>d</kbd> dismiss <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> priority <kbd>n</kbd> note <kbd>v</kbd> dictate <kbd>Ctrl</kbd>+<kbd>Enter</kbd> reject with note</p>
+<div class="toast" id="toast"></div>
+<script>
+let items = [], sel = 0, all = false, rec = null
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
+const safeUrl = (u) => /^https?:\\/\\//i.test(u) ? u : '#'
+function toast(t) { const el = $('#toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.display = 'none', 2500) }
+async function load() {
+  const res = await fetch('/api/items' + (all ? '?all=1' : ''))
+  if (!res.ok) { $('#list').innerHTML = '<p class="empty">' + esc(await res.text()) + '</p>'; return }
+  items = await res.json()
+  sel = Math.min(sel, Math.max(items.length - 1, 0))
+  render()
+}
+function mediaHtml(it) {
+  return it.media.map((m) => {
+    const src = '/media/' + it.id + '/' + encodeURIComponent(m)
+    return /\\.(webm|mp4|mov)$/i.test(m) ? '<video controls preload="metadata" src="' + src + '"></video>' : '<a href="' + src + '" target="_blank"><img loading="lazy" src="' + src + '" alt="' + esc(m) + '"></a>'
+  }).join('')
+}
+function render() {
+  const open = items.filter((i) => i.state === 'open').length
+  $('#count').textContent = open + ' open'
+  $('#toggle').textContent = all ? 'Hide closed' : 'Show closed'
+  if (!items.length) { $('#list').innerHTML = '<p class="empty">Nothing waits for you.</p>'; return }
+  $('#list').innerHTML = items.map((it, i) => {
+    const closed = it.state !== 'open'
+    return '<article class="item' + (i === sel ? ' sel' : '') + (closed ? ' closed' : '') + '" data-i="' + i + '">' +
+      '<div class="top"><span class="dot p' + it.priority + '"></span><span class="title">' + esc(it.title) + '</span><span class="meta">' + esc(it.id) + '</span></div>' +
+      '<div class="meta">' + esc(it.kind) + ' from ' + esc(it.source) + ' &middot; ' + esc(it.created.slice(0, 16).replace('T', ' ')) + (closed ? ' &middot; <b>' + esc(it.state) + '</b>' + (it.note ? ': ' + esc(it.note) : '') + (it.follow_up ? ' &middot; follow-up ' + esc(it.follow_up) : '') : '') + '</div>' +
+      (it.summary ? '<p class="summary">' + esc(it.summary) + '</p>' : '') +
+      (it.links.length ? '<div class="links">' + it.links.map((l) => '<a target="_blank" rel="noopener" href="' + esc(safeUrl(l)) + '">' + esc(l) + '</a>').join('') + '</div>' : '') +
+      (it.media.length ? '<div class="media">' + mediaHtml(it) + '</div>' : '') +
+      (it.on_approve ? '<div class="approve-step">On approve: ' + esc(it.on_approve) + '</div>' : '') +
+      (closed ? '' : '<div class="actions"><textarea placeholder="Feedback (needed to reject). Tip: press v and talk."></textarea>' +
+        '<button class="ok" data-v="approved">Approve</button><button class="no" data-v="rejected">Reject</button><button data-v="dismissed">Dismiss</button><button class="mic">Dictate</button>' +
+        '<span class="meta">priority</span><button data-p="1">1</button><button data-p="2">2</button><button data-p="3">3</button></div>') +
+      '</article>'
+  }).join('')
+}
+function note(i) { const ta = document.querySelector('[data-i="' + i + '"] textarea'); return ta ? ta.value.trim() : '' }
+async function post(id, what, body) {
+  const res = await fetch('/api/items/' + id + '/' + what, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Fraim-Queue': '1' }, body: JSON.stringify(body) })
+  const out = await res.json()
+  if (!res.ok) { toast(out.error || 'That did not work'); return null }
+  return out
+}
+async function decideAt(i, verdict) {
+  const it = items[i]; if (!it || it.state !== 'open') return
+  const n = note(i)
+  if (verdict === 'rejected' && !n) { toast('Write or dictate why first'); const ta = document.querySelector('[data-i="' + i + '"] textarea'); ta && ta.focus(); return }
+  const out = await post(it.id, 'decide', { verdict, note: n })
+  if (out) { toast(it.id + ' ' + verdict + (out.follow_up ? ', goal ' + out.follow_up + ' started' : '')); await load() }
+}
+async function prioAt(i, p) { const it = items[i]; if (!it) return; if (await post(it.id, 'priority', { priority: p })) load() }
+function dictate(i) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SR) { toast('This browser cannot dictate; use the keyboard mic instead'); return }
+  if (rec) { rec.stop(); return }
+  const ta = document.querySelector('[data-i="' + i + '"] textarea'); if (!ta) return
+  const btn = document.querySelector('[data-i="' + i + '"] .mic')
+  rec = new SR(); rec.lang = navigator.language || 'en-US'; rec.interimResults = false; rec.continuous = true
+  const start = ta.value
+  let heard = ''
+  rec.onresult = (e) => { heard = Array.from(e.results).map((r) => r[0].transcript).join(' '); ta.value = (start ? start + ' ' : '') + heard }
+  rec.onend = () => { rec = null; btn && btn.classList.remove('rec') }
+  btn && btn.classList.add('rec'); rec.start()
+}
+$('#toggle').onclick = () => { all = !all; load() }
+$('#list').addEventListener('click', (e) => {
+  const card = e.target.closest('.item'); if (!card) return
+  const i = +card.dataset.i
+  if (sel !== i && !e.target.closest('textarea')) { sel = i; document.querySelectorAll('.item').forEach((el) => el.classList.toggle('sel', +el.dataset.i === i)) }
+  const b = e.target.closest('button'); if (!b) return
+  if (b.dataset.v) decideAt(i, b.dataset.v)
+  else if (b.dataset.p) prioAt(i, +b.dataset.p)
+  else if (b.classList.contains('mic')) dictate(i)
+})
+function move(d) {
+  sel = Math.max(0, Math.min(items.length - 1, sel + d)); render()
+  const el = document.querySelector('.item.sel'); el && el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+}
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA') {
+    if (e.key === 'Escape') e.target.blur()
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.target.blur(); decideAt(sel, 'rejected') }
+    return
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  const k = e.key
+  if (k === 'j' || k === 'ArrowDown') { e.preventDefault(); move(1) }
+  else if (k === 'k' || k === 'ArrowUp') { e.preventDefault(); move(-1) }
+  else if (k === 'a') decideAt(sel, 'approved')
+  else if (k === 'r') decideAt(sel, 'rejected')
+  else if (k === 'd') decideAt(sel, 'dismissed')
+  else if (k === 'v') dictate(sel)
+  else if (k === 'n') { e.preventDefault(); const ta = document.querySelector('.item.sel textarea'); ta && ta.focus() }
+  else if (['1', '2', '3'].includes(k)) prioAt(sel, +k)
+})
+setInterval(() => { if (document.activeElement?.tagName !== 'TEXTAREA' && !rec) load() }, 30000)
+load()
+</script>
+</body>
+</html>
+`
+
+// --- CLI ---------------------------------------------------------------------------------
+
+function parseArgs(argv, multi = []) {
+  const out = { _: [] }
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--') { out._.push(...argv.slice(i + 1)); break }
+    if (!a.startsWith('--')) { out._.push(a); continue }
+    const key = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+    if (['all', 'json', 'quiet'].includes(key)) { out[key] = true; continue }
+    if (i + 1 >= argv.length) usage(`${a} needs a value`)
+    const value = argv[++i]
+    if (multi.includes(key)) (out[key] ||= []).push(value)
+    else out[key] = value
+  }
+  return out
+}
+
+function main(argv) {
+  const [action, ...rest] = argv
+  const args = parseArgs(rest, ['link', 'media'])
+  const id = args._[0]
+  switch (action) {
+    case 'add': {
+      let summary = args.summary || ''
+      if (args.summaryFile) summary = fs.readFileSync(args.summaryFile, 'utf8')
+      const item = addItem({ ...args, summary, links: args.link, media: args.media })
+      console.log(item.id)
+      return
+    }
+    case 'list': {
+      let items = rank(allItems().filter((i) => args.all || i.state === 'open'))
+      if (args.lead) items = items.filter((i) => i.lead === args.lead)
+      if (args.json) return console.log(JSON.stringify(items))
+      if (!items.length) return console.log('Nothing waits for you.')
+      return console.log(items.slice(0, 50).map(line).join('\n'))
+    }
+    case 'show': {
+      if (!id) usage('show ID')
+      const item = readItem(id)
+      return console.log(args.json ? JSON.stringify(item) : describe(item))
+    }
+    case 'approve':
+    case 'reject':
+    case 'dismiss': {
+      if (!id) usage(`${action} ID`)
+      const verdict = { approve: 'approved', reject: 'rejected', dismiss: 'dismissed' }[action]
+      const item = decide(id, verdict, args.note || args._.slice(1).join(' '))
+      return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}`)
+    }
+    case 'prio': {
+      if (!id || !args._[1]) usage('prio ID 1|2|3')
+      const item = setPriority(id, args._[1])
+      return console.log(`${item.id} priority ${item.priority}`)
+    }
+    case 'url':
+      token()
+      return console.log(queueUrl())
+    case 'token':
+      return console.log(token())
+    case 'serve': {
+      const server = createServer()
+      server.on('error', (err) => {
+        process.stderr.write(`fraim-queue: ${err.message}\n`)
+        process.exit(1)
+      })
+      server.listen(PORT, process.env.FRAIM_QUEUE_BIND || '0.0.0.0', () => process.stderr.write(`fraim-queue: page on port ${PORT}\n`))
+      return
+    }
+    default:
+      usage('add | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | prio ID N | serve | url')
+  }
+}
+
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)
+if (isMain) {
+  try {
+    main(process.argv.slice(2))
+  } catch (err) {
+    process.stderr.write(`fraim-queue: ${err.message}\n`)
+    process.exit(err instanceof UsageError ? 2 : 1)
+  }
+}

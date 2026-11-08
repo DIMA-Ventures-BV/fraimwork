@@ -10,6 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { goalArgs, parseGoalCommand } from './goal-command.mjs'
+import { parseQueueCommand, queueArgs } from './queue-command.mjs'
 import { parseVerdict } from './verdict.mjs'
 
 function loadEnvFile(file) {
@@ -74,6 +75,7 @@ const mcp = new Server(
       'For long tasks, first reply that you started, then reply again with the result.',
       'For a task that takes more than a few minutes, run it as a background goal: fraim-goal start --chat <chat_id> -- "<the task>".',
       'It prints the goal id; reply with it. The goal sends its own result. The owner can also type "goal: <task>", "goals" and "stop g1".',
+      'Goal results wait in the review queue (fraim-queue). The owner answers with "queue", "ok q3", "no q3 <why>" and "skip q3".',
     ].join(' '),
   },
 )
@@ -154,16 +156,16 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   }
 })
 
-function runGoal(args) {
+function runTool(command, args) {
   return new Promise((resolve) => {
-    execFile('fraim-goal', args, { timeout: 30000 }, (err, stdout, stderr) => {
+    execFile(command, args, { timeout: 30000 }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err?.message || '').trim() })
     })
   })
 }
 
 async function handleGoalCommand(command, event) {
-  const result = await runGoal(goalArgs(command, event.chat_id))
+  const result = await runTool('fraim-goal', goalArgs(command, event.chat_id))
   let text
   if (command.action === 'start') {
     text = result.ok
@@ -172,6 +174,13 @@ async function handleGoalCommand(command, event) {
   } else {
     text = result.ok ? result.out || 'Done.' : result.err || 'That did not work.'
   }
+  await gateway('/send', { chat_id: event.chat_id, text })
+}
+
+async function handleQueueCommand(command, event) {
+  const [tool, args] = queueArgs(command)
+  const result = await runTool(tool, args)
+  const text = result.ok ? result.out || 'Done.' : result.err.replace(/^fraim-\w+: /, '') || 'That did not work.'
   await gateway('/send', { chat_id: event.chat_id, text })
 }
 
@@ -185,6 +194,11 @@ async function handleEvent(event) {
   const goal = parseGoalCommand(event, OWNER)
   if (goal) {
     await handleGoalCommand(goal, event)
+    return
+  }
+  const queue = parseQueueCommand(event, OWNER)
+  if (queue) {
+    await handleQueueCommand(queue, event)
     return
   }
   await mcp.notification({

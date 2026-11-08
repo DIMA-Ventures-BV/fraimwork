@@ -1788,6 +1788,56 @@ cmd_auto() {
   workspace_ssh "$remote"
 }
 
+# --- queue and leads: the owner's review queue and the lead agents ---------------------
+cmd_queue() {
+  parse_flags "$@"
+  load_config
+  local action="${POSITIONAL[0]:-open}"
+  case "$action" in
+    open|url)
+      local url start token
+      if [ "$FRAIM_ACCESS" = public ]; then
+        # Public mode publishes the page on the server's 127.0.0.1 only: tunnel it here.
+        start="$(space_get PREVIEW_PORTS 3100-3109)"; start="${start%%-*}"
+        token="$(workspace_ssh 'fraim-queue token')" || die "could not read the queue of space $FRAIM_SPACE"
+        url="http://localhost:$(TUNNEL_TARGET_PORT=3109 tunnel start "$((start + 9))" 127.0.0.1)/?t=$token"
+      else
+        url="$(workspace_ssh 'fraim-queue url')" || die "could not read the queue of space $FRAIM_SPACE"
+      fi
+      if [ "$action" = url ]; then say "$url"; else open_url "$url"; fi
+      ;;
+    list) workspace_ssh "fraim-queue list$( [ -z "$(flag all)" ] || printf ' --all')" ;;
+    show|dismiss)
+      [ -n "${POSITIONAL[1]:-}" ] || usage "fraim queue $action ID"
+      workspace_ssh "fraim-queue $action $(printf '%q' "${POSITIONAL[1]}")" ;;
+    approve|reject)
+      [ -n "${POSITIONAL[1]:-}" ] || usage "fraim queue $action ID [NOTE]"
+      workspace_ssh "fraim-queue $action $(printf '%q' "${POSITIONAL[1]}") --note $(printf '%q' "${POSITIONAL[*]:2}")" ;;
+    *) usage "fraim queue [open|url|list [--all]|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]" ;;
+  esac
+}
+
+cmd_lead() {
+  load_config
+  [ $# -gt 0 ] || set -- list
+  case "$1" in
+    new|list|show|run|pause|resume) ;;
+    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | pause NAME | resume NAME' ;;
+  esac
+  [ "$1" != run ] || server_logged_in || need_login_step
+  workspace_ssh "fraim-lead $(printf '%q ' "$@")"
+}
+
+cmd_brain() {
+  load_config
+  case "${1:-show}" in
+    show) workspace_ssh "fraim-brain show" ;;
+    note) shift; [ $# -gt 0 ] || usage 'fraim brain note "TEXT"'; workspace_ssh "fraim-brain note $(printf '%q' "$*")" ;;
+    distill) workspace_ssh "fraim-brain distill" ;;
+    *) usage 'fraim brain [show | note "TEXT" | distill]' ;;
+  esac
+}
+
 cmd_shell() {
   load_config
   is_tty || usage "fraim shell is interactive and for humans; use 'fraim exec' or 'fraim ask' instead"
@@ -2228,6 +2278,11 @@ Operate
   fraim goal "TASK" | list | show ID | stop ID  background task on the server; result on WhatsApp
   fraim auto [list | show NAME | runs NAME | run NAME [--dry] | pause NAME | resume NAME | check]
                                              automations in ~/fraim/automations (trigger, prompt, output)
+  fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
+                                             the review queue: goal results, lead ideas, decisions
+  fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME
+                                             lead agents that watch an area on a schedule
+  fraim brain [show | note "TEXT" | distill]  preferences learned from reviews
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
   fraim whatsapp status|link [--number N]|relink|test
   fraim browser [--print-url] | stop         server browser view URL and VNC password
@@ -2328,6 +2383,9 @@ main() {
     ask) cmd_ask "$@" ;;
     goal) cmd_goal "$@" ;;
     auto|automation|automations) cmd_auto "$@" ;;
+    queue) cmd_queue "$@" ;;
+    lead) cmd_lead "$@" ;;
+    brain) cmd_brain "$@" ;;
     shell) cmd_shell "$@" ;;
     chrome) cmd_chrome "$@" ;;
     browser) cmd_browser "$@" ;;

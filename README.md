@@ -41,6 +41,8 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 - **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
 - **Connect things:** ask Claude to "connect Linear / PostHog / my GitHub repo / my dev box to fraim". Keys go into the secrets container through your own Terminal, never through the chat.
 - **Bigger tasks:** send `goal: <what you want done>` on WhatsApp. The server works on it in the background, while you can keep chatting, and sends the result when it is done. `goals` lists them, `stop g1` stops one. From the laptop: ask Claude to "start a goal on my server".
+- **One review queue:** goal results, with screenshots, wait for you on one page (`fraim queue` on the laptop) and on WhatsApp (`queue`, `ok q3`, `no q3 <why>`). A rejection sends the work back with your reason, and your reasons become rules the agents follow (see `docs/queue.md`).
+- **Lead agents:** ask Claude to "add a lead for my web app". A lead checks its area every morning, starts small fixes and proposes ideas in your queue. A chief of staff ranks the queue and sends one daily digest.
 - **While you sleep:** ask Claude to schedule a job, for example "every morning at 8, summarize my inbox and WhatsApp me".
 - **Approvals:** before your agent does something risky, it asks you on WhatsApp. Reply with the code it shows, for example `yes abcde`.
 - **Limits:** your agent uses your normal Claude plan. Scheduled jobs and WhatsApp chats count toward its usage limits. When a limit is reached, a job fails and you get a WhatsApp message with the reason; it works again when the limit resets.

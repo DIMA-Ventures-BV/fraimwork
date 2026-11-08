@@ -43,7 +43,7 @@ RUN groupmod -n claude node \
 
 COPY channel/package.json channel/package-lock.json /opt/fraim/channel/
 RUN cd /opt/fraim/channel && npm ci --omit=dev && npm cache clean --force
-COPY channel/whatsapp-channel.mjs channel/verdict.mjs channel/goal-command.mjs /opt/fraim/channel/
+COPY channel/whatsapp-channel.mjs channel/verdict.mjs channel/goal-command.mjs channel/queue-command.mjs /opt/fraim/channel/
 
 COPY sshd_config /etc/ssh/sshd_config.d/fraim.conf
 COPY managed-settings.json /etc/claude-code/managed-settings.json
