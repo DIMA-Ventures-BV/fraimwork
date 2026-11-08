@@ -28,7 +28,7 @@ case "${1:-}" in
 import json, sys
 data = json.load(sys.stdin)
 client = data.get("installed") or data.get("web")
-if not client or not client.get("client_id") or not client.get("client_secret"):
+if not client or not all(client.get(k) for k in ("client_id", "client_secret", "auth_uri", "token_uri")):
     sys.exit("fraim-google: this is not an OAuth client file; download it from Google Cloud > Credentials")
 if "installed" not in data:
     sys.exit("fraim-google: use a client of type Desktop app, not Web application")

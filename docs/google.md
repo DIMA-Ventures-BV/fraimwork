@@ -6,7 +6,7 @@
 agent (workspace) --MCP--> google container --your Google token--> Gmail, Drive, Calendar
 ```
 
-The server is [workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT), pinned in `google/Dockerfile`.
+The server is [workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT). Every Python package is pinned with its hash in `google/requirements.txt`; to update, change the version in `google/requirements.in` and run the `uv pip compile` line from `google/Dockerfile`.
 
 ## 1. Make a Google OAuth client (once, about 15 minutes)
 
