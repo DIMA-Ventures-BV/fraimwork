@@ -63,3 +63,23 @@ The proxy refuses a call with a wrong token, no token, or an unknown service (40
 ## Tests
 
 `tests/secrets.sh` starts the real proxy in Docker with a fake API and checks 15 things, including the attacks above. It needs Docker and removes everything afterwards.
+
+## Keys a tool reads itself
+
+Some tools cannot go through the proxy: a command-line tool that reads `ACCESS_TOKEN` from its environment, or one that keeps a refresh token in `~/.config/TOOL/credentials.json`. For those:
+
+- `fraim secret env NAME --stdin` puts `NAME=value` in the space's `~/.config/fraim/secrets.env`. Claude starts with it in its environment.
+- `fraim secret file PATH --stdin < LOCAL_FILE` writes the file to `~/PATH` in the workspace, mode 600.
+- `fraim secret list` shows the names, never the values. `fraim secret env-rm NAME` removes one.
+
+Copy a key from the laptop without showing it: `printenv NAME | fraim secret env NAME --stdin`.
+
+Claude can read these keys, the same as on a laptop. Use the proxy when the tool allows it.
+
+## Tools
+
+`fraim tool add npm:PACKAGE@VERSION uv:PACKAGE@VERSION` installs command-line tools for a space in its home volume (`~/.local`), so they survive updates. Always give an exact version. `fraim tool list` and `fraim tool rm NAME` manage them.
+
+## OAuth sign-ins without copying an address
+
+`fraim connect NAME --url URL --oauth` tunnels the sign-in's `localhost` callback port from the laptop to the workspace and opens the browser. After Approve the browser lands on the server by itself; then `fraim connect NAME --finish`. When the port is busy on the laptop, fraim falls back to `fraim connect NAME --redirect` and a pasted address.

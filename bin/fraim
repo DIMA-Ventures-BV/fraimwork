@@ -1292,14 +1292,40 @@ admin_stdin() {
 cmd_secret() {
   parse_flags "$@"
   local action="${POSITIONAL[0]:-}" name="${POSITIONAL[1]:-}" value=""
-  local usage_line="fraim secret list | add NAME --upstream https://HOST [--header H] [--format 'Bearer %s'] | set NAME [--stdin] | rm NAME"
+  local usage_line="fraim secret list | add NAME --upstream https://HOST [--header H] [--format 'Bearer %s'] | set NAME [--stdin] | rm NAME | env NAME [--stdin] | env-rm NAME | file PATH [--stdin]"
   case "$action" in
-    list|add|set|rm) ;;
+    list|add|set|rm|env|env-rm|file) ;;
     *) usage "$usage_line" ;;
   esac
   load_config
   case "$action" in
-    list) admin "docker compose exec -T secrets fraim-secret list" ;;
+    list)
+      admin "docker compose exec -T secrets fraim-secret list"
+      local envs
+      envs="$(workspace_ssh 'fraim-env list' 2>/dev/null || true)"
+      if [ -n "$envs" ]; then
+        say ""
+        say "Environment keys in space $FRAIM_SPACE (Claude can read these):"
+        say "$envs"
+      fi
+      ;;
+    env|file)
+      [ -n "$name" ] || usage "$usage_line"
+      [ "$action" = env ] || [ -n "$(flag stdin)" ] || usage "fraim secret file PATH --stdin < LOCAL_FILE  (the file's content goes to ~/PATH in the workspace)"
+      need_secret_input "In your own Terminal app (not in the Claude chat), run: fraim secret $action $name$(space_hint)  and paste the value. Then tell Claude 'done'."
+      if [ -n "$(flag stdin)" ]; then value="$(cat)"; else value="$(read_secret_input "Paste the value for $name")"; fi
+      [ -n "$value" ] || usage "no value given for $name"
+      if [ "$action" = env ]; then
+        printf '%s' "$value" | workspace_ssh "fraim-env set $(printf '%q' "$name")"
+        workspace_ssh "fraim-connect reload >/dev/null"
+      else
+        printf '%s\n' "$value" | workspace_ssh "fraim-env file $(printf '%q' "$name")"
+      fi
+      ;;
+    env-rm)
+      [ -n "$name" ] || usage "$usage_line"
+      workspace_ssh "fraim-env rm $(printf '%q' "$name") && fraim-connect reload >/dev/null"
+      ;;
     add)
       [ -n "$name" ] && [ -n "$(flag upstream)" ] || usage "$usage_line"
       local header format
@@ -1511,10 +1537,37 @@ cmd_host() {
 }
 
 # --- connect: MCP servers for a space -------------------------------------------------
+# The port of a localhost redirect_uri in an OAuth link, or nothing.
+oauth_callback_port() {
+  printf '%s' "$1" | sed -nE 's#.*redirect_uri=http(%3A|:)(%2F%2F|//)(localhost|127\.0\.0\.1)(%3A|:)([0-9]{1,5})([^0-9].*)?$#\5#p' | head -1
+}
+# oauth_tunnel_start NAME PORT: forward localhost:PORT here to localhost:PORT in the
+# workspace for 15 minutes (a sign-in that is never finished cleans itself up).
+oauth_tunnel_start() {
+  port_free "$2" || return 1
+  bg_stop "$1"
+  mkdir -p "$RUN_DIR"
+  # shellcheck disable=SC2046
+  nohup ssh -o ExitOnForwardFailure=yes -L "127.0.0.1:$2:127.0.0.1:$2" $(ssh_opts) "claude@$FRAIM_HOST" 'sleep 900' >"$RUN_DIR/$1.log" 2>&1 &
+  echo $! > "$RUN_DIR/$1.pid"
+  local _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    port_free "$2" || return 0
+    bg_running "$1" || break
+    sleep 1
+  done
+  bg_stop "$1"
+  return 1
+}
+open_browser() {
+  if command -v open >/dev/null; then open "$1" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null; then xdg-open "$1" >/dev/null 2>&1 || true; fi
+}
+
 cmd_connect() {
   parse_flags "$@"
   local name="${POSITIONAL[0]:-}"
-  local usage_line="fraim connect NAME --url https://HOST/PATH [--key [--header H --format F] [--stdin] | --oauth] | NAME --command 'CMD ARGS' | NAME --redirect | rm NAME | list [--json]"
+  local usage_line="fraim connect NAME --url https://HOST/PATH [--key [--header H --format F] [--stdin] | --oauth] | NAME --command 'CMD ARGS' | NAME --finish | NAME --redirect | rm NAME | list [--json]"
   [ -n "$name" ] || usage "$usage_line"
   # A key on stdin is read before anything else can touch stdin.
   local piped_key=""
@@ -1551,7 +1604,19 @@ cmd_connect() {
   esac
   local qname
   qname="$(printf '%q' "$name")"
+  local tunnel_name="oauth-$FRAIM_TARGET-$FRAIM_SPACE-$name"
+  if [ -n "$(flag finish)" ]; then
+    if workspace_ssh "fraim-tty wait mcp-$name 'success|authenticated|signed in|connected' 10"; then
+      bg_stop "$tunnel_name"
+      workspace_ssh "fraim-tty stop mcp-$name; fraim-connect reload >/dev/null"
+      say "$name is signed in for space $FRAIM_SPACE. The Claude session restarts with it."
+      return
+    fi
+    workspace_ssh "fraim-tty show mcp-$name | tail -8" >&2 || true
+    die "the sign-in for $name is not finished: click Approve in the browser and run this again, or paste the address with: fraim connect $name --redirect$(space_hint)"
+  fi
   if [ -n "$(flag redirect)" ]; then
+    bg_stop "$tunnel_name"
     local redirect
     need_secret_input "In your own Terminal app (not in the Claude chat), run: fraim connect $name --redirect$(space_hint)  and paste the full address from the browser's address bar. Then tell Claude 'done'."
     redirect="${piped_key:-$(read_secret_input "Paste the full address from the browser's address bar")}"
@@ -1593,10 +1658,46 @@ cmd_connect() {
   if [ -n "$(flag oauth)" ]; then
     local link
     link="$(workspace_ssh "fraim-connect login $qname")" || die "could not start the sign-in for $name"
+    # The provider sends the browser to localhost:PORT, where `claude mcp login` listens
+    # inside the workspace. With the same port tunneled from this computer, the browser
+    # lands on the server by itself and nobody copies an address.
+    local port
+    port="$(oauth_callback_port "$link")"
+    if [ -n "$port" ] && oauth_tunnel_start "$tunnel_name" "$port"; then
+      [ -n "$(flag print-url)" ] || open_browser "$link"
+      human "Sign in to $name in the browser and click Approve: $link  Then tell Claude 'done'; Claude then runs: fraim connect $name --finish$(space_hint)"
+    fi
     human "Open this link and sign in to $name: $link  The browser then goes to an address that may not load; that is fine. Copy the full address from the address bar, then in your own Terminal app run: fraim connect $name --redirect$(space_hint)  and paste it. Then tell Claude 'done'."
   fi
   workspace_ssh "fraim-connect reload >/dev/null"
   say "$name is connected in space $FRAIM_SPACE."
+}
+
+# --- tool: extra command-line tools for a space ---------------------------------------
+cmd_tool() {
+  parse_flags "$@"
+  local action="${POSITIONAL[0]:-}"
+  local usage_line="fraim tool add npm:PACKAGE@VERSION|uv:PACKAGE@VERSION ... | list | rm NAME | sync"
+  load_config
+  case "$action" in
+    add)
+      [ "${#POSITIONAL[@]}" -gt 1 ] || usage "$usage_line"
+      local spec quoted=""
+      for spec in "${POSITIONAL[@]:1}"; do
+        printf '%s' "$spec" | grep -Eq '^(npm|uv):@?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?@[0-9][A-Za-z0-9.+-]*$' \
+          || usage "'$spec' is not npm:PACKAGE@VERSION or uv:PACKAGE@VERSION (an exact version)"
+        quoted="$quoted $(printf '%q' "$spec")"
+      done
+      workspace_ssh "fraim-tools add$quoted"
+      ;;
+    list) workspace_ssh 'fraim-tools list' ;;
+    rm)
+      [ -n "${POSITIONAL[1]:-}" ] || usage "$usage_line"
+      workspace_ssh "fraim-tools rm $(printf '%q' "${POSITIONAL[1]}")"
+      ;;
+    sync) workspace_ssh 'fraim-tools sync' ;;
+    *) usage "$usage_line" ;;
+  esac
 }
 
 # --- preview: dev servers in a space on the phone or laptop ----------------------------
@@ -2105,6 +2206,10 @@ Operate
   fraim secret add NAME --upstream https://HOST [--header H] [--format 'Bearer %s']
   fraim secret set NAME [--stdin]            store the key: hidden prompt, or piped (never an argument)
   fraim secret rm NAME
+  fraim secret env NAME [--stdin] | env-rm NAME   key a tool reads from its environment
+  fraim secret file PATH [--stdin]           credentials file at ~/PATH in the workspace
+                                             (env and file keys are readable by Claude, as on a laptop)
+  fraim tool add npm:PKG@VER|uv:PKG@VER ... | list | rm NAME   extra command-line tools for the space
   fraim shell [NAME]                         humans only: attach to the Claude tmux session
 
 Spaces: separate fraims on one server (own Claude, browser, keys, files). Every command
@@ -2122,7 +2227,8 @@ takes --space NAME; without it a command works on the main space. See docs/space
   fraim host add NAME --address HOST [--user U] [--port P] [--authorize-via SSH_ALIAS]
   fraim host test NAME | list [--json] | rm NAME [--authorize-via SSH_ALIAS]
   fraim connect NAME --url https://HOST/PATH                  MCP server without a key
-  fraim connect NAME --url URL --oauth | --redirect           MCP server with an OAuth sign-in
+  fraim connect NAME --url URL --oauth, then NAME --finish    MCP server with an OAuth sign-in
+                                             (the browser lands on the server; --redirect pastes it)
   fraim connect NAME --url URL --key [--header H] [--format F] [--stdin]   key in the secrets proxy
   fraim connect NAME --command 'CMD ARGS' | list [--json] | rm NAME
   fraim google setup --email E --file F | code | status | signout   Gmail, Drive, Calendar for any agent
@@ -2174,6 +2280,7 @@ main() {
     repo) cmd_repo "$@" ;;
     host) cmd_host "$@" ;;
     connect) cmd_connect "$@" ;;
+    tool) cmd_tool "$@" ;;
     google) cmd_google "$@" ;;
     preview) cmd_preview "$@" ;;
     login) cmd_login "$@" ;;

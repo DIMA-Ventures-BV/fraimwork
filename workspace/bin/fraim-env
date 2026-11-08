@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Keys that a tool reads itself (an environment variable or a credentials file), for tools
+# that cannot go through the secrets proxy. Unlike the proxy, Claude can read these, the same
+# as on a laptop. Values come on stdin only, never as an argument.
+#   fraim-env set NAME     ~/.config/fraim/secrets.env gets NAME=<stdin>
+#   fraim-env rm NAME
+#   fraim-env list         names only
+#   fraim-env file PATH    ~/PATH gets <stdin>, mode 600 (PATH inside the home folder)
+set -euo pipefail
+
+SECRETS="$HOME/.config/fraim/secrets.env"
+
+usage() { printf 'usage: fraim-env %s\n' "$*" >&2; exit 2; }
+die() { printf 'fraim-env: %s\n' "$*" >&2; exit 1; }
+valid_name() { printf '%s' "$1" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$'; }
+
+without() {  # NAME: secrets.env without that key
+  [ -f "$SECRETS" ] || return 0
+  grep -v -E "^$1=" "$SECRETS" || true
+}
+
+cmd="${1:-}"
+name="${2:-}"
+case "$cmd" in
+  set)
+    valid_name "$name" || usage "set NAME (capital letters, digits and _)"
+    value="$(cat)"
+    value="$(printf '%s' "$value" | tr -d '\r\n')"
+    [ -n "$value" ] || die "no value on stdin for $name"
+    mkdir -p "$(dirname "$SECRETS")"
+    (umask 077 && { without "$name"; printf '%s=%s\n' "$name" "$value"; } > "$SECRETS.tmp")
+    mv "$SECRETS.tmp" "$SECRETS"
+    chmod 600 "$SECRETS"
+    printf 'Set %s.\n' "$name"
+    ;;
+  rm)
+    valid_name "$name" || usage "rm NAME"
+    (umask 077 && without "$name" > "$SECRETS.tmp")
+    mv "$SECRETS.tmp" "$SECRETS"
+    printf 'Removed %s.\n' "$name"
+    ;;
+  list)
+    [ -f "$SECRETS" ] || exit 0
+    grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS" | cut -d= -f1 | sort
+    ;;
+  file)
+    printf '%s' "$name" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || usage "file PATH (relative to the home folder)"
+    case "/$name/" in */../*|*/./*) usage "file PATH without . or .. parts" ;; esac
+    dest="$HOME/$name"
+    mkdir -p "$(dirname "$dest")"
+    [ "$(dirname "$dest")" = "$HOME" ] || chmod 700 "$(dirname "$dest")"
+    (umask 077 && cat > "$dest.tmp")
+    [ -s "$dest.tmp" ] || { rm -f "$dest.tmp"; die "no content on stdin for $name"; }
+    mv "$dest.tmp" "$dest"
+    chmod 600 "$dest"
+    printf 'Wrote ~/%s.\n' "$name"
+    ;;
+  *) usage "set NAME | rm NAME | list | file PATH" ;;
+esac
