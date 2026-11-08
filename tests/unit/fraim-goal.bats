@@ -1,0 +1,121 @@
+#!/usr/bin/env bats
+# workspace/bin/fraim-goal with a fake fraim-claude, fraim-gateway and fraim-notify:
+# ids, the background run, the result message, failures and stop.
+
+setup() {
+  GOAL="$BATS_TEST_DIRNAME/../../workspace/bin/fraim-goal"
+  T="$BATS_TEST_TMPDIR"
+  mkdir -p "$T/bin" "$T/home/fraim"
+  export HOME="$T/home" FRAIM_GOALS_DIR="$T/home/fraim/goals" SENT="$T/sent" CLAUDE_ARGS="$T/claude.args"
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGS"
+[ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
+[ -z "${FAKE_FAIL:-}" ] || { echo "usage limit reached" >&2; exit 1; }
+echo "Booked nothing, made a list in ~/fraim/goals/g1/flights.md"
+EOF
+  cat > "$T/bin/fraim-gateway" <<'EOF'
+#!/usr/bin/env bash
+printf 'gateway %s\n' "$3" >> "$SENT"
+EOF
+  cat > "$T/bin/fraim-notify" <<'EOF'
+#!/usr/bin/env bash
+printf 'notify %s\n' "$*" >> "$SENT"
+EOF
+  chmod +x "$T/bin/"*
+  printf 'FRAIM_MODULES=whatsapp,scheduler\n' > "$T/runtime.env"
+  export PATH="$T/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
+}
+
+wait_state() {
+  for _ in $(seq 50); do
+    grep -q "^$2" "$FRAIM_GOALS_DIR/$1/state" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  cat "$FRAIM_GOALS_DIR/$1/state" >&2
+  return 1
+}
+
+@test "start prints g1, then g2, and runs in the background" {
+  run "$GOAL" start -- find flights
+  [ "$status" -eq 0 ]
+  [ "$output" = g1 ]
+  run "$GOAL" start "second goal"
+  [ "$output" = g2 ]
+  wait_state g1 done
+  wait_state g2 done
+  [ "$(cat "$FRAIM_GOALS_DIR/g1/goal.md")" = "find flights" ]
+}
+
+@test "the result goes to the WhatsApp chat the goal came from" {
+  run "$GOAL" start --chat 316@s.whatsapp.net -- find flights
+  wait_state g1 done
+  for _ in $(seq 20); do [ -s "$SENT" ] && break; sleep 0.1; done
+  grep -q '"chat_id":"316@s.whatsapp.net"' "$SENT"
+  grep -q 'Goal g1 done' "$SENT"
+  grep -q 'flights.md' "$FRAIM_GOALS_DIR/g1/result.md"
+}
+
+@test "without a chat the owner gets the result through fraim-notify" {
+  "$GOAL" start -- tidy up
+  wait_state g1 done
+  for _ in $(seq 20); do [ -s "$SENT" ] && break; sleep 0.1; done
+  grep -q '^notify Goal g1 done' "$SENT"
+}
+
+@test "the goal text reaches Claude inside the prompt, with acceptEdits and the tools" {
+  "$GOAL" start -- 'text with $(danger) and "quotes"'
+  wait_state g1 done
+  grep -qF 'text with $(danger) and "quotes"' "$CLAUDE_ARGS"
+  grep -qx -- '--permission-mode' "$CLAUDE_ARGS"
+  grep -qx 'acceptEdits' "$CLAUDE_ARGS"
+  grep -qx 'Read,Glob,Grep,Edit,Write,WebSearch,Bash' "$CLAUDE_ARGS"
+}
+
+@test "a tools file replaces the default tools" {
+  mkdir -p "$FRAIM_GOALS_DIR"
+  printf '# comment\nRead\n\nWebFetch(domain:example.com)\n' > "$FRAIM_GOALS_DIR/tools"
+  "$GOAL" start -- x
+  wait_state g1 done
+  grep -qx 'Read,WebFetch(domain:example.com)' "$CLAUDE_ARGS"
+}
+
+@test "a failed run says why" {
+  FAKE_FAIL=1 "$GOAL" start -- x
+  wait_state g1 failed
+  grep -q 'usage limit' "$FRAIM_GOALS_DIR/g1/state"
+  for _ in $(seq 20); do [ -s "$SENT" ] && break; sleep 0.1; done
+  grep -q 'Goal g1 failed' "$SENT"
+}
+
+@test "list and show" {
+  "$GOAL" start -- first goal
+  wait_state g1 done
+  run "$GOAL" list
+  [[ "$output" == "g1  done "*"first goal" ]]
+  run "$GOAL" show g1
+  [[ "$output" == *"first goal"* ]]
+  [[ "$output" == *"Result:"* ]]
+}
+
+@test "stop ends a running goal and sends nothing" {
+  FAKE_SLEEP=30 "$GOAL" start -- slow
+  wait_state g1 running
+  for _ in $(seq 20); do [ -s "$CLAUDE_ARGS" ] && break; sleep 0.1; done
+  run "$GOAL" stop g1
+  [ "$output" = "Goal g1 stopped." ]
+  wait_state g1 stopped
+  sleep 0.5
+  [ ! -s "$SENT" ]
+}
+
+@test "bad input is a usage error" {
+  run "$GOAL" start
+  [ "$status" -eq 2 ]
+  run "$GOAL" show ../etc
+  [ "$status" -eq 2 ]
+  run "$GOAL" show g9
+  [ "$status" -eq 1 ]
+  run "$GOAL" list
+  [ "$output" = "No goals yet." ]
+}

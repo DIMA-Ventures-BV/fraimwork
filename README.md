@@ -38,6 +38,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 - **On your phone:** use the Claude app (Remote Control, after a full login: ask Claude to "turn on Remote Control for fraim"), or send a WhatsApp message to your agent's number.
 - **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
 - **Connect things:** ask Claude to "connect Linear / PostHog / my GitHub repo / my dev box to fraim". Keys go into the secrets container through your own Terminal, never through the chat.
+- **Bigger tasks:** send `goal: <what you want done>` on WhatsApp. The server works on it in the background, while you can keep chatting, and sends the result when it is done. `goals` lists them, `stop g1` stops one. From the laptop: ask Claude to "start a goal on my server".
 - **While you sleep:** ask Claude to schedule a job, for example "every morning at 8, summarize my inbox and WhatsApp me".
 - **Approvals:** before your agent does something risky, it asks you on WhatsApp. Reply with the code it shows, for example `yes abcde`.
 - **Limits:** your agent uses your normal Claude plan. Scheduled jobs and WhatsApp chats count toward its usage limits. When a limit is reached, a job fails and you get a WhatsApp message with the reason; it works again when the limit resets.
