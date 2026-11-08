@@ -27,6 +27,7 @@ case "$cmd" in
     value="$(cat)"
     value="$(printf '%s' "$value" | tr -d '\r\n')"
     [ -n "$value" ] || die "no value on stdin for $name"
+    if [ -f "$SECRETS" ] && grep -qxF -- "$name=$value" "$SECRETS"; then printf 'Unchanged %s.\n' "$name"; exit 0; fi
     mkdir -p "$(dirname "$SECRETS")"
     (umask 077 && { without "$name"; printf '%s=%s\n' "$name" "$value"; } > "$SECRETS.tmp")
     mv "$SECRETS.tmp" "$SECRETS"
@@ -51,6 +52,7 @@ case "$cmd" in
     [ "$(dirname "$dest")" = "$HOME" ] || chmod 700 "$(dirname "$dest")"
     (umask 077 && cat > "$dest.tmp")
     [ -s "$dest.tmp" ] || { rm -f "$dest.tmp"; die "no content on stdin for $name"; }
+    if [ -f "$dest" ] && cmp -s "$dest.tmp" "$dest"; then rm -f "$dest.tmp"; printf 'Unchanged ~/%s.\n' "$name"; exit 0; fi
     mv "$dest.tmp" "$dest"
     chmod 600 "$dest"
     printf 'Wrote ~/%s.\n' "$name"

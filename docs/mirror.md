@@ -5,13 +5,23 @@ A mirror file lists what a space needs: plugins, repos, tools, keys, MCP servers
 The file holds no keys. A key line names an environment variable or a file on the laptop, and its value goes to the server on stdin when the line runs.
 
 ```sh
-fraim mirror team.mirror --dry-run          # show what would run
-fraim mirror team.mirror                    # run it
-fraim mirror team.mirror --only tool,env    # only some kinds
-fraim mirror team.mirror --space personal
+fraim mirror team.mirror                    # show the plan: what runs, where each key goes
+fraim mirror team.mirror --yes              # run it, after the user has seen the plan
+fraim mirror team.mirror --yes --only tool,env
+fraim mirror team.mirror --yes --space personal
 ```
 
-Each line calls the same building block as its own command. A line that is already done is skipped, so after a human step (an OAuth sign-in, a Tailscale change) run the file again. Every line is checked before anything runs.
+Each line calls the same building block as its own command. A line that is already done is skipped (a key or file with the same value, an installed plugin or tool, a signed-in MCP server, a reachable host), so after a human step (an OAuth sign-in, a Tailscale change) run the file again. The space's Claude only restarts when a key or plugin really changed.
+
+## Safety
+
+A mirror file can come from someone else, so:
+
+- Every line is checked before anything runs. No word may start with `-`.
+- Without `--yes`, mirror only prints the plan, with the host each `connect ... key` sends its key to, and exits 3. Show it to the user first; `--dry-run` prints the same plan and exits 0.
+- `file` lines cannot read or write `~/.ssh`, `~/.gnupg`, `~/.claude`, `~/.claude.json`, `~/.config/fraim`, git config, `~/.local/bin` or shell start-up files.
+- A `connect ... key` line that is already connected is skipped. To change its key, run `fraim connect NAME --url URL --key`.
+- `host` lines add the space's key to the host's `authorized_keys`, through this laptop. For production, ask first.
 
 ## Lines
 
@@ -50,7 +60,7 @@ host app-prod
 
 ## Exit codes
 
-0 every line done or skipped, 1 a line failed (the others still ran), 2 the file has invalid lines (nothing ran), 3 a line waits for a human step (the steps are listed; run the file again afterwards).
+0 every line done or skipped (or `--dry-run`), 1 a line failed (the others still ran), 2 the file has invalid lines (nothing ran), 3 the plan waits for a yes (no `--yes`), or a line waits for a human step (the steps are listed; run the file again afterwards).
 
 ## Hosts on a tailnet
 

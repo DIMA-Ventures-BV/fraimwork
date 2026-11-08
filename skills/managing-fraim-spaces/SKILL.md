@@ -90,7 +90,7 @@ Production hosts: installing the key changes the host's `authorized_keys`, and t
 
 ## A whole setup from one file (fraim mirror)
 
-`$F mirror FILE --space S` runs every line of a mirror file (docs/mirror.md): plugins, repos, tools, keys from this laptop, MCP servers and SSH hosts. Lines that are done are skipped, so after a human step run it again. Use `--dry-run` first and `--only KIND,...` for a part. Show the user any `host` lines before a real run.
+`$F mirror FILE --space S` runs every line of a mirror file (docs/mirror.md): plugins, repos, tools, keys from this laptop, MCP servers and SSH hosts. Without `--yes` it prints the plan (where each key goes) and exits 3: show the plan to the user, and on yes run it again with `--yes`. Lines that are done are skipped, so after a human step run it again. `--only KIND,...` runs a part.
 
 ## Previews on the phone
 
