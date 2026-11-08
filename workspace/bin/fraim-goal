@@ -16,6 +16,8 @@ set -uo pipefail
 
 # shellcheck source=/dev/null
 . "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+# The WhatsApp channel starts goals without a login shell; keep the server's time zone.
+[ -z "${TZ:-}" ] || export TZ
 
 goals="${FRAIM_GOALS_DIR:-$HOME/fraim/goals}"
 DEFAULT_TOOLS="Read,Glob,Grep,Edit,Write,WebSearch,Bash"
