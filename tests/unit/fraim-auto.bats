@@ -154,6 +154,19 @@ model: sonnet' 'Mail since {{since}}. Extra: {{input}}'
   grep -q 'works again' "$SENT"
 }
 
+@test "an expired sign-in is named as a sign-in problem, also when it only shows as a 401" {
+  make_auto signin '' 'Try.'
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+echo '{"type":"result","is_error":true,"result":"API Error: 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth session expired and could not be refreshed\"}}"}'
+exit 1
+EOF
+  run "$AUTO" run signin
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not signed in to Claude"* ]]
+  grep -q '^alert .*not signed in to Claude' "$SENT"
+}
+
 @test "a scheduled run of an automation with a mistake is blocked with one alert" {
   make_auto bad 'output: telegram' 'Do.'
   run "$AUTO" fire bad
