@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# fraim-api: call an API through the secrets proxy without typing the session token.
+# Claude's shell refuses commands with variables, so this reads the token itself and puts it
+# in the header and format the service needs. The real key stays in the secrets container.
+#
+#   fraim-api                              list the services (name, header, format, API)
+#   fraim-api NAME PATH [CURL OPTIONS...]  call PATH on service NAME, e.g. fraim-api openai /v1/models
+#                                          extra options go to curl: -X POST -d @body.json -H 'Content-Type: application/json'
+# Exit codes: 0 ok, 1 failure (including an HTTP error), 2 usage.
+set -euo pipefail
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+usage() { echo "fraim-api: $*" >&2; exit 2; }
+die() { echo "fraim-api: $*" >&2; exit 1; }
+
+[ "${1:-}" != -h ] && [ "${1:-}" != --help ] || { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+[ -n "${FRAIM_SECRETS_URL:-}" ] && [ -n "${FRAIM_SECRETS_TOKEN:-}" ] \
+  || die "this space has no secrets proxy settings; recreate the workspace (fraim reset-workspace)"
+
+services="$(curl -fsS --max-time 10 "$FRAIM_SECRETS_URL/_services")" || die "cannot reach the secrets proxy at $FRAIM_SECRETS_URL"
+
+if [ $# -eq 0 ]; then
+  printf '%s\n' "$services"
+  exit 0
+fi
+
+name="$1" path="${2:-}"
+shift
+[ $# -gt 0 ] && shift
+printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "NAME must be a service name from 'fraim-api'"
+case "$path" in
+  /*) ;;
+  *) usage "PATH must start with /, e.g. fraim-api $name /v1/models" ;;
+esac
+
+line="$(printf '%s\n' "$services" | awk -v n="$name" '$1 == n')"
+[ -n "$line" ] || die "no service '$name'. Ask the owner to add it from the laptop: fraim secret add $name --upstream https://HOST, then fraim secret set $name"
+header="$(printf '%s' "$line" | awk '{print $2}')"
+# The format can contain a space ("Bearer %s"): it is every field between the header and the API.
+format="$(printf '%s' "$line" | awk '{$1=""; $2=""; $NF=""; sub(/^ +/, ""); sub(/ +$/, ""); print}')"
+# shellcheck disable=SC2059
+value="$(printf "$format" "$FRAIM_SECRETS_TOKEN")"
+
+# The header reaches curl on stdin, not on the command line, so `ps` never shows the token.
+# That is why a request body must come from a file (-d @body.json), not from stdin.
+exec curl -sS --fail-with-body --max-time "${FRAIM_API_TIMEOUT:-120}" \
+  -H @- "$@" "$FRAIM_SECRETS_URL/$name$path" <<<"$header: $value"
