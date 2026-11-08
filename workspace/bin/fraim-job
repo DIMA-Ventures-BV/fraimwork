@@ -1,65 +1,11 @@
 #!/usr/bin/env bash
-# Runs one scheduled job: ~/fraim/jobs/<name>.md is the prompt,
-# ~/fraim/jobs/<name>.tools (optional) lists allowed tools, one per line.
-# If Claude's answer is exactly SILENT, no notification is sent.
-# The outcome of the last run is kept in ~/.local/state/fraim/jobs/<name> for fraim-doctor.
+# Kept for old crontab lines and habits: scheduled jobs are automations now.
+# fraim-job NAME runs ~/fraim/automations/NAME (see fraim-auto). fraim-auto migrate moves
+# ~/fraim/jobs/NAME.md there when the scheduler starts.
 set -uo pipefail
-
 name="${1:?usage: fraim-job <name>}"
-jobs="$HOME/fraim/jobs"
-prompt_file="$jobs/$name.md"
-state_dir="$HOME/.local/state/fraim/jobs"
-mkdir -p "$state_dir"
-[ -f "$prompt_file" ] || {
-  echo "fraim-job: $prompt_file not found" >&2
-  printf 'failed %s prompt file missing\n' "$(date '+%Y-%m-%d %H:%M')" > "$state_dir/$name"
-  fraim-notify "Job $name could not run: its prompt file ~/fraim/jobs/$name.md is missing."
-  exit 1
-}
-
-# No WebFetch by default: a page could ask the job to send data out. A job that needs a
-# site lists it in <name>.tools, for example WebFetch(domain:example.com).
-tools="Read,Glob,Grep,WebSearch"
-if [ -f "$jobs/$name.tools" ]; then
-  tools="$(grep -v '^\s*#' "$jobs/$name.tools" | grep -v '^\s*$' | paste -sd, -)"
+autos="${FRAIM_AUTOMATIONS_DIR:-$HOME/fraim/automations}"
+if [ ! -f "$autos/$name/automation.md" ] && [ -f "$HOME/fraim/jobs/$name.md" ]; then
+  fraim-auto migrate >/dev/null || true
 fi
-
-log_dir="$HOME/fraim/logs/jobs"
-mkdir -p "$log_dir"
-log="$log_dir/$name-$(date +%Y%m%d-%H%M%S).md"
-
-cd "$HOME/fraim" || exit 1
-output="$(timeout "${FRAIM_JOB_TIMEOUT:-1800}" fraim-claude -p "$(cat "$prompt_file")" --allowedTools "$tools" 2>&1)"
-code=$?
-
-printf '%s\n' "$output" > "$log"
-
-if [ "$code" -eq 0 ]; then
-  printf 'ok %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$state_dir/$name"
-  [ "$(printf '%s' "$output" | tr -d '[:space:]')" = "SILENT" ] && exit 0
-  # Every answer is also kept in ~/fraim/outbox.md (last 100), so owners without WhatsApp
-  # can ask Claude "what did my jobs say?" and `fraim status --json` shows recent ones.
-  outbox="$HOME/fraim/outbox.md"
-  printf '## %s %s\n\n%s\n\n' "$(date '+%Y-%m-%d %H:%M')" "$name" "${output:0:3500}" >> "$outbox"
-  if [ "$(grep -c '^## ' "$outbox")" -gt 100 ]; then
-    tmp="$(mktemp)"
-    awk -v drop="$(( $(grep -c '^## ' "$outbox") - 100 ))" '/^## /{n++} n>drop' "$outbox" > "$tmp" && cat "$tmp" > "$outbox"
-    rm -f "$tmp"
-  fi
-  FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "Job $name finished:
-
-${output:0:3500}"
-  exit 0
-fi
-
-reason="exit $code"
-case "$output" in
-  *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*)
-    reason="the server is not signed in to Claude; ask Claude on your laptop to log the server in" ;;
-  *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
-    reason="your Claude plan's usage limit was reached; the job works again when the limit resets" ;;
-esac
-[ "$code" -ne 124 ] || reason="it took longer than ${FRAIM_JOB_TIMEOUT:-1800} seconds and was stopped"
-printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$state_dir/$name"
-fraim-notify "Job $name failed: $reason. Log: ${log#"$HOME"/}"
-exit "$code"
+exec fraim-auto run "$name"

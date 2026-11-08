@@ -33,7 +33,7 @@ and exits 1 when any check fails (also `claude-login` before the first login: th
 | `server-browser` | `$F restart browser` |
 | `syncthing` | `$F restart syncthing`, then `$F sync --print-url` |
 | `disk-below-90-percent` | `$F exec -- sh -c 'du -sh ~/fraim/*'` and tell the user what is large |
-| `jobs-ok` | The last run of a job failed. The reason is in `recent_alerts`; act on it (login, usage limit, timeout, missing prompt file), then run the job once: `$F exec -- fraim-job <name>` |
+| `jobs-ok` | An automation's last run failed, or it paused itself after 5 failures. `$F auto show <name>` gives the reason; act on it (login, usage limit, timeout, a mistake in automation.md), then `$F auto run <name>` once and `$F auto resume <name>` |
 | `plugins-ok` | Loading the Claude config at start failed (usually GitHub was unreachable). Read `$F exec -- cat .local/state/fraim/config-init.log`, then `$F restart workspace` to retry. Everything else keeps working meanwhile |
 | a service not `running` | `$F logs <service> --tail 80`, read it, then `$F restart <service>` |
 
@@ -70,20 +70,32 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 | Claude config | `$F config status` (see managing-fraim-config) |
 | Open the user's workspace (macOS) | `<checkout>/bin/fraim-desktop open`; `fraim-desktop install` first when cmux is missing, `fraim-desktop dock` after the server changed |
 
-## Make a job
+## Make an automation
 
-A job runs on the server at set times, also while the laptop is off. Steps, each its own command:
+An automation runs on the server when its trigger fires (a schedule or a fixed interval for now), also while the laptop is off. It is one file: `~/fraim/automations/<name>/automation.md`. The running-the-fraim-server skill (on the server) has every setting; the common ones are below. Steps, each its own command:
 
-1. Confirm the schedule in words ("every weekday at 8:00, server time zone `health.timezone`") and what the answer should contain. Pick a short name in lowercase letters and dashes.
-2. Write the prompt: `$F exec -- sh -c 'cat > fraim/jobs/<name>.md' <<'EOF'` ... `EOF`. Tell it to answer exactly `SILENT` when there is nothing to report. Never add fraim-notify: fraim-job delivers the answer itself.
-3. When it needs more than reading files and web search, list tools one per line in `fraim/jobs/<name>.tools`. A website needs `WebFetch(domain:<site>)` for each site (WebFetch is never pre-approved; for weather, for example, `WebFetch(domain:wttr.in)`).
-4. Add the schedule line: `$F exec -- sh -c 'echo "<min> <hour> * * <dow> fraim-job <name>" >> fraim/jobs/crontab'` (weekdays at 8:00: `0 8 * * 1-5`). The scheduler picks it up by itself.
-5. Run it once: `$F exec -- fraim-job <name>`, then show the user the answer from `$F status --json` (`recent_job_results`).
-6. Add the job to the user's guide (`~/fraim/fraim-guide.md`): name, schedule, what it does.
+1. Confirm in words: when it runs ("every weekday at 8:00, server time zone `health.timezone`"), what the answer should contain, and where it goes (WhatsApp, a file in `~/fraim`). Pick a short name in lowercase letters and dashes.
+2. Write the file:
+   ```
+   $F exec -- sh -c 'mkdir -p fraim/automations/<name> && cat > fraim/automations/<name>/automation.md' <<'EOF'
+   ---
+   description: <one line>
+   schedule: "0 8 * * 1-5"
+   tools: Read, Grep, WebSearch
+   output: whatsapp
+   ---
+   <the prompt>. If there is nothing to report, answer with exactly: SILENT
+   EOF
+   ```
+   Use `every: 30m` instead of `schedule` for an interval. A website needs `WebFetch(domain:<site>)` in `tools` (WebFetch is never pre-approved; for weather, `WebFetch(domain:wttr.in)`). Never add fraim-notify: the runner delivers the answer itself.
+3. `$F auto check <name>`, and fix each mistake it names.
+4. `$F auto run <name> --dry`: show the user the answer (nothing is delivered). Change the prompt until the user is happy.
+5. `$F exec -- fraim-auto sync` makes the schedule live now (otherwise within a minute).
+6. Add it to the user's guide (`~/fraim/fraim-guide.md`): name, trigger, what it does.
 
-Where answers go: WhatsApp when it is linked, and always `~/fraim/outbox.md`. Without WhatsApp, say up front: "Job results wait on the server until you ask me what they said."
+Where answers go: the outputs in the file, and always `~/fraim/outbox.md`. Without WhatsApp, say up front: "Results wait on the server until you ask me what they said."
 
-To stop a job: remove its line from `fraim/jobs/crontab` and delete `fraim/jobs/<name>.md`.
+Other commands: `$F auto` (list), `$F auto show <name>`, `$F auto runs <name>`, `$F auto pause <name>`, `$F auto resume <name>`. To remove one: `$F exec -- rm -r fraim/automations/<name>`. With Syncthing on, the user can also edit the file in `~/fraim/automations` on the laptop.
 
 ## Locked out (server unreachable)
 

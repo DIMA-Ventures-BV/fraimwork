@@ -13,7 +13,8 @@
       "Bash(git diff:*)",
       "Bash(fraim-notify:*)",
       "Bash(fraim-doctor:*)",
-      "Bash(fraim-goal:*)"
+      "Bash(fraim-goal:*)",
+      "Bash(fraim-auto:*)"
     ]
   }
 }
