@@ -26,6 +26,7 @@ You ask the user only for the human steps, one at a time, and you continue the m
 The user may stop for hours (Hetzner checks an account before it can be used). When the user comes back:
 1. Stage 1, then `$F status --json` (exit 2 "no fraim target" means no stack or server yet) and `$F config status`.
 2. Skip every stage whose result already works. Tell the user in one line where you continue.
+3. Once the server is deployed, `$F setup [--space S] [--repo OWNER/REPO]` finishes everything that is still open, in order: Tailscale policy, public SSH lock, Claude login, full login, file sync, laptop config, GitHub repositories. It skips what works and stops at the first human step (exit 3): pass that on, then run `$F setup` again.
 
 ## Stage 0: what the user needs (say this first, in one message)
 
@@ -82,9 +83,9 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 3. **Tailscale**, human steps, one at a time *(skip when public; skip each sub-step the user already did: `tailscale status` on the Mac shows Connected)*. Do this during Hetzner's account check for a new account.
    1. Account: "Open https://login.tailscale.com/start and sign up (Google or Microsoft login is easiest)."
    2. Mac app: "Download Tailscale from https://tailscale.com/download/mac and open it. Click Allow when macOS asks to add a VPN configuration, then sign in with the same account. Tell me when the menu bar icon shows Connected."
-   3. Policy: ask "What name is shown at the top right of https://login.tailscale.com/admin?" (an email, or for GitHub logins a name like `name@github`). Then `$F tailscale policy --email <that name> | pbcopy`.
-      Only when the account existed before today, ask "Do other devices already use this Tailscale account?" When yes, do not replace their policy: ask them to copy their current policy from https://login.tailscale.com/admin/acls (JSON editor tab), and merge the fraim groups, tagOwners, grants and ssh entries into it yourself; show them the result to paste.
-      Then: "Open https://login.tailscale.com/admin/acls, click the JSON editor tab, select all text, paste, and click Save. Tell me if it shows a red error."
+   3. Policy, through the Tailscale API (nobody pastes a policy file): ask "What name is shown at the top right of https://login.tailscale.com/admin?" (an email, or for GitHub logins a name like `name@github`). Then `$F tailscale apply --email <that name>`.
+      Without a saved API token it exits 3: pass on its human step (the user makes a 1-day token and runs `fraim tailscale key` in their own Terminal). Run the same command again.
+      It merges the fraim rules into the existing policy and keeps every other rule. It exits 3 with the changes: show them in plain words ("lets your devices reach the fraim server on its ports; the server can reach nothing"), and say comments in the policy file are lost but a copy is saved. On yes: `$F tailscale apply --yes --email <that name>`.
    4. Auth key: "Open https://login.tailscale.com/admin/settings/keys, click Generate auth key, turn on Tags and choose tag:fraim, click Generate, copy the key, and tell me 'copied'." Read it with `pbpaste` straight into the `--ts-authkey` flag in step 6. Never show it.
 4. **Hetzner server**, human step *(skip when existing server)*, once the account check is done. Give it in one message, and copy the key to the clipboard right before you send it: `pbcopy < ~/.ssh/id_ed25519.pub`.
    1. Open https://console.hetzner.cloud, click "New project", name it `fraim`, open it.
@@ -134,7 +135,7 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 
 1. `$F config status`. Exit 2 "no role yet" is normal on a new laptop. When it shows a role, skip `init`.
    Otherwise `$F config init --role laptop`. It also adds the official plugin marketplace and an empty `secrets.env`; that is not an overwrite, so no question is needed. The server (or the Mac trial, which plays the server role) ran `init --role server` at start.
-2. Server with `sync`: `$F sync --print-url` and follow its `HUMAN STEP:` lines for the Syncthing pairing; `$F sync stop` when done.
+2. Server with `sync`: `$F sync pair`. It pairs the laptop's Syncthing with the server and shares `~/fraim` on both sides, with a `.stignore` that keeps keys and env files out. Its only human step is installing and opening the Syncthing app. Run this before `config init` above when `~/fraim/claude` should come from the server.
 3. `$F config status` here and `$F exec -- fraim-config status` on the server. Both must show their role linked.
    With sync, the fingerprints must match once sync has run. Without sync (and in a Mac trial) they match right after setup but are independent copies: a later change on one side does not reach the other.
 
@@ -171,8 +172,8 @@ Report, in this order:
 
 1. Install Docker (Mac trial only, when missing).
 2. Hetzner sign-up (start early: the check can take hours), then create the server and give the IP.
-3. Tailscale: account, Mac app with the VPN Allow prompt, policy paste, auth key.
+3. Tailscale: account, Mac app with the VPN Allow prompt, a 1-day API token (`fraim tailscale key`) and a yes to the policy change, auth key.
 4. Run `claude setup-token` and approve in the browser.
 5. Enter the WhatsApp pairing code in WhatsApp Business.
-6. Accept the Syncthing device pairing (sync only).
+6. Install and open the Syncthing app (sync only; `fraim sync pair` does the pairing).
 7. Website logins and 2FA in the server browser, only when a job needs a site.

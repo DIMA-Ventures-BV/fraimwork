@@ -24,7 +24,7 @@ Every command takes `--space NAME`. Without it, a command works on `main`. Alway
 1. Agree on the name and modules with the user. Default modules: `browser,scheduler`. `whatsapp` needs its own bot number (a second one), `sync` its own laptop folder.
 2. `$F space add NAME [--modules browser,scheduler] [--whatsapp-owner N]`. It is safe to run again.
 3. A Claude login: `$F login --space NAME --from-space main` reuses the main space's setup-token on the server (no human step). For Remote Control and claude.ai connectors: `$F login --full --space NAME` (see "Full login").
-4. In tailscale mode the space's ports are allowed by the fraimwork Tailscale policy (ports 2222-2226, 6080-6084, 3100-3149). With an older policy that only has 2222, fraim reaches the space's SSH through the admin login by itself, so fraim commands work. Previews, the browser view and mosh of that space still need the new ports: give the user the new `fraim tailscale policy` output to merge (HUMAN STEP).
+4. In tailscale mode the space's ports are allowed by the fraimwork Tailscale policy (ports 2222-2226, 6080-6084, 3100-3149). With an older policy that only has 2222, fraim reaches the space's SSH through the admin login by itself, so fraim commands work. Previews, the browser view and mosh of that space still need the new ports: run `$F tailscale apply` (it adds the missing ports through the Tailscale API and shows the change first).
 
 Stop a space: `$F space rm NAME` (data kept; `$F space up NAME` starts it again). Delete one for good: `$F space rm NAME --wipe --yes`, only after the user said yes to losing its files, logins and keys.
 
