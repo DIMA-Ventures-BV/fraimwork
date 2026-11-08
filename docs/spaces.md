@@ -36,7 +36,9 @@ one server, one Tailscale name
 | Full Claude login: Remote Control and claude.ai connectors | `fraim login --full --space S` | `~/.claude/.credentials.json` of the space (counts only with the `~/.config/fraim/full-login` marker that command writes) |
 | Limit claude.ai connectors | `fraim space policy S --deny 'claude.ai Gmail'` or `--claudeai off` | root-owned `/etc/claude-code/managed-settings.d/50-fraim-space.json` |
 | GitHub repos | `fraim repo token` + `fraim repo add OWNER/REPO` | the space's secrets proxy (`github`, `github-api`, `github-mcp`) |
-| An SSH host (dev box) | `fraim host add NAME --address IP --user U --authorize-via ALIAS` | a key made for that host, in the space only |
+| An SSH host (dev box) | `fraim host add NAME --like ALIAS` (or `--address IP --user U --authorize-via ALIAS`) | a key made for that host, in the space only; host keys pinned from the laptop |
+| A device on the tailnet | `fraim tailscale reach tag:NAME` | the tailnet policy (one grant from `tag:fraim`) |
+| All of the above from one file | `fraim mirror FILE` (see [mirror.md](mirror.md)) | keys come from the laptop on stdin |
 | MCP server without a key | `fraim connect NAME --url URL` | none |
 | MCP server with OAuth | `fraim connect NAME --url URL --oauth`, then `--redirect` | Claude Code's OAuth store in the space |
 | MCP server with an API key | `fraim connect NAME --url URL --key` | the space's secrets proxy |

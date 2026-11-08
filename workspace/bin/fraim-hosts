@@ -3,7 +3,10 @@
 # Each host gets its own key, made here and used only for that host, so removing a host
 # (or the space) revokes exactly that access. The key never leaves this space.
 #
-#   fraim-hosts add NAME --address HOST [--user USER] [--port PORT]   prints the public key
+#   fraim-hosts add NAME --address HOST [--user USER] [--port PORT] [--host-key-alias A]
+#                  [--known-hosts-stdin]   prints the public key
+#     --known-hosts-stdin: the host's known_hosts lines (from the laptop) come on stdin and
+#     are the only host keys accepted; without it the first key seen is trusted.
 #   fraim-hosts test NAME          exit 0 when `ssh NAME` works without a prompt
 #   fraim-hosts list [--json]
 #   fraim-hosts rm NAME
@@ -47,27 +50,43 @@ case "$action" in
   add)
     name="${1:-}"; [ $# -gt 0 ] && shift
     valid_name "$name" || usage "NAME must be lowercase letters, digits and dashes"
-    address="" user="" port=22
+    address="" user="" port=22 alias="" known=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --address) address="${2:-}"; shift 2 ;;
         --user) user="${2:-}"; shift 2 ;;
         --port) port="${2:-}"; shift 2 ;;
+        --host-key-alias) alias="${2:-}"; shift 2 ;;
+        --known-hosts-stdin) known=1; shift ;;
         *) usage "unknown option $1" ;;
       esac
     done
     valid_address "$address" || usage "--address must be a host name or IP address"
     [ -z "$user" ] || valid_user "$user" || usage "--user must be a plain user name"
     printf '%s' "$port" | grep -Eq '^[0-9]{1,5}$' || usage "--port must be a number"
+    [ -z "$alias" ] || valid_address "$alias" || usage "--host-key-alias must be a host name or IP address"
     key="$dir/$name"
+    if [ -n "$known" ]; then
+      lines="$(grep -E '^[^#[:space:]]+ (ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+ [A-Za-z0-9+/=]+' || true)"
+      [ -n "$lines" ] || usage "--known-hosts-stdin needs known_hosts lines on stdin"
+      (umask 077 && printf '%s\n' "$lines" > "$key.known")
+    else
+      rm -f "$key.known"
+    fi
     [ -f "$key" ] || ssh-keygen -q -t ed25519 -N "" -C "fraim-${FRAIM_SPACE:-main}-$name" -f "$key"
     drop_block "$name"
     {
       printf '# fraim-host %s begin\n' "$name"
       printf 'Host %s\n  HostName %s\n  Port %s\n' "$name" "$address" "$port"
       [ -z "$user" ] || printf '  User %s\n' "$user"
+      [ -z "$alias" ] || printf '  HostKeyAlias %s\n' "$alias"
       printf '  IdentityFile %s\n  IdentitiesOnly yes\n' "$key"
-      printf '  StrictHostKeyChecking accept-new\n  ServerAliveInterval 30\n'
+      if [ -f "$key.known" ]; then
+        printf '  UserKnownHostsFile %s\n  StrictHostKeyChecking yes\n' "$key.known"
+      else
+        printf '  StrictHostKeyChecking accept-new\n'
+      fi
+      printf '  ServerAliveInterval 30\n'
       printf '# fraim-host %s end\n' "$name"
     } >> "$config"
     cat "$key.pub"
@@ -95,8 +114,8 @@ case "$action" in
     name="${1:-}"
     valid_name "$name" || usage "rm NAME"
     drop_block "$name"
-    rm -f "$dir/$name" "$dir/$name.pub"
+    rm -f "$dir/$name" "$dir/$name.pub" "$dir/$name.known"
     echo "Removed host $name. Also remove its key line (fraim-${FRAIM_SPACE:-main}-$name) from the host's authorized_keys."
     ;;
-  *) usage "add NAME --address HOST [--user USER] [--port PORT] | test NAME | list [--json] | rm NAME" ;;
+  *) usage "add NAME --address HOST [--user USER] [--port PORT] [--host-key-alias A] [--known-hosts-stdin] | test NAME | list [--json] | rm NAME" ;;
 esac

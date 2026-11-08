@@ -869,7 +869,17 @@ cmd_tailscale() {
       [ -z "$(flag email-2)" ] || again="$again --email-2 $(flag email-2)"
       ts_apply "$again"
       ;;
-    *) usage "fraim tailscale policy --email ADDRESS | key [--stdin] | apply [--email ADDR] [--yes]" ;;
+    reach)
+      # Let fraim servers reach one other tailnet device or tag (production, a build box).
+      local dst="${POSITIONAL[1]:-}" port
+      port="$(flag port)"; port="${port:-22}"
+      printf '%s' "$dst" | grep -Eq '^(tag:[a-z0-9][a-z0-9-]{0,62}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$' \
+        || usage "fraim tailscale reach tag:NAME|100.x.y.z [--port 22] [--yes]"
+      printf '%s' "$port" | grep -Eq '^[0-9]{1,5}$' || usage "--port must be a number"
+      TS_MERGE=ts_merge_reach TS_REACH_DST="$dst" TS_REACH_PORT="$port" \
+        TS_AGAIN="fraim tailscale reach $dst --port $port" ts_apply ""
+      ;;
+    *) usage "fraim tailscale policy --email ADDRESS | key [--stdin] | apply [--email ADDR] [--yes] | reach tag:NAME|100.x.y.z [--port P] [--yes]" ;;
   esac
 }
 
@@ -933,6 +943,15 @@ ts_merge_policy() {  # EMAILS_JSON
       then . else .ssh = ((.ssh // []) + [{action: "accept", src: ["group:fraim-admins"], dst: ["tag:fraim"], users: ["root"]}]) end'
 }
 
+# The current policy on stdin; out: a grant from every fraim server to one device or tag.
+ts_merge_reach() {
+  jq --arg dst "$TS_REACH_DST" --arg ip "tcp:$TS_REACH_PORT" '
+    def same($a; $b): ($a | sort) == ($b | sort);
+    if any(.grants[]?; same(.src; ["tag:fraim"]) and same(.dst; [$dst]))
+    then .grants |= map(if same(.src; ["tag:fraim"]) and same(.dst; [$dst]) then .ip = ((.ip // []) + ([$ip] - (.ip // []))) else . end)
+    else .grants = ((.grants // []) + [{src: ["tag:fraim"], dst: [$dst], ip: [$ip]}]) end'
+}
+
 ts_apply() {
   local tmp etag emails="[]" e
   tmp="$(mktemp -d)"
@@ -944,18 +963,18 @@ ts_apply() {
   ts_curl -D "$tmp/headers" -H 'Accept: application/json' "$TS_API/tailnet/-/acl" -o "$tmp/current.json" \
     || { if grep -q ' 401' "$tmp/headers" 2>/dev/null; then human "The Tailscale API token expired or is wrong. $TS_KEY_STEP"; fi; die "could not read the Tailscale policy: $(cat "$tmp/current.json" 2>/dev/null)"; }
   etag="$(grep -i '^etag:' "$tmp/headers" | head -1 | cut -d' ' -f2- | tr -d '\r')"
-  if [ "$emails" = "[]" ] && ! jq -e '(.groups["group:fraim-users"] // []) | length > 0' "$tmp/current.json" >/dev/null; then
+  if [ -z "${TS_MERGE:-}" ] && [ "$emails" = "[]" ] && ! jq -e '(.groups["group:fraim-users"] // []) | length > 0' "$tmp/current.json" >/dev/null; then
     usage "the policy has no group:fraim-users yet; add --email with the address you log in to Tailscale with"
   fi
-  ts_merge_policy "$emails" < "$tmp/current.json" > "$tmp/merged.json"
+  "${TS_MERGE:-ts_merge_policy}" "$emails" < "$tmp/current.json" > "$tmp/merged.json"
   if [ "$(jq -S . "$tmp/current.json")" = "$(jq -S . "$tmp/merged.json")" ]; then
-    say "The Tailscale policy already allows everything fraim needs."
+    say "The Tailscale policy already allows this."
     return 0
   fi
   say "Changes to the Tailscale policy (- now, + after):"
   diff -u <(jq -S . "$tmp/current.json") <(jq -S . "$tmp/merged.json") | tail -n +3 || true
   if [ -z "$(flag yes)" ]; then
-    human "Show the user the policy changes above and ask whether to apply them. The API stores the policy as JSON, so comments in the policy file are lost (a copy with comments is saved first). On yes, Claude runs: fraim tailscale apply --yes${1:+ $1}"
+    human "Show the user the policy changes above and ask whether to apply them. The API stores the policy as JSON, so comments in the policy file are lost (a copy with comments is saved first). On yes, Claude runs: ${TS_AGAIN:-fraim tailscale apply} --yes${1:+ $1}"
   fi
   mkdir -p "$STATE_DIR"
   local backup
@@ -1485,16 +1504,42 @@ git_identity_args() {
 cmd_host() {
   parse_flags "$@"
   local action="${POSITIONAL[0]:-list}" name="${POSITIONAL[1]:-}"
-  local usage_line="fraim host add NAME --address HOST [--user USER] [--port PORT] [--authorize-via SSH_ALIAS] | test NAME | list [--json] | rm NAME [--authorize-via SSH_ALIAS]"
+  local usage_line="fraim host add NAME (--like SSH_ALIAS | --address HOST [--user USER] [--port PORT]) [--authorize-via SSH_ALIAS] | test NAME | list [--json] | rm NAME [--authorize-via SSH_ALIAS]"
   load_config
   case "$action" in
     add)
-      [ -n "$name" ] && [ -n "$(flag address)" ] || usage "$usage_line"
+      local address user port alias="" known="" like
+      address="$(flag address)"; user="$(flag user)"; port="$(flag port)"
+      like="$(flag like)"
+      if [ -n "$like" ]; then
+        # The same host as this computer's `ssh ALIAS`: its address, user, port and the host
+        # keys this computer already trusts. The space still gets its own key.
+        printf '%s' "$like" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || usage "--like must be a host name from your ~/.ssh/config"
+        local cfg
+        cfg="$(ssh -G -- "$like" 2>/dev/null)" || die "ssh on this computer does not know host $like"
+        # ssh -G answers for any name; a short name it maps to itself is not in ~/.ssh/config.
+        case "$like" in *.*) ;; *)
+          [ "$(ssh_g_value "$cfg" hostname)" != "$like" ] || die "this computer has no host $like in ~/.ssh/config; add it there (or use --address) and check that 'ssh $like' works"
+        esac
+        address="${address:-$(ssh_g_value "$cfg" hostname)}"
+        user="${user:-$(ssh_g_value "$cfg" user)}"
+        port="${port:-$(ssh_g_value "$cfg" port)}"
+        alias="$(ssh_g_value "$cfg" hostkeyalias)"
+        known="$(laptop_known_hosts "$cfg" "${alias:-$address}" "${port:-22}")"
+        # shellcheck disable=SC2034  # read through flag authorize-via below
+        [ -n "$(flag authorize-via)" ] || FLAG_AUTHORIZE_VIA="$like"
+      fi
+      [ -n "$name" ] && [ -n "$address" ] || usage "$usage_line"
       local args pub line via
-      args="--address $(printf '%q' "$(flag address)")"
-      [ -z "$(flag user)" ] || args="$args --user $(printf '%q' "$(flag user)")"
-      [ -z "$(flag port)" ] || args="$args --port $(printf '%q' "$(flag port)")"
-      pub="$(workspace_ssh "fraim-hosts add $(printf '%q' "$name") $args")" || exit $?
+      args="--address $(printf '%q' "$address")"
+      [ -z "$user" ] || args="$args --user $(printf '%q' "$user")"
+      [ -z "$port" ] || args="$args --port $(printf '%q' "$port")"
+      [ -z "$alias" ] || args="$args --host-key-alias $(printf '%q' "$alias")"
+      if [ -n "$known" ]; then
+        pub="$(printf '%s\n' "$known" | workspace_ssh "fraim-hosts add $(printf '%q' "$name") $args --known-hosts-stdin")" || exit $?
+      else
+        pub="$(workspace_ssh "fraim-hosts add $(printf '%q' "$name") $args" < /dev/null)" || exit $?
+      fi
       # No agent or X11 forwarding for this key; port forwarding stays (dev tools tunnel ports).
       line="no-agent-forwarding,no-X11-forwarding $pub"
       via="$(flag authorize-via)"
@@ -1507,8 +1552,11 @@ cmd_host() {
         say "Space $FRAIM_SPACE reaches $name: ssh $name, rsync and similar tools work there."
         return
       fi
-      [ -z "$via" ] || die "the key is on $via, but space $FRAIM_SPACE still cannot log in to $name ($(flag address)); check the address, user and port, and that the host accepts SSH from the server"
-      human "Add this line to ~/.ssh/authorized_keys of user $(flag user | grep . || echo '<user>') on $(flag address), then tell Claude 'done' (Claude then runs: fraim host test $name$(space_hint)): $line"
+      if tailnet_address "$address"; then
+        human "Space $FRAIM_SPACE cannot reach $name ($address): it is a Tailscale address, and the tailnet policy keeps fraim servers away from other devices. Ask the user whether this server may reach $name. On yes, Claude runs: fraim tailscale reach TAG_OR_ADDRESS (the tag of $name in the Tailscale admin, for example tag:prod), then: fraim host test $name$(space_hint)"
+      fi
+      [ -z "$via" ] || die "the key is on $via, but space $FRAIM_SPACE still cannot log in to $name ($address); check the address, user and port, and that the host accepts SSH from the server"
+      human "Add this line to ~/.ssh/authorized_keys of user $(printf '%s' "$user" | grep . || echo '<user>') on $address, then tell Claude 'done' (Claude then runs: fraim host test $name$(space_hint)): $line"
       ;;
     test)
       [ -n "$name" ] || usage "$usage_line"
@@ -1534,6 +1582,24 @@ cmd_host() {
       ;;
     *) usage "$usage_line" ;;
   esac
+}
+
+# One value from `ssh -G` output (lowercase keys), or nothing.
+ssh_g_value() { printf '%s\n' "$1" | awk -v k="$2" '$1 == k { $1 = ""; sub(/^ /, ""); print; exit }'; }
+# The known_hosts lines this computer has for NAME (and PORT), from the files `ssh -G` lists.
+laptop_known_hosts() {  # SSH_G_OUTPUT NAME PORT
+  local key="$2" f files
+  [ "$3" = 22 ] || key="[$2]:$3"
+  files="$(ssh_g_value "$1" userknownhostsfile)"
+  for f in $files; do
+    f="${f/#\~/$HOME}"
+    [ -f "$f" ] || continue
+    ssh-keygen -F "$key" -f "$f" 2>/dev/null | grep -v '^#' || true
+  done | awk 'NF && !seen[$0]++'
+}
+tailnet_address() {  # 100.64.0.0/10 or a MagicDNS name
+  case "$1" in *.ts.net) return 0 ;; esac
+  printf '%s' "$1" | awk -F. 'NF == 4 && $1 == 100 && $2 >= 64 && $2 <= 127 { ok = 1 } END { exit !ok }'
 }
 
 # --- connect: MCP servers for a space -------------------------------------------------
@@ -1698,6 +1764,146 @@ cmd_tool() {
     sync) workspace_ssh 'fraim-tools sync' ;;
     *) usage "$usage_line" ;;
   esac
+}
+
+# --- mirror: set up a space from one file -----------------------------------------------
+# A mirror file lists what a space needs, one item per line, with no keys in it: keys come
+# from this computer (an environment variable or a file in the home folder) when the line
+# runs. Every line calls the same building block as the command of that kind, and a line
+# that is already done is skipped, so running the file again only does what is missing.
+# See docs/mirror.md.
+MIRROR_KINDS="plugin repo tool env file connect host"
+
+# mirror_check KIND ARGS...: exit 0 when the line is well formed.
+mirror_check() {
+  local kind="$1"; shift
+  case "$kind" in
+    plugin) [ $# -eq 2 ] && printf '%s' "$1" | grep -Eq '^https://[^[:space:]]+$' && printf '%s' "$2" | grep -Eq '^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$' ;;
+    repo) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ;;
+    tool) [ $# -ge 1 ] && printf '%s\n' "$@" | grep -Evq '^(npm|uv):@?[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?@[0-9][A-Za-z0-9.+-]*$' && return 1; [ $# -ge 1 ] ;;
+    env) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' ;;
+    file) [ $# -eq 1 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' && case "/$1/" in */../*|*/./*) false ;; *) true ;; esac ;;
+    connect)
+      [ $# -ge 3 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "$2" | grep -Eq '^https://[^[:space:]]+$' || return 1
+      case "$3" in
+        oauth) [ $# -eq 3 ] ;;
+        key) [ $# -ge 4 ] && [ $# -le 6 ] && printf '%s' "$4" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' ;;
+        *) false ;;
+      esac
+      ;;
+    host) [ $# -ge 1 ] && [ $# -le 2 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "${2:-$1}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' ;;
+    *) false ;;
+  esac
+}
+
+# mirror_step KIND ARGS...: runs one line. Prints one status line; exit 0 done, 4 skipped,
+# 3 a human step (its text on stdout), anything else failed.
+mirror_step() {
+  local kind="$1"; shift
+  # Flags of `fraim mirror` itself must not reach the building blocks.
+  unset "${!FLAG_@}"
+  case "$kind" in
+    plugin)
+      workspace_ssh "claude plugin marketplace add $(printf '%q' "$1") >/dev/null 2>&1; claude plugin install $(printf '%q' "$2")" < /dev/null >/dev/null
+      ;;
+    repo) cmd_repo add "$1" < /dev/null >/dev/null ;;
+    tool)
+      local spec missing=()
+      for spec in "$@"; do grep -qxF "$spec" <<<"$MIRROR_TOOLS" || missing+=("$spec"); done
+      [ "${#missing[@]}" -gt 0 ] || return 4
+      cmd_tool add "${missing[@]}" < /dev/null >/dev/null
+      ;;
+    env)
+      [ -n "${!1:-}" ] || { printf 'not set on this computer\n'; return 4; }
+      printenv "$1" | workspace_ssh "fraim-env set $(printf '%q' "$1")" >/dev/null
+      ;;
+    file)
+      [ -s "$HOME/$1" ] || { printf 'not on this computer\n'; return 4; }
+      workspace_ssh "fraim-env file $(printf '%q' "$1")" < "$HOME/$1" >/dev/null
+      ;;
+    connect)
+      if [ "$3" = oauth ]; then
+        grep -qxF "$1" <<<"$MIRROR_CONNECTED" && return 4
+        cmd_connect "$1" --url "$2" --oauth < /dev/null
+        return
+      fi
+      [ -n "${!4:-}" ] || { printf 'key %s not set on this computer\n' "$4"; return 4; }
+      local extra=()
+      [ -z "${5:-}" ] || extra+=(--header "$5")
+      [ -z "${6:-}" ] || extra+=(--format "$6")
+      printenv "$4" | cmd_connect "$1" --url "$2" --key --stdin ${extra[@]+"${extra[@]}"} >/dev/null
+      ;;
+    host)
+      workspace_ssh "fraim-hosts test $(printf '%q' "$1")" < /dev/null >/dev/null 2>&1 && return 4
+      cmd_host add "$1" --like "${2:-$1}" < /dev/null
+      ;;
+  esac
+}
+
+cmd_mirror() {
+  parse_flags "$@"
+  local file="${POSITIONAL[0]:-}"
+  local usage_line="fraim mirror FILE [--only KIND,KIND...] [--dry-run]   (kinds: $MIRROR_KINDS)"
+  [ -n "$file" ] || usage "$usage_line"
+  [ -f "$file" ] || usage "no mirror file $file"
+  local only k
+  only="$(flag only)"
+  for k in ${only//,/ }; do
+    case " $MIRROR_KINDS " in *" $k "*) ;; *) usage "unknown kind '$k' in --only (kinds: $MIRROR_KINDS)" ;; esac
+  done
+  # Check every line before anything runs.
+  local lines=() raw n=0 bad="" words
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    raw="${raw//$'\r'/}"
+    raw="${raw%%#*}"
+    read -r -a words <<<"$raw" || true
+    [ "${#words[@]}" -gt 0 ] || continue
+    if mirror_check "${words[@]}"; then lines+=("${words[*]}"); else bad="$bad
+  line $n: ${words[*]}"; fi
+  done < "$file"
+  [ -z "$bad" ] || usage "these lines in $file are not valid (see docs/mirror.md):$bad"
+  # ${a[@]+"${a[@]}"}: an empty array under set -u on macOS's bash 3.2.
+  local selected=() line
+  for line in ${lines[@]+"${lines[@]}"}; do
+    k="${line%% *}"
+    [ -z "$only" ] || case ",$only," in *",$k,"*) ;; *) continue ;; esac
+    selected+=("$line")
+  done
+  if [ -n "$(flag dry-run)" ]; then
+    for line in ${selected[@]+"${selected[@]}"}; do say "would run: $line"; done
+    return
+  fi
+  load_config
+  [ "${#selected[@]}" -gt 0 ] || { say "Nothing to do."; return; }
+  MIRROR_TOOLS="$(workspace_ssh 'fraim-tools list' < /dev/null 2>/dev/null || true)"
+  MIRROR_CONNECTED="$(workspace_ssh 'fraim-connect list --json' < /dev/null 2>/dev/null | jq -r '.[].name' 2>/dev/null || true)"
+  local out rc done=0 skipped=0 failed=0 steps="" reload=""
+  for line in "${selected[@]}"; do  # not empty: checked above
+    read -r -a words <<<"$line"
+    rc=0
+    out="$(mirror_step "${words[@]}" 2>&1)" || rc=$?
+    case "$rc" in
+      0)
+        done=$((done + 1)); say "done    $line"
+        case "${words[0]}" in env|plugin) reload=1 ;; esac
+        ;;
+      4) skipped=$((skipped + 1)); say "skip    $line${out:+ ($(printf '%s' "$out" | tail -1))}" ;;
+      3)
+        say "waiting $line"
+        steps="$steps
+- $(printf '%s\n' "$out" | sed -n 's/^HUMAN STEP: //p' | tail -1)"
+        ;;
+      *)
+        failed=$((failed + 1)); say "failed  $line"
+        printf '%s\n' "$out" | tail -3 | sed 's/^/        /' >&2
+        ;;
+    esac
+  done
+  [ -z "$reload" ] || workspace_ssh 'fraim-connect reload >/dev/null' < /dev/null || true
+  say "Space $FRAIM_SPACE: $done done, $skipped skipped, $failed failed."
+  [ -z "$steps" ] || human "Some lines need the user (run fraim mirror $file again afterwards; done lines are skipped):$steps"
+  [ "$failed" -eq 0 ] || exit 1
 }
 
 # --- preview: dev servers in a space on the phone or laptop ----------------------------
@@ -2209,6 +2415,7 @@ Real server
   fraim tailscale policy --email ADDR [--email-2 ADDR]   print the access policy to merge in Tailscale
   fraim tailscale key [--stdin]              save a Tailscale API token on this computer (Keychain)
   fraim tailscale apply [--email ADDR] [--yes]   merge the fraim rules into the tailnet policy via the API
+  fraim tailscale reach tag:NAME|100.x.y.z [--port 22] [--yes]   let fraim servers reach that device
   fraim deploy root@IP [--force-env] [--take-over]   installs, then closes public SSH once Tailscale works
                                              (--take-over replaces a stale update lock)
   fraim lock                                 close public SSH (tailscale mode; checks access first)
@@ -2248,6 +2455,7 @@ Operate
   fraim secret file PATH [--stdin]           credentials file at ~/PATH in the workspace
                                              (env and file keys are readable by Claude, as on a laptop)
   fraim tool add npm:PKG@VER|uv:PKG@VER ... | list | rm NAME   extra command-line tools for the space
+  fraim mirror FILE [--only KIND,...] [--dry-run]   set up the space from a mirror file (docs/mirror.md)
   fraim shell [NAME]                         humans only: attach to the Claude tmux session
 
 Spaces: separate fraims on one server (own Claude, browser, keys, files). Every command
@@ -2262,6 +2470,7 @@ takes --space NAME; without it a command works on the main space. See docs/space
                                              full Claude login: Remote Control and claude.ai connectors
   fraim repo token [--owner ORG] [--stdin]   GitHub token for the space (git, API, GitHub MCP via the proxy)
   fraim repo add OWNER/REPO [--dir DIR] | list [--json] | setup [--git-name N --git-email E]
+  fraim host add NAME --like SSH_ALIAS          same host, user and host keys as `ssh SSH_ALIAS` here
   fraim host add NAME --address HOST [--user U] [--port P] [--authorize-via SSH_ALIAS]
   fraim host test NAME | list [--json] | rm NAME [--authorize-via SSH_ALIAS]
   fraim connect NAME --url https://HOST/PATH                  MCP server without a key
@@ -2319,6 +2528,7 @@ main() {
     host) cmd_host "$@" ;;
     connect) cmd_connect "$@" ;;
     tool) cmd_tool "$@" ;;
+    mirror) cmd_mirror "$@" ;;
     google) cmd_google "$@" ;;
     preview) cmd_preview "$@" ;;
     login) cmd_login "$@" ;;
