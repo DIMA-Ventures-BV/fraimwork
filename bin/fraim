@@ -1327,6 +1327,52 @@ cmd_secret() {
   esac
 }
 
+# Gmail, Drive and Calendar as an MCP server in the space's own google container. It does
+# not depend on the Claude account, so any agent can use it. See docs/google.md.
+cmd_google() {
+  parse_flags "$@"
+  local action="${POSITIONAL[0]:-}"
+  local usage_line="fraim google setup --email YOU@DOMAIN [--file client_secret.json | --stdin] | code [--stdin] | status | signout"
+  case "$action" in setup|code|status|signout) ;; *) usage "$usage_line" ;; esac
+  local client="" redirect=""
+  if [ "$action" = setup ]; then
+    printf '%s' "$(flag email)" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[A-Za-z]{2,}$' || usage "$usage_line"
+    if [ -n "$(flag file)" ]; then
+      [ -s "$(flag file)" ] || die "no file at $(flag file)"
+      client="$(cat "$(flag file)")"
+    elif [ -n "$(flag stdin)" ]; then
+      client="$(cat)"
+    else
+      usage "give the downloaded OAuth client file: --file ~/Downloads/client_secret_....json"
+    fi
+  fi
+  if [ "$action" = code ]; then
+    need_secret_input "In your own Terminal app (not in the Claude chat), run: fraim google code$(space_hint)  and paste the full address from the browser's address bar (it starts with http://localhost:8000). Then tell Claude 'done'."
+    redirect="$(read_secret_input "Paste the full address from the browser's address bar")"
+  fi
+  load_config
+  case "$action" in
+    setup)
+      local modules
+      modules="$(space_info COMPOSE_PROFILES)"
+      case ",$modules," in
+        *,google,*) ;;
+        *) put_env COMPOSE_PROFILES "${modules:+$modules,}google" ;;
+      esac
+      say "Starting the google container (the first build takes a few minutes)."
+      ADMIN_TIMEOUT=1200 admin "docker compose up -d --build google" >/dev/null || die "starting the google container failed; check: fraim logs google$(space_hint)"
+      printf '%s' "$client" | admin_stdin "docker compose exec -T google fraim-google set-client $(printf '%q' "$(flag email)")"
+      workspace_ssh "fraim-connect internal google http://google:8000/mcp && fraim-connect reload >/dev/null"
+      say "Google is set up for space $FRAIM_SPACE. Ask the agent to search your Gmail: it shows a Google sign-in link. After you approve, the browser shows an error page on localhost:8000. Copy that address and run in your own Terminal: fraim google code$(space_hint)"
+      ;;
+    code)
+      printf '%s\n' "$redirect" | admin_stdin "docker compose exec -T google fraim-google callback"
+      ;;
+    status) admin "docker compose exec -T google fraim-google status" ;;
+    signout) admin "docker compose exec -T google fraim-google signout" ;;
+  esac
+}
+
 # --- secrets helpers for repo and connect -------------------------------------------
 secret_define() {  # NAME UPSTREAM HEADER FORMAT
   admin "docker compose exec -T secrets fraim-secret add $(printf '%q' "$1") --upstream $(printf '%q' "$2") --header $(printf '%q' "$3") --format $(printf '%q' "$4")" >/dev/null
@@ -1501,7 +1547,7 @@ cmd_connect() {
   esac
   printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "NAME must be lowercase letters, digits and dashes, starting with a letter"
   case "$name" in
-    github|github-api|github-mcp|browser|my-chrome|whatsapp) usage "'$name' is used by fraim itself (fraim repo, the browser or WhatsApp); pick another name" ;;
+    github|github-api|github-mcp|browser|my-chrome|whatsapp|google) usage "'$name' is used by fraim itself (fraim repo, fraim google, the browser or WhatsApp); pick another name" ;;
   esac
   local qname
   qname="$(printf '%q' "$name")"
@@ -2079,6 +2125,7 @@ takes --space NAME; without it a command works on the main space. See docs/space
   fraim connect NAME --url URL --oauth | --redirect           MCP server with an OAuth sign-in
   fraim connect NAME --url URL --key [--header H] [--format F] [--stdin]   key in the secrets proxy
   fraim connect NAME --command 'CMD ARGS' | list [--json] | rm NAME
+  fraim google setup --email E --file F | code | status | signout   Gmail, Drive, Calendar for any agent
   fraim preview [PORT] | stop [PORT|all] [--json]   show a dev server of the space on the phone
 EOF
 }
@@ -2127,6 +2174,7 @@ main() {
     repo) cmd_repo "$@" ;;
     host) cmd_host "$@" ;;
     connect) cmd_connect "$@" ;;
+    google) cmd_google "$@" ;;
     preview) cmd_preview "$@" ;;
     login) cmd_login "$@" ;;
     lock) cmd_lock "$@" ;;
