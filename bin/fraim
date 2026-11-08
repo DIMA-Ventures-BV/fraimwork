@@ -787,7 +787,7 @@ cmd_deploy() {
     || human "Claude cannot log in to $target. Add the public key from ~/.ssh/id_ed25519.pub to the server (Hetzner: Security > SSH keys, then rebuild), or check the IP."
   say "Copying fraimwork to $target:$REMOTE_DIR"
   ssh "${SSH_BASE[@]}" "$target" "mkdir -p $REMOTE_DIR/config"
-  rsync -az --delete -e "ssh ${SSH_BASE[*]}" \
+  rsync -az --delete --filter 'P /config/authorized_keys' -e "ssh ${SSH_BASE[*]}" \
     --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
     "$REPO/" "$target:$REMOTE_DIR/"
   if [ -n "$(flag force-env)" ] || ! ssh "${SSH_BASE[@]}" "$target" "test -f $REMOTE_DIR/.env"; then
@@ -920,7 +920,7 @@ push_and_rebuild() {
     done
     return 0
   fi
-  rsync -az --delete -e "ssh ${SSH_BASE[*]}" \
+  rsync -az --delete --filter 'P /config/authorized_keys' -e "ssh ${SSH_BASE[*]}" \
     --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
     "$REPO/" "$FRAIM_ADMIN:$REMOTE_DIR/" || return 1
   admin "$(stamp_command)" || return 1
