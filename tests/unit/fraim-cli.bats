@@ -16,7 +16,7 @@ setup() { setup_isolated; }
 @test "help lists every command the dispatcher knows" {
   run "$FRAIM" help
   for c in init local deploy update use config login lock tailscale exec ask shell chrome \
-           browser sync whatsapp status logs support-bundle restart reset-workspace secret; do
+           browser sync whatsapp status logs support-bundle restart reset-workspace secret setup; do
     [[ "$output" == *"fraim $c"* ]] || { echo "help misses: $c"; return 1; }
   done
 }
