@@ -26,14 +26,18 @@ The default is `--header Authorization --format 'Bearer %s'`. To change a key, r
 
 In the workspace, `FRAIM_SECRETS_URL` is `http://secrets:8080` and `FRAIM_SECRETS_TOKEN` is the session token.
 
-- List the services: `curl -s $FRAIM_SECRETS_URL/_services` (name, header, format, API; no keys).
-- Call an API: put the token where the key would go, and put the service name in front of the path.
+Claude uses `fraim-api`. Claude Code refuses shell commands that contain a variable, so `fraim-api` reads the token itself and puts it in the header and format of the service.
+
+- List the services: `fraim-api` (name, header, format, API; no keys).
+- Call an API: `fraim-api openai /v1/models`. Extra options go to curl; a request body comes from a file (`-X POST -d @body.json`).
+- A scheduled job that calls an API needs `Bash(fraim-api NAME:*)` in its tools file.
+- An MCP server over HTTP: `fraim-connect`. GitHub: `fraim-repo`. Both already go through the proxy.
+
+Under the hood, `fraim-api openai /v1/models` is the same as this call (the token goes to curl on stdin, so `ps` never shows it):
 
 ```
 curl -s $FRAIM_SECRETS_URL/openai/v1/models -H "Authorization: Bearer $FRAIM_SECRETS_TOKEN"
 ```
-
-- An MCP server over HTTP: use the URL `${FRAIM_SECRETS_URL}/NAME/mcp` with the header that uses `${FRAIM_SECRETS_TOKEN}`.
 
 The proxy refuses a call with a wrong token, no token, or an unknown service (401). Without a session token it refuses everything (503).
 
