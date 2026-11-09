@@ -205,13 +205,30 @@ What to do this run:
 4. For an idea or a decision the owner must make: fraim-queue add --lead $name --kind idea|decision --priority 1|2|3 --quiet --title "<80 characters>" --summary "<why, what it costs, your recommendation>" --on-approve "<the task to start when the owner approves>". Add at most 3 items per run; priority 1 only when it cannot wait a day.
 5. Rewrite ~/fraim/leads/$name/state.md: what you watch, what you started, what the owner decided, what is next. At most 150 lines.
 6. Do not send mail or messages, post, pay, merge or deploy yourself.
+$(repos_note)
 
 End with one plain line: what you did this run.
 EOF
 }
 
+# Repos cloned with fraim-repo. A lead starts in ~/fraim, and Claude refuses `cd REPO && git ...`,
+# so read-only git is allowed per repo as `git -C REPO ...` instead.
+code_dir() { printf '%s' "${FRAIM_CODE_DIR:-$HOME/code}"; }
+lead_repos() {
+  local g
+  for g in "$(code_dir)"/*/.git; do [ -d "$g" ] && printf '%s\n' "${g%/.git}"; done
+  return 0
+}
+repos_note() {
+  local repos
+  repos="$(lead_repos)"
+  [ -n "$repos" ] || return 0
+  printf '\nCode on this server:\n%s\n' "$(printf '%s\n' "$repos" | sed 's/^/- /')"
+  printf 'Read-only git: git -C <repo> fetch|log|status|diff|show, with the full path above. A cd before git is refused. Other repo commands your tools allow (such as npm audit): cd <repo> && <command>.\n'
+}
+
 tools_for() {
-  local name="$1" dir="$2" chief="$3"
+  local name="$1" dir="$2" chief="$3" repo verb
   local t=(Read Glob Grep WebSearch
     "Edit(~/fraim/leads/$name/**)" "Write(~/fraim/leads/$name/**)"
     "Bash(fraim-queue list:*)" "Bash(fraim-queue show:*)" "Bash(fraim-queue add:*)"
@@ -221,6 +238,9 @@ tools_for() {
     "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
     "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh pr list:*)" "Bash(gh pr view:*)" "Bash(gh run list:*)")
   if [ "$chief" = 1 ]; then t+=("Bash(fraim-queue prio:*)"); else t+=("Bash(fraim-goal start --lead $name:*)"); fi
+  while IFS= read -r repo; do
+    for verb in fetch log status diff show; do t+=("Bash(git -C $repo $verb:*)"); done
+  done < <(lead_repos)
   if [ -f "$dir/tools" ]; then
     local extra
     while IFS= read -r extra; do t+=("$extra"); done < <(grep -v '^\s*#' "$dir/tools" | grep -v '^\s*$')
@@ -252,7 +272,9 @@ cmd_run() {
   cd "$HOME/fraim" 2>/dev/null || cd "$HOME" || exit 1
   local limit=()
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_LEAD_TIMEOUT:-1800}")
-  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" 2>"$log.err")"
+  local dirs=()
+  [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
+  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" ${dirs[@]+"${dirs[@]}"} 2>"$log.err")"
   code=$?
   printf '%s\n' "$output" > "$log"
   ls -1t "$dir/runs" 2>/dev/null | tail -n +61 | while IFS= read -r old; do rm -f "$dir/runs/$old"; done

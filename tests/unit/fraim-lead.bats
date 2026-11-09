@@ -77,6 +77,29 @@ EOF
   [[ "$output" != *"unbound variable"* ]]
 }
 
+@test "a lead gets read-only git per repo in ~/code, and the code folder" {
+  fraim-lead new web --area "the web app"
+  mkdir -p "$HOME/code/shop/.git" "$HOME/code/notes"
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == *"Bash(git -C $HOME/code/shop fetch:*)"* ]]
+  [[ "$tools" == *"Bash(git -C $HOME/code/shop log:*)"* ]]
+  [[ "$tools" != *"code/notes"* ]]
+  [[ "$tools" != *"push"* ]]
+  [ "$(grep -A1 -x -- '--add-dir' "$CLAUDE_ARGS" | tail -1)" = "$HOME/code" ]
+  grep -q -- "- $HOME/code/shop" "$CLAUDE_ARGS"
+  grep -q 'A cd before git is refused' "$CLAUDE_ARGS"
+}
+
+@test "a lead without ~/code gets no repo rules and no extra folder" {
+  fraim-lead new web --area "the web app"
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  ! grep -q -- '--add-dir' "$CLAUDE_ARGS"
+  ! grep -q 'Code on this server' "$CLAUDE_ARGS"
+}
+
 @test "a run that adds to the queue sends one message" {
   fraim-lead new web
   FAKE_ACTION='fraim-queue add --quiet --lead web --kind idea --title A >/dev/null; fraim-queue add --quiet --lead web --kind idea --title B >/dev/null' \
