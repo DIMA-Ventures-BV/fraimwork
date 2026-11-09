@@ -43,10 +43,17 @@ case "$cmd" in
     jq -c '{address, name, state}' "$(file "$name")" ;;
   get) need "$1"; cat "$(file "$1")" ;;
   ls)
+    # Like the real hc: live terminals only, a short record (status as one word, no labels).
+    label=""
+    [ "${1:-}" != --label ] || label="$2"
     shopt -s nullglob
     files=("$d"/t-*.json)
     if [ ${#files[@]} -eq 0 ]; then echo '{"terminals":[],"hidden_finished":0}'
-    else jq -s '{terminals: ., hidden_finished: 0}' "${files[@]}"; fi ;;
+    else
+      jq -s --arg k "${label%%=*}" --arg v "${label#*=}" \
+        '{terminals: [.[] | select(.state == "live") | select($k == "" or .labels[$k] == $v)
+          | {address, name, cwd, state, status: (.status.state // null), turn}], hidden_finished: 0}' "${files[@]}"
+    fi ;;
   wait)
     need "$1"
     [ "$(jq -r '.status.state' "$(file "$1")")" != working ] || sleep 0.2

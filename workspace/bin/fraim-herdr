@@ -120,10 +120,18 @@ cmd_attach() {
   exec hc attach "$name"
 }
 
+# hc ls gives a short record per terminal (status as one word, no labels): list each kind by
+# its label, and ask the full record (hc get) only for a blocked one, for its question.
 cmd_ls() {
-  local json
-  json="$(hcx ls --json 2>/dev/null)" || die "could not list the sessions"
-  json="$(jq '[.terminals[] | select(.labels.fraim != null) | {name: (.name // .address), kind: .labels.fraim, status: (.status.state // "none"), question: (.status.msg // ""), cwd: (.foreground.cwd // .cwd), turn}]' <<<"$json")"
+  local json='[]' kind part row name
+  for kind in main goal session shell service; do
+    part="$(hcx ls --label "fraim=$kind" --json 2>/dev/null)" || die "could not list the sessions"
+    json="$(jq --arg k "$kind" --argjson p "$part" '. + [$p.terminals[] | {name: (.name // .address), kind: $k, status: (.status // "none"), question: "", cwd, turn}]' <<<"$json")"
+  done
+  for name in $(jq -r '.[] | select(.status == "blocked") | .name' <<<"$json"); do
+    row="$(hc get "$name" --json 2>/dev/null | jq -r '.status.msg // ""')"
+    json="$(jq --arg n "$name" --arg q "$row" 'map(if .name == $n then .question = $q else . end)' <<<"$json")"
+  done
   if [ "${1:-}" = --json ]; then printf '%s\n' "$json"; return 0; fi
   [ "$(jq length <<<"$json")" -gt 0 ] || { echo "No sessions."; return 0; }
   jq -r --arg h "$HOME/" '.[] | select(.kind != "service") | "\(.name)\t\(.kind)\t\(.status)\t\(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "\t" + .question else "" end)"' <<<"$json"
