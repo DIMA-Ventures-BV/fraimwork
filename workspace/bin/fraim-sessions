@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Coding sessions on the server: interactive Claude Code sessions in a repo under ~/code,
+# each in its own herdr terminal (s1, s2, ...), so they keep working while the laptop is
+# closed. The owner talks to them from the laptop, the phone (WhatsApp "s1: ...") or by
+# taking one over (attach). fraim-herdr watch tells the owner when one finishes a turn or
+# asks something. See docs/sessions.md.
+#
+#   fraim-sessions new REPO [--] [TASK]   start one in ~/code/REPO; prints its id
+#   fraim-sessions list                   the open sessions and the last closed ones
+#   fraim-sessions send ID TEXT           a message into the session (reopens a closed one)
+#   fraim-sessions read ID [LINES]        its screen, plus LINES of history
+#   fraim-sessions attach ID              humans: take it over (Ctrl+\ leaves it running)
+#   fraim-sessions stop ID                close it (send reopens the same conversation)
+#
+# Each session keeps ~/fraim/sessions/<id>/: repo, cwd, session-id, task.
+# At most FRAIM_SESSIONS_MAX (default 4) run at once: every Claude takes memory.
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+sessions="${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}"
+code="${FRAIM_CODE_DIR:-$HOME/code}"
+
+usage() { echo "fraim-sessions: $*" >&2; exit 2; }
+die() { echo "fraim-sessions: $*" >&2; exit 1; }
+
+hc() { fraim-herdr hc "$@"; }
+valid_id() { printf '%s' "$1" | grep -Eq '^s[0-9]{1,6}$'; }
+session_dir() { valid_id "$1" || usage "'$1' is not a session id (s1, s2, ...)"; [ -d "$sessions/$1" ] || die "no session $1"; printf '%s' "$sessions/$1"; }
+term_get() { hc get "$1" --json 2>/dev/null; }
+term_live() { [ "$(term_get "$1" | jq -r '.state // ""')" = live ]; }
+new_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())'; }
+
+live_count() { fraim-herdr ls --json 2>/dev/null | jq '[.[] | select(.kind == "session")] | length' 2>/dev/null || echo 0; }
+
+# Claude Code asks once per folder whether to trust it; a session nobody watches would wait
+# there forever. The owner chose the repo, so mark it trusted.
+trust() {
+  local dir="$1" state="$HOME/.claude.json" tmp
+  [ -s "$state" ] || echo '{}' > "$state"
+  jq -e --arg d "$dir" '.projects[$d].hasTrustDialogAccepted == true' "$state" >/dev/null 2>&1 && return 0
+  tmp="$(mktemp)"
+  jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$state" > "$tmp" && cat "$tmp" > "$state"
+  rm -f "$tmp"
+}
+
+launch() {
+  local id="$1" dir="$2" resume="${3:-}" sid cwd
+  sid="$(cat "$dir/session-id")"
+  cwd="$(cat "$dir/cwd")"
+  [ -d "$cwd" ] || die "the folder $cwd is gone"
+  trust "$cwd"
+  local args=(fraim-claude)
+  if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
+  hc rm "$id" >/dev/null 2>&1 || true
+  hc run --bg --name "$id" --cwd "$cwd" --label fraim=session --label "repo=$(cat "$dir/repo")" \
+    --no-parent --no-notify -- "${args[@]}" >/dev/null || die "could not start session $id"
+  hc wait "$id" --timeout "${FRAIM_SESSION_READY:-90}" --json >/dev/null 2>&1 || true
+  term_live "$id" || die "session $id stopped right after it started; see: fraim-sessions read $id"
+}
+
+check_room() {
+  local max="${FRAIM_SESSIONS_MAX:-4}"
+  [ "$(live_count)" -lt "$max" ] || die "$max sessions are open, the most this server runs at once; stop one first (fraim-sessions list)"
+}
+
+cmd_new() {
+  local repo="${1:-}" cwd n id dir
+  [ -n "$repo" ] || usage 'new REPO [--] ["task"]'
+  shift
+  [ "${1:-}" != -- ] || shift
+  case "/$repo/" in */../*|*/./*) usage "'$repo' is not a folder in ~/code" ;; esac
+  case "$repo" in
+    /*) cwd="$repo" ;;
+    *) printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || usage "'$repo' is not a folder in ~/code"; cwd="$code/$repo" ;;
+  esac
+  [ -d "$cwd" ] || die "no folder $cwd (repos live in ~/code; fraim repo add puts one there)"
+  # The real folder, so a symlink cannot point a session outside the home folder.
+  cwd="$(cd "$cwd" && pwd -P)"
+  case "$cwd" in "$(cd "$HOME" && pwd -P)"/*) ;; *) die "a session works in a folder under $HOME" ;; esac
+  check_room
+  mkdir -p "$sessions"
+  n=1
+  [ -s "$sessions/.last" ] && n=$(( $(cat "$sessions/.last") + 1 ))
+  until mkdir "$sessions/s$n" 2>/dev/null; do n=$((n + 1)); done
+  id="s$n"
+  dir="$sessions/$id"
+  printf '%s\n' "$n" > "$sessions/.last"
+  basename "$cwd" > "$dir/repo"
+  printf '%s\n' "$cwd" > "$dir/cwd"
+  new_uuid > "$dir/session-id"
+  printf '%s\n' "$*" > "$dir/task"
+  launch "$id" "$dir"
+  if [ -n "$(printf '%s' "$*" | tr -d '[:space:]')" ]; then
+    hc send "$id" "$*" >/dev/null || die "session $id started, but the task did not reach it; try: fraim-sessions send $id \"...\""
+  fi
+  printf '%s\n' "$id"
+}
+
+cmd_list() {
+  local live dir id shown=0
+  live="$(fraim-herdr ls --json 2>/dev/null || echo '[]')"
+  jq -r --arg h "$HOME/" '.[] | select(.kind == "session") | "\(.name)  \(.status)  \(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "  needs you: " + .question else "" end)"' <<<"$live"
+  shown="$(jq '[.[] | select(.kind == "session")] | length' <<<"$live")"
+  [ -d "$sessions" ] || { [ "$shown" -gt 0 ] || echo "No sessions."; return 0; }
+  local closed=""
+  for id in $(find "$sessions" -mindepth 1 -maxdepth 1 -type d -name 's[0-9]*' -exec basename {} \; | sed 's/^s//' | grep -E '^[0-9]+$' | sort -rn | head -10); do
+    jq -e --arg n "s$id" 'any(.[]; .name == $n)' <<<"$live" >/dev/null && continue
+    dir="$sessions/s$id"
+    closed="$closed$(printf 's%s  closed  %s  %s' "$id" "$(cat "$dir/repo")" "$(head -1 "$dir/task" | cut -c1-60)")
+"
+  done
+  if [ -n "$closed" ]; then
+    [ "$shown" -eq 0 ] || echo
+    echo "Closed (send reopens one):"
+    printf '%s' "$closed"
+  elif [ "$shown" -eq 0 ]; then
+    echo "No sessions."
+  fi
+}
+
+cmd_send() {
+  local id="$1" dir text force=()
+  shift
+  dir="$(session_dir "$id")" || exit $?
+  text="$*"
+  [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "send ID \"message\""
+  if ! term_live "$id"; then
+    check_room
+    launch "$id" "$dir" --resume
+  fi
+  [ "$(term_get "$id" | jq -r '.status.state // ""')" != blocked ] || force=(--force)
+  hc send "${force[@]}" "$id" "$text" >/dev/null || die "the message did not reach session $id"
+  echo "Sent to $id."
+}
+
+cmd_read() {
+  local id="$1" lines="${2:-0}"
+  session_dir "$id" >/dev/null || exit $?
+  printf '%s' "$lines" | grep -Eq '^[0-9]{1,5}$' || usage "read ID [LINES]"
+  term_get "$id" >/dev/null || die "session $id is closed; send reopens it"
+  hc read "$id" --lines "$lines"
+}
+
+cmd_attach() {
+  local id="$1" dir
+  dir="$(session_dir "$id")" || exit $?
+  [ -t 0 ] && [ -t 1 ] || usage "attach is for a person in a terminal; use read or send"
+  if ! term_live "$id"; then check_room; launch "$id" "$dir" --resume; fi
+  echo "Session $id. Leave with Ctrl+\\ (the session keeps running)."
+  exec fraim-herdr hc attach "$id"
+}
+
+cmd_stop() {
+  local id="$1"
+  session_dir "$id" >/dev/null || exit $?
+  term_live "$id" || { echo "Session $id is not open."; return 0; }
+  hc kill "$id" >/dev/null 2>&1 || true
+  hc rm "$id" >/dev/null 2>&1 || true
+  echo "Session $id closed. To continue it later: fraim-sessions send $id \"...\""
+}
+
+action="${1:-list}"
+[ $# -eq 0 ] || shift
+case "$action" in
+  new) cmd_new "$@" ;;
+  list|ls) cmd_list ;;
+  send) [ $# -ge 2 ] || usage 'send ID "message"'; cmd_send "$@" ;;
+  read) [ $# -ge 1 ] && [ $# -le 2 ] || usage "read ID [LINES]"; cmd_read "$@" ;;
+  attach) [ $# -eq 1 ] || usage "attach ID"; cmd_attach "$1" ;;
+  stop) [ $# -eq 1 ] || usage "stop ID"; cmd_stop "$1" ;;
+  *) usage 'new REPO ["task"] | list | send ID "message" | read ID [LINES] | attach ID | stop ID' ;;
+esac

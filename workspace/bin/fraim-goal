@@ -8,10 +8,23 @@
 #   fraim-goal list                               newest first: id, state, start time, goal
 #   fraim-goal show ID                            the goal, its state and its result
 #   fraim-goal stop ID
+#   fraim-goal send ID TEXT                       a message from the owner into the goal
+#                                                 (reopens a finished goal's conversation)
+#   fraim-goal read ID [LINES]                    the goal's screen, plus LINES of history
+#   fraim-goal attach ID                          humans: take over the goal's terminal
+#   fraim-goal reconcile                          give running goals a watcher again
+#                                                 (fraim-herdr supervise runs it)
 #
-# Each goal lives in ~/fraim/goals/<id>/: goal.md, state, result.md, log.txt, and media/
-# (screenshots and recordings). When it ends, its result goes into the owner's review
-# queue (fraim-queue) with the media; queue.json from the run sets the title and priority.
+# A goal is an interactive Claude Code session in the herdr terminal named after its id
+# (docs/sessions.md), so the owner can look in, answer a question or correct it while it
+# works. A watcher process (`run`) sends the task, waits for the turn to end, and reports.
+# After the result the terminal stays open FRAIM_GOAL_KEEP seconds (default 1800) for
+# follow-ups; later, send reopens the same conversation (claude --resume).
+#
+# Each goal lives in ~/fraim/goals/<id>/: goal.md, state, result.md, log.txt, session-id,
+# heartbeat (the watcher touches it), and media/ (screenshots and recordings). When it
+# ends, its result goes into the owner's review queue (fraim-queue) with the media;
+# queue.json from the run sets the title and priority.
 # A goal started by a lead (--lead) counts toward that lead's daily budget
 # (~/fraim/leads/<name>/budget, default 3); follow-up work the owner asked for in the queue
 # does not.
@@ -34,7 +47,18 @@ die() { echo "fraim-goal: $*" >&2; exit 1; }
 valid_id() { printf '%s' "$1" | grep -Eq '^g[0-9]{1,6}$'; }
 goal_dir() { valid_id "$1" || usage "'$1' is not a goal id (g1, g2, ...)"; [ -d "$goals/$1" ] || die "no goal $1"; printf '%s' "$goals/$1"; }
 state_of() { cut -d' ' -f1 "$1/state" 2>/dev/null || echo unknown; }
-alive() { [ -s "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
+# The watcher may run in the other container (the scheduler starts goals for leads), so a
+# pid says nothing here: a heartbeat younger than three minutes means it runs.
+alive() {
+  local beat
+  [ -f "$1/heartbeat" ] || return 1
+  beat="$(stat -c %Y "$1/heartbeat" 2>/dev/null || stat -f %m "$1/heartbeat" 2>/dev/null || echo 0)"
+  [ $(( $(date +%s) - beat )) -lt "${FRAIM_GOAL_HEARTBEAT:-180}" ]
+}
+hc() { fraim-herdr hc "$@"; }
+term_get() { hc get "$1" --json 2>/dev/null; }
+term_live() { [ "$(term_get "$1" | jq -r '.state // ""')" = live ]; }
+new_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())'; }
 
 tools() {
   if [ -f "$goals/tools" ]; then
@@ -102,17 +126,22 @@ cmd_start() {
   [ -z "$queue" ] || printf '%s\n' "$queue" > "$goals/$id/queue"
   [ "$by_owner" = 0 ] || : > "$goals/$id/by-owner"
   printf 'running %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$goals/$id/state"
-
-  local self
-  self="$(command -v "$0" 2>/dev/null || printf '%s' "$0")"
-  # Its own process group, so stop ends Claude and everything it started.
-  if command -v setsid >/dev/null; then
-    setsid "$self" run "$id" </dev/null >/dev/null 2>&1 &
-  else
-    nohup "$self" run "$id" </dev/null >/dev/null 2>&1 &
-  fi
-  printf '%s\n' "$!" > "$goals/$id/pid"
+  new_uuid > "$goals/$id/session-id"
+  touch "$goals/$id/heartbeat"
+  spawn_watcher "$id" run
   printf '%s\n' "$id"
+}
+
+# Starts the watcher (`run`: launch, send the task, report; `follow`: only report) apart
+# from the caller, so a WhatsApp reply or an ssh session can end.
+spawn_watcher() {
+  local id="$1" mode="$2" self
+  self="$(command -v "$0" 2>/dev/null || printf '%s' "$0")"
+  if command -v setsid >/dev/null; then
+    setsid "$self" "$mode" "$id" </dev/null >/dev/null 2>&1 &
+  else
+    nohup "$self" "$mode" "$id" </dev/null >/dev/null 2>&1 &
+  fi
 }
 
 prompt_for() {
@@ -122,7 +151,7 @@ The owner gave you this goal:
 
 $text
 
-Work on it until it is fully done. Nobody watches this run, so do not ask questions: make sensible choices and write them down. Keep your notes and results in ~/fraim/goals/$id.
+Work on it until it is fully done. The owner is not watching, so do not wait for answers: make sensible choices and write them down. The owner may send you a message while you work; follow it. Keep your notes and results in ~/fraim/goals/$id.
 
 Do not send email or messages to other people, post anything, pay, or delete anything outside ~/fraim. Prepare such steps instead (for example a draft) and list them under "Needs you".
 
@@ -192,85 +221,264 @@ to_queue() {
   fraim-queue "${args[@]}" 2>>"$dir/log.txt" || true
 }
 
-cmd_run() {
-  local id="$1" dir text chat output code summary
-  dir="$(goal_dir "$id")" || exit $?
-  text="$(cat "$dir/goal.md")"
-  chat="$(cat "$dir/chat" 2>/dev/null || true)"
-  cd "$HOME/fraim" 2>/dev/null || cd "$HOME" || exit 1
-  local limit=()
-  ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_GOAL_TIMEOUT:-14400}")
-  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$id" "$text")" \
-    --permission-mode acceptEdits --allowedTools "$(tools)" 2>"$dir/log.txt")"
-  code=$?
-  printf '%s\n' "$output" > "$dir/result.md"
-  [ "$(state_of "$dir")" = stopped ] && exit 0
-  local qid review=""
-  if [ "$code" -eq 0 ]; then
-    printf 'done %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
+
+# Why a goal stopped early, from the text it ended on; empty when it looks like a result.
+fail_reason() {
+  case "$1" in
+    *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*)
+      echo "the server is not signed in to Claude" ;;
+    *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
+      echo "the Claude plan's usage limit was reached" ;;
+  esac
+}
+
+heartbeat() { touch "$1/heartbeat"; }
+screen_text() { hc read "$1" --lines "${2:-40}" 2>/dev/null; }
+reported_turn() { tr -dc 0-9 < "$1/turn" 2>/dev/null || echo 0; }
+
+# Opens the goal's terminal: a new conversation, or the same one again (--resume).
+launch() {
+  local id="$1" dir="$2" resume="${3:-}" sid
+  sid="$(cat "$dir/session-id" 2>/dev/null)"
+  [ -n "$sid" ] || { sid="$(new_uuid)"; printf '%s\n' "$sid" > "$dir/session-id"; }
+  local args=(env FRAIM_HEADLESS=1 "FRAIM_GOAL=$id" fraim-claude)
+  if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
+  args+=(--permission-mode acceptEdits --allowedTools "$(tools)")
+  hc rm "$id" >/dev/null 2>&1 || true
+  hc run --bg --name "$id" --cwd "$HOME/fraim" --label fraim=goal --no-parent --no-notify -- "${args[@]}" \
+    >/dev/null 2>>"$dir/log.txt" || return 1
+  echo 0 > "$dir/turn"
+  # Ready when Claude Code first reports its status.
+  hc wait "$id" --timeout "${FRAIM_GOAL_READY:-90}" --json >/dev/null 2>&1 || true
+  term_live "$id"
+}
+
+fail_goal() {
+  local id="$1" dir="$2" chat="$3" reason="$4" qid review=""
+  [ "$(state_of "$dir")" = stopped ] && return 0
+  printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/state"
+  { printf 'The goal failed: %s.\n\n' "$reason"; screen_text "$id" 30 | grep -v '^\s*$' | tail -30; } > "$dir/result.md"
+  qid="$(to_queue "$id" "$dir" 1)"
+  [ -z "$qid" ] || review=" To try again with a change, tell me what to change."
+  tell "$chat" "Goal $id failed: $reason. Details: ~/fraim/goals/$id.$review"
+  hc kill "$id" >/dev/null 2>&1 || true
+}
+
+# A turn ended: its last words are the result. The first result goes to the queue.
+report_done() {
+  local id="$1" dir="$2" chat="$3" text reason qid review="" summary
+  text="$(fraim-herdr last-text "$id" 2>/dev/null)"
+  [ -n "$text" ] || text="$(screen_text "$id" 30 | grep -v '^\s*$' | tail -30)"
+  reason="$(fail_reason "$text")"
+  if [ -n "$reason" ]; then
+    fail_goal "$id" "$dir" "$chat" "$reason"
+    return 1
+  fi
+  printf '%s\n' "$text" > "$dir/result.md"
+  printf 'done %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
+  if [ ! -f "$dir/queued" ]; then
     qid="$(to_queue "$id" "$dir" 0)"
+    printf '%s\n' "${qid:-none}" > "$dir/queued"
     [ -z "$qid" ] || review="
 
 Tell me what you think of it in your own words, or open the queue: $(fraim-queue url 2>/dev/null)"
     summary="Goal $id done.
 
-${output:0:3500}$review"
+${text:0:3500}$review"
   else
-    local reason="exit $code"
-    [ "$code" -ne 124 ] || reason="it ran longer than ${FRAIM_GOAL_TIMEOUT:-14400} seconds and was stopped"
-    case "$output$(tail -20 "$dir/log.txt" 2>/dev/null)" in
-      *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*)
-        reason="the server is not signed in to Claude" ;;
-      *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*)
-        reason="the Claude plan's usage limit was reached" ;;
-    esac
-    printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/state"
-    printf 'The goal failed: %s.\n\n%s\n' "$reason" "$output" > "$dir/result.md"
-    qid="$(to_queue "$id" "$dir" 1)"
-    [ -z "$qid" ] || review=" To try again with a change, tell me what to change."
-    summary="Goal $id failed: $reason. Details: ~/fraim/goals/$id.$review"
+    summary="Goal $id answered your message.
+
+${text:0:3500}"
   fi
-  tell "$chat" "$summary"
+  # A message that did not go out is not a failed goal: the result is in result.md.
+  tell "$chat" "$summary" || true
 }
+
+# The watcher. run: open the terminal and send the task first. follow: only watch.
+cmd_watch() {
+  local id="$1" mode="$2" dir chat rec tstate st tturn reason idle_since="" deadline
+  dir="$(goal_dir "$id")" || exit $?
+  chat="$(cat "$dir/chat" 2>/dev/null || true)"
+  heartbeat "$dir"
+  # A watcher that ended is not alive, even within the heartbeat window.
+  trap 'rm -f "$dir/heartbeat"' EXIT
+  deadline=$(( $(date +%s) + ${FRAIM_GOAL_TIMEOUT:-14400} ))
+  if [ "$mode" = run ]; then
+    if ! launch "$id" "$dir"; then
+      fail_goal "$id" "$dir" "$chat" "the Claude session did not start"
+      exit 1
+    fi
+    if ! hc send "$id" "$(prompt_for "$id" "$(cat "$dir/goal.md")")" >/dev/null 2>>"$dir/log.txt"; then
+      fail_goal "$id" "$dir" "$chat" "the task could not be sent to the Claude session"
+      exit 1
+    fi
+  fi
+  while true; do
+    heartbeat "$dir"
+    [ "$(state_of "$dir")" = stopped ] && { hc kill "$id" >/dev/null 2>&1; exit 0; }
+    rec="$(term_get "$id")"
+    [ -n "$rec" ] || rec='{}'
+    tstate="$(jq -r '.state // "gone"' <<<"$rec")"
+    st="$(jq -r '.status.state // "none"' <<<"$rec")"
+    tturn="$(jq -r '.turn // 0' <<<"$rec")"
+    if [ "$tstate" != live ]; then
+      # Closed after its result (keep time over, or the owner closed it): nothing to report.
+      [ "$(state_of "$dir")" = "done" ] && [ "${tturn:-0}" -le "$(reported_turn "$dir")" ] && exit 0
+      reason="$(fail_reason "$(screen_text "$id")")"
+      fail_goal "$id" "$dir" "$chat" "${reason:-the Claude session ended}"
+      exit 1
+    fi
+    case "$st" in
+      done|idle)
+        if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ]; then
+          printf '%s\n' "$tturn" > "$dir/turn"
+          report_done "$id" "$dir" "$chat" || exit 1
+          idle_since="$(date +%s)"
+        fi
+        [ -n "$idle_since" ] || idle_since="$(date +%s)"
+        if [ $(( $(date +%s) - idle_since )) -ge "${FRAIM_GOAL_KEEP:-1800}" ]; then
+          if [ "$(reported_turn "$dir")" = 0 ] && [ "$(state_of "$dir")" != "done" ]; then
+            fail_goal "$id" "$dir" "$chat" "Claude did not start on the task"
+            exit 1
+          fi
+          hc kill "$id" >/dev/null 2>&1; hc rm "$id" >/dev/null 2>&1
+          exit 0
+        fi
+        sleep "${FRAIM_GOAL_POLL:-15}"
+        continue ;;
+      error)
+        reason="$(fail_reason "$(screen_text "$id")")"
+        fail_goal "$id" "$dir" "$chat" "${reason:-Claude reported an error}"
+        exit 1 ;;
+      blocked)
+        # fraim-herdr watch tells the owner; wait for the answer.
+        idle_since=""
+        sleep "${FRAIM_GOAL_POLL:-15}" ;;
+      *)
+        idle_since=""
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+          fail_goal "$id" "$dir" "$chat" "it ran longer than ${FRAIM_GOAL_TIMEOUT:-14400} seconds and was stopped"
+          exit 1
+        fi
+        hc wait "$id" --timeout 60 --json >/dev/null 2>&1 || sleep "${FRAIM_GOAL_POLL:-15}" ;;
+    esac
+  done
+}
+
+# Live status of goal terminals by name, for list and show (empty when herdr does not answer).
+live_statuses() { fraim-herdr ls --json 2>/dev/null || echo '[]'; }
 
 cmd_list() {
   [ -d "$goals" ] || { echo "No goals yet."; return 0; }
-  local found="" dir id st
+  local found="" dir id st live now
+  live="$(live_statuses)"
   for id in $(find "$goals" -mindepth 1 -maxdepth 1 -type d -name 'g[0-9]*' -exec basename {} \; | sed 's/^g//' | grep -E '^[0-9]+$' | sort -rn | head -20); do
     dir="$goals/g$id"
     st="$(cat "$dir/state" 2>/dev/null || echo unknown)"
     if [ "${st%% *}" = running ] && ! alive "$dir"; then st="failed (the run disappeared)"; fi
-    printf 'g%s  %s  %s\n' "$id" "$st" "$(head -1 "$dir/goal.md" | cut -c1-80)"
+    now="$(jq -r --arg n "g$id" '.[] | select(.name == $n) | if .status == "blocked" then "needs you: " + .question else empty end' <<<"$live" 2>/dev/null)"
+    printf 'g%s  %s  %s%s\n' "$id" "$st" "$(head -1 "$dir/goal.md" | cut -c1-80)" "${now:+  ($now)}"
     found=1
   done
   [ -n "$found" ] || echo "No goals yet."
 }
 
 cmd_show() {
-  local dir
+  local dir now
   dir="$(goal_dir "$1")" || exit $?
   printf 'Goal %s: %s\n\n%s\n' "$1" "$(cat "$dir/state")" "$(cat "$dir/goal.md")"
+  now="$(live_statuses | jq -r --arg n "$1" '.[] | select(.name == $n) | "Now: " + .status + (if .question != "" then " (" + .question + ")" else "" end)' 2>/dev/null)"
+  [ -z "$now" ] || printf '\n%s\n' "$now"
   [ ! -s "$dir/result.md" ] || printf '\nResult:\n%s\n' "$(cat "$dir/result.md")"
 }
 
 cmd_stop() {
-  local dir pid
+  local dir
   dir="$(goal_dir "$1")" || exit $?
-  alive "$dir" || { echo "Goal $1 is not running."; return 0; }
-  pid="$(cat "$dir/pid")"
+  if ! alive "$dir" && ! term_live "$1"; then echo "Goal $1 is not running."; return 0; fi
   printf 'stopped %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
-  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  pkill -TERM -P "$pid" 2>/dev/null || true
+  hc kill "$1" >/dev/null 2>&1 || true
   echo "Goal $1 stopped."
+}
+
+# Opens the conversation again when its terminal was closed. Prints nothing.
+reopen() {
+  local id="$1" dir="$2"
+  term_live "$id" && return 0
+  [ -s "$dir/session-id" ] || die "goal $id has no conversation to continue"
+  launch "$id" "$dir" --resume || die "could not reopen goal $id"
+}
+
+cmd_send() {
+  local id="$1" dir text force=()
+  shift
+  dir="$(goal_dir "$id")" || exit $?
+  text="$*"
+  [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "send ID \"message\""
+  case "$(state_of "$dir")" in stopped|failed) [ -s "$dir/session-id" ] || die "goal $id has ended" ;; esac
+  reopen "$id" "$dir"
+  # A question on the screen (blocked): the owner's text is the answer.
+  [ "$(term_get "$id" | jq -r '.status.state // ""')" != blocked ] || force=(--force)
+  hc send "${force[@]}" "$id" "$text" >/dev/null || die "the message did not reach goal $id"
+  printf 'running %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
+  alive "$dir" || { touch "$dir/heartbeat"; spawn_watcher "$id" follow; }
+  echo "Sent to $id."
+}
+
+cmd_read() {
+  local id="$1" lines="${2:-0}" dir
+  dir="$(goal_dir "$id")" || exit $?
+  printf '%s' "$lines" | grep -Eq '^[0-9]{1,5}$' || usage "read ID [LINES]"
+  if term_get "$id" >/dev/null; then
+    hc read "$id" --lines "$lines"
+  elif [ -s "$dir/result.md" ]; then
+    cat "$dir/result.md"
+  else
+    echo "Goal $id has no screen and no result yet."
+  fi
+}
+
+cmd_attach() {
+  local id="$1" dir
+  dir="$(goal_dir "$id")" || exit $?
+  [ -t 0 ] && [ -t 1 ] || usage "attach is for a person in a terminal; use read or send"
+  reopen "$id" "$dir"
+  alive "$dir" || { touch "$dir/heartbeat"; spawn_watcher "$id" follow; }
+  echo "Goal $id. Leave with Ctrl+\\ (the goal keeps running)."
+  exec fraim-herdr hc attach "$id"
+}
+
+# Goals whose watcher died (a container restart) but whose terminal still runs get a new
+# watcher; running goals whose terminal is gone too are failed.
+cmd_reconcile() {
+  [ -d "$goals" ] || return 0
+  local dir id st
+  for dir in "$goals"/g*/; do
+    id="$(basename "$dir")"
+    valid_id "$id" && [ -s "$dir/session-id" ] || continue
+    st="$(state_of "$dir")"
+    case "$st" in running|done) ;; *) continue ;; esac
+    alive "$dir" && continue
+    if term_live "$id"; then
+      touch "$dir/heartbeat"
+      spawn_watcher "$id" follow
+    elif [ "$st" = running ]; then
+      fail_goal "$id" "$dir" "$(cat "$dir/chat" 2>/dev/null)" "the Claude session ended (the server restarted)"
+    fi
+  done
 }
 
 action="${1:-}"
 [ $# -eq 0 ] || shift
 case "$action" in
   start) cmd_start "$@" ;;
-  run) [ $# -eq 1 ] || usage "run ID"; cmd_run "$1" ;;
+  run|follow) [ $# -eq 1 ] || usage "$action ID"; cmd_watch "$1" "$action" ;;
   list) cmd_list ;;
   show) [ $# -eq 1 ] || usage "show ID"; cmd_show "$1" ;;
   stop) [ $# -eq 1 ] || usage "stop ID"; cmd_stop "$1" ;;
-  *) usage 'start [--chat CHAT_ID] "what to do" | list | show ID | stop ID' ;;
+  send) [ $# -ge 2 ] || usage 'send ID "message"'; cmd_send "$@" ;;
+  read) [ $# -ge 1 ] && [ $# -le 2 ] || usage "read ID [LINES]"; cmd_read "$@" ;;
+  attach) [ $# -eq 1 ] || usage "attach ID"; cmd_attach "$1" ;;
+  reconcile) cmd_reconcile ;;
+  *) usage 'start [--chat CHAT_ID] "what to do" | list | show ID | stop ID | send ID "message" | read ID [LINES] | attach ID' ;;
 esac

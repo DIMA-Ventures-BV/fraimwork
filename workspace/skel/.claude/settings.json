@@ -19,6 +19,8 @@
       "Bash(fraim-lead:*)",
       "Bash(fraim-brain:*)",
       "Bash(fraim-style:*)",
+      "Bash(fraim-sessions:*)",
+      "Bash(fraim-herdr ls:*)",
       "mcp__whatsapp__session_command"
     ]
   }

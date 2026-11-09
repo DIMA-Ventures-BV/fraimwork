@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs the always-on Claude session inside tmux and restarts it when it exits.
+# Runs the always-on Claude session in the herdr terminal "main" (fraim-herdr starts it)
+# and restarts Claude when it exits.
 set -u
 # shellcheck source=/dev/null
 . /etc/fraim/runtime.env 2>/dev/null || true
@@ -23,9 +24,9 @@ confirm_dev_channel() {
   local pane
   for _ in $(seq 60); do
     sleep 1
-    pane="$(tmux capture-pane -p -t main 2>/dev/null || true)"
+    pane="$(hc read main --lines 0 2>/dev/null || true)"
     if printf '%s' "$pane" | grep -q '❯.*local development'; then
-      tmux send-keys -t main Enter
+      hc keys main enter >/dev/null 2>&1
       return 0
     fi
   done
