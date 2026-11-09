@@ -9,11 +9,13 @@ setup() {
   mkdir -p "$T/bin" "$T/home/fraim/automations/_triggers"
   export HOME="$T/home" GOALS="$T/goals" SENT="$T/sent" FEED="$T/feed" FRAIM_AUTOMATION=errors
   : > "$FEED"
-  # The owner's own slack plugin replaces the built-in one: it prints the feed, once.
+  # The owner's own slack plugin replaces the built-in one: like the real one, it writes new
+  # lines to FRAIM_TRIGGER_INBOX when that is set (and prints them otherwise), once.
   cat > "$HOME/fraim/automations/_triggers/slack" <<'EOF'
 #!/usr/bin/env bash
 [ ! -e "$FEED.down" ] || { echo "Slack said: not_in_channel" >&2; exit 1; }
-cat "$FEED"; : > "$FEED"
+if [ -n "${FRAIM_TRIGGER_INBOX:-}" ]; then cat "$FEED" >> "$FRAIM_TRIGGER_INBOX"; else cat "$FEED"; fi
+: > "$FEED"
 EOF
   cat > "$T/bin/fraim-goal" <<'EOF'
 #!/usr/bin/env bash
@@ -63,6 +65,14 @@ alert() { printf '[2026-11-09 10:05] :rotating_light: *Serverfout* `%s` / >%s\n'
   [ "$(wc -l < "$GOALS")" -eq 5 ]
   grep -q 'e4' "$GOALS"
   grep -q 'e5' "$GOALS"
+}
+
+@test "alerts already in the inbox from a run that stopped are not lost" {
+  mkdir -p "$HOME/.local/state/fraim/production-errors/errors"
+  printf '[2026-11-09 10:01] *Serverfout* `left.over` / >x\n' > "$HOME/.local/state/fraim/production-errors/errors/inbox"
+  run "$CHECK"
+  grep -q 'left.over' "$GOALS"
+  [ ! -s "$HOME/.local/state/fraim/production-errors/errors/inbox" ]
 }
 
 @test "lines without an error event are ignored" {

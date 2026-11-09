@@ -20,9 +20,13 @@ touch "$pending" "$handled"
 plugin="$HOME/fraim/automations/_triggers/slack"
 [ -x "$plugin" ] || plugin="${FRAIM_AUTO_KIT_DIR:-/etc/fraim/automation-kit}/triggers/slack"
 
-# Reading Slack failed: say so to the owner once a day, then stop this run.
-if ! lines="$(FRAIM_TRIGGER_STATE="$state/trigger" "$plugin" "$CHANNEL" 2>"$state/error")"; then
-  reason="$(tail -1 "$state/error" 2>/dev/null)${lines:+ $lines}"
+# The plugin writes new alerts to the inbox on disk before it moves its cursor, so a stop
+# anywhere loses nothing; this run takes the inbox and empties it at the end.
+inbox="$state/inbox"
+touch "$inbox"
+# Reading Slack failed: say so to the owner once a day, then stop this run (the inbox waits).
+if ! out="$(FRAIM_TRIGGER_STATE="$state/trigger" FRAIM_TRIGGER_INBOX="$inbox" "$plugin" "$CHANNEL" 2>"$state/error")"; then
+  reason="$(tail -1 "$state/error" 2>/dev/null)${out:+ $out}"
   if [ -z "$(find "$state/told" -mmin -1440 2>/dev/null)" ]; then
     touch "$state/told"
     fraim-notify "The production error watch cannot read Slack channel $CHANNEL: ${reason:-unknown reason}." >/dev/null 2>&1 || true
@@ -45,7 +49,9 @@ while IFS= read -r line; do
   else
     printf '%s\t1\t%s\t%s\n' "$ev" "$today" "$msg" >> "$pending"
   fi
-done <<<"$lines"
+done < "$inbox"
+# Everything is in the pending list now (a stop before this line only counts some twice).
+: > "$inbox"
 
 # Oldest first: start a goal for each event not handled lately, up to MAX_GOALS.
 started=0

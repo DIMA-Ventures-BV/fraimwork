@@ -71,25 +71,38 @@ if [ -z "$last" ]; then
   exit 0
 fi
 
-# Every page since the last check (newest first from Slack), at most 2000 messages.
-all="$(mktemp)"
-trap 'rm -f "$all"' EXIT
-cursor="" pages=0
-while [ "$pages" -lt 10 ]; do
+# Every page since the last check (newest first from Slack), up to 50 pages of 200.
+all="$(mktemp)" out="$(mktemp)"
+trap 'rm -f "$all" "$out" "$state/last-ts.new"' EXIT
+cursor="" pages=0 more=false
+while [ "$pages" -lt 50 ]; do
   resp="$(api "/api/conversations.history?channel=$id&oldest=$last&limit=200${cursor:+&cursor=$cursor}")" || exit 1
   jq -c '.messages[]' <<<"$resp" >> "$all"
-  [ "$(jq -r '.has_more // false' <<<"$resp")" = true ] || break
+  more="$(jq -r '.has_more // false' <<<"$resp")"
+  [ "$more" = true ] || break
   cursor="$(jq -r '.response_metadata.next_cursor // ""' <<<"$resp")"
   [ -n "$cursor" ] || break
   pages=$((pages + 1))
 done
 [ -s "$all" ] || exit 0
 
-# Only now move on, once every page is read.
-jq -rs 'max_by(.ts | tonumber) | .ts' "$all" > "$state/last-ts"
 jq -rs '
   map(select((.subtype // "") as $s | $s == "" or $s == "bot_message" or $s == "thread_broadcast"))
   | sort_by(.ts | tonumber) | .[]
-  | (if (.text // "") != "" then .text else ([.attachments[]? | .text // .fallback // empty] | join(" ")) end) as $t
+  | (if (.text // "") != "" then .text
+     else ([.attachments[]? | ([.text, .fallback] | map(select(. != null and . != "")) | first) // empty] | join(" ")) end) as $t
   | select($t != "")
-  | "[\(.ts | tonumber | floor | strftime("%Y-%m-%d %H:%M"))] " + ($t | gsub("[\r\n\t]+"; " / ") | .[0:300])' "$all"
+  | "[\(.ts | tonumber | floor | strftime("%Y-%m-%d %H:%M"))] " + ($t | gsub("[\r\n\t]+"; " / ") | .[0:300])' "$all" > "$out" \
+  || { echo "could not read Slack's answer"; exit 1; }
+if [ "$more" = true ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M')] more than 10000 new messages: the oldest of them were skipped" >> "$out"
+fi
+jq -rs 'max_by(.ts | tonumber) | .ts' "$all" > "$state/last-ts.new" && [ -s "$state/last-ts.new" ] \
+  || { echo "could not read Slack's answer"; exit 1; }
+# FRAIM_TRIGGER_INBOX: a caller that keeps the lines itself (check.sh) gets them written there
+# before the cursor moves, so a stop in between loses nothing. Otherwise they are printed.
+if [ -n "${FRAIM_TRIGGER_INBOX:-}" ]; then
+  cat "$out" >> "$FRAIM_TRIGGER_INBOX" || exit 1
+fi
+mv -f "$state/last-ts.new" "$state/last-ts"
+[ -n "${FRAIM_TRIGGER_INBOX:-}" ] || cat "$out"

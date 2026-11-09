@@ -613,8 +613,11 @@ cmd_run() {
   lock="$(sdir "$name")/lock"
   if ! mkdir "$lock" 2>/dev/null; then
     if lock_held "$lock" "$f"; then
-      [ -z "$input" ] || printf '%s\n' "$input" >> "$state_root/$name/queued"
-      [ -f "$state_root/$name/queued" ] || : > "$state_root/$name/queued"
+      # Trigger input waits apart from manual input, so it keeps its origin (FRAIM_POLL_RUN).
+      local qfile="$state_root/$name/queued"
+      [ "${FRAIM_POLL_RUN:-}" != 1 ] || qfile="$state_root/$name/queued.poll"
+      [ -z "$input" ] || printf '%s\n' "$input" >> "$qfile"
+      [ -f "$qfile" ] || : > "$qfile"
       echo "Automation $name is running; it runs once more when this run ends."
       exit 0
     fi
@@ -626,11 +629,18 @@ cmd_run() {
 
   RUN_STATUS="" RUN_OUTPUT=""
   run_once "$name" "$trigger" "$input" "$dry"
-  # A queued run gets the input that arrived during this run (new files, a page change).
-  while [ -f "$state_root/$name/queued" ] && [ "$dry" != 1 ]; do
-    input="$(cat "$state_root/$name/queued")"
-    rm -f "$state_root/$name/queued"
-    run_once "$name" "$trigger" "$input" 0
+  # A queued run gets the input that arrived during this run (new files, a page change);
+  # trigger input runs as a poll run, so a run the server had no memory for keeps it.
+  while { [ -f "$state_root/$name/queued.poll" ] || [ -f "$state_root/$name/queued" ]; } && [ "$dry" != 1 ]; do
+    if [ -f "$state_root/$name/queued.poll" ]; then
+      input="$(cat "$state_root/$name/queued.poll")"
+      rm -f "$state_root/$name/queued.poll"
+      FRAIM_POLL_RUN=1 run_once "$name" "$trigger" "$input" 0
+    else
+      input="$(cat "$state_root/$name/queued")"
+      rm -f "$state_root/$name/queued"
+      FRAIM_POLL_RUN=0 run_once "$name" "$trigger" "$input" 0
+    fi
   done
   prune_runs "$autos/$name/runs"
 
