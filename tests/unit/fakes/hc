@@ -5,6 +5,9 @@
 #   FAKE_RUN_FAIL=1  run fails
 #   FAKE_SCREEN      what read prints
 #   FAKE_SEND_HOOK   a program to run on every send (to write files a real run writes)
+#   FAKE_BLOCK_KIND  status.kind after a send (question by default; permission for a menu)
+#   FAKE_EVENTS      a file of JSON-RPC event lines that `hc events` prints
+#   $HC_FAKE/get-fail  a count of gets that fail with exit 1 (a busy core), then work again
 # Every call is logged to $HC_FAKE/calls.
 set -u
 d="${HC_FAKE:?}"
@@ -41,7 +44,14 @@ case "$cmd" in
     jq -n --arg n "$name" --arg c "$cwd" --argjson l "$labels" \
       '{address: $n, name: $n, cwd: $c, labels: $l, state: "live", status: {app: "claude-code", state: "idle"}, turn: 0}' > "$(file "$name")"
     jq -c '{address, name, state}' "$(file "$name")" ;;
-  get) need "$1"; cat "$(file "$1")" ;;
+  get)
+    # $HC_FAKE/get-fail holds a count: that many gets fail with exit 1 (a busy core).
+    if [ -s "$d/get-fail" ] && [ "$(cat "$d/get-fail")" -gt 0 ]; then
+      echo $(( $(cat "$d/get-fail") - 1 )) > "$d/get-fail"
+      echo '{"error":{"kind":"unavailable"}}' >&2
+      exit 1
+    fi
+    need "$1"; cat "$(file "$1")" ;;
   ls)
     # Like the real hc: live terminals only, a short record (status as one word, no labels).
     label=""
@@ -71,14 +81,14 @@ case "$cmd" in
       mkdir -p "$HOME/.claude/projects/-fake"
       jq -cn --arg t "$FAKE_REPLY" '{type: "assistant", message: {content: [{type: "text", text: $t}]}}' >> "$HOME/.claude/projects/-fake/$sid.jsonl"
     fi
-    set_field "$1" ".turn += 1 | .status.state = \"${FAKE_SEND_STATE:-done}\""
+    set_field "$1" ".turn += 1 | .status.state = \"${FAKE_SEND_STATE:-done}\" | .status.kind = \"${FAKE_BLOCK_KIND:-question}\""
     echo '{"started":true}' ;;
   keys) need "$1"; n="$1"; shift; printf '%s\n' "$*" >> "$d/$n.keys" ;;
   read) need "$1"; printf '%s\n' "${FAKE_SCREEN:-screen of $1}" ;;
   kill) need "$1"; set_field "$1" '.state = "finished" | .status = null' ;;
   rm) [ -f "$(file "$1")" ] && rm -f "$(file "$1")" ;;
   attach) need "$1"; echo "attached $1" ;;
-  events) exit 0 ;;
+  events) [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS" ;;
   *) echo "fake hc: $cmd not faked" >&2; exit 2 ;;
 esac
 : "$json"

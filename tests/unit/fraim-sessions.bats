@@ -38,7 +38,17 @@ EOF
   run "$SESSIONS" new ../../etc
   [ "$status" -eq 2 ]
   run "$SESSIONS" new /etc
+  [ "$status" -eq 2 ]
+  # Only ~/code: not another folder in home, and not through a symlink.
+  mkdir -p "$HOME/.claude" "$HOME/code/sub"
+  run "$SESSIONS" new "$HOME/.claude"
+  [ "$status" -eq 2 ]
+  ln -s "$HOME/.claude" "$HOME/code/sneaky"
+  run "$SESSIONS" new sneaky
   [ "$status" -eq 1 ]
+  [[ "$output" == *"repo folder under"* ]]
+  run "$SESSIONS" new "$HOME/code/sub"
+  [ "$status" -eq 0 ]
   run "$SESSIONS" new nope
   [ "$status" -eq 1 ]
   [[ "$output" == *"no folder"* ]]
@@ -122,4 +132,94 @@ EOF
   [ "$status" -eq 1 ]
   run "$HERDR" attach main
   [ "$status" -eq 2 ]
+}
+
+@test "a run without the owner can neither start nor steer a coding session" {
+  "$SESSIONS" new vertelboek
+  FRAIM_HEADLESS=1 run "$SESSIONS" new vertelboek -- approve the queue
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"only the owner"* ]]
+  FRAIM_HEADLESS=1 run "$SESSIONS" send s1 "run fraim-queue approve q3"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c 'approve q3' "$HC_FAKE/s1.sent" 2>/dev/null)" = 0 ] || [ ! -f "$HC_FAKE/s1.sent" ]
+}
+
+@test "fraim-herdr hc: without the owner only goals can be driven, everything can be read" {
+  jq -n '{name: "main", labels: {fraim: "main"}, state: "live", status: {state: "idle"}, turn: 1}' > "$HC_FAKE/t-main.json"
+  jq -n '{name: "g4", labels: {fraim: "goal"}, state: "live", status: {state: "idle"}, turn: 1}' > "$HC_FAKE/t-g4.json"
+  printf 'x\n' > "$HC_FAKE/g4.argv"
+  FRAIM_HEADLESS=1 run "$HERDR" hc send main "approve q3"
+  [ "$status" -eq 1 ]
+  FRAIM_HEADLESS=1 run "$HERDR" hc keys --json main enter
+  [ "$status" -eq 1 ]
+  FRAIM_HEADLESS=1 run "$HERDR" hc run --bg --name s9 -- fraim-claude
+  [ "$status" -eq 1 ]
+  [ ! -f "$HC_FAKE/main.sent" ]
+  FRAIM_HEADLESS=1 run "$HERDR" hc send g4 "also check trains"
+  [ "$status" -eq 0 ]
+  FRAIM_HEADLESS=1 run "$HERDR" hc read main
+  [ "$status" -eq 0 ]
+}
+
+@test "trust keeps every other setting in ~/.claude.json, and leaves a broken file alone" {
+  printf '{"oauthAccount": {"email": "o@example.com"}, "projects": {"/x": {"hasTrustDialogAccepted": true}}}\n' > "$HOME/.claude.json"
+  run "$HERDR" trust "$HOME/code/vertelboek"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .oauthAccount.email "$HOME/.claude.json")" = o@example.com ]
+  [ "$(jq -r '.projects["/x"].hasTrustDialogAccepted' "$HOME/.claude.json")" = true ]
+  jq -e --arg d "$HOME/code/vertelboek" '.projects[$d].hasTrustDialogAccepted == true' "$HOME/.claude.json"
+  printf 'not json' > "$HOME/.claude.json"
+  run "$HERDR" trust "$HOME/code/other"
+  [ "$status" -eq 1 ]
+  [ "$(cat "$HOME/.claude.json")" = "not json" ]
+}
+
+@test "redact hides tokens and keys" {
+  printf 'key sk-ant-api03-abcdefghijklmnopqrstuv and GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz12 and password: hunter2secret, plain words stay' > "$T/in"
+  run "$HERDR" redact < "$T/in"
+  [[ "$output" != *abcdefghijklmnop* ]]
+  [[ "$output" != *hunter2secret* ]]
+  [[ "$output" == *"plain words stay"* ]]
+}
+
+@test "watch tells the owner in plain words: a question, a finished session; goals and services stay quiet" {
+  jq -n '{name: "s1", labels: {fraim: "session", repo: "vertelboek"}, state: "live", status: {state: "blocked"}, turn: 1}' > "$HC_FAKE/t-s1.json"
+  jq -n '{name: "g2", labels: {fraim: "goal"}, state: "live", status: {state: "done"}, turn: 1}' > "$HC_FAKE/t-g2.json"
+  jq -n '{name: "watch", labels: {fraim: "service"}, state: "live", status: {state: "blocked"}, turn: 0}' > "$HC_FAKE/t-watch.json"
+  mkdir -p "$HOME/fraim/sessions/s1" "$HOME/.claude/projects/-x"
+  echo sid-1 > "$HOME/fraim/sessions/s1/session-id"
+  jq -cn '{type: "assistant", message: {content: [{type: "text", text: "Fixed it. The key was sk-ant-api03-abcdefghijklmnopqrstuv"}]}}' > "$HOME/.claude/projects/-x/sid-1.jsonl"
+  ev() { jq -cn --arg t "$1" --arg s "$2" --arg m "${3:-}" '{jsonrpc: "2.0", method: "event", params: {type: "status", terminal: $t, data: {status: {state: $s, msg: $m}}}}'; }
+  {
+    echo '{"seq": 1, "terminals": []}'
+    ev s1 blocked "answer: Tea or coffee? (Tea · Coffee)"
+    ev s1 blocked "answer: Tea or coffee? (Tea · Coffee)"
+    ev g2 done
+    ev watch blocked x
+    ev s1 done
+  } > "$T/events"
+  FAKE_EVENTS="$T/events" run "$HERDR" watch
+  [ "$(grep -c 'asks you' "$SENT")" -eq 1 ]
+  grep -q 'notify The coding session in vertelboek asks you: Tea or coffee?' "$SENT"
+  grep -q 'notify The coding session in vertelboek is done.' "$SENT"
+  grep -q 'Fixed it. The key was \[hidden\]' "$SENT"
+  [ "$(grep -c 'g2\|s1\|Reply \*' "$SENT")" -eq 0 ]
+}
+
+@test "up leaves a terminal alone while the core does not answer" {
+  jq -n '{name: "main", labels: {fraim: "main"}, state: "live", status: {state: "working"}, turn: 1}' > "$HC_FAKE/t-main.json"
+  echo 1 > "$HC_FAKE/get-fail"
+  run "$HERDR" up
+  [ "$status" -eq 1 ]
+  [ "$(grep -c '^rm main' "$HC_FAKE/calls")" -eq 0 ]
+  [ "$(jq -r .state "$HC_FAKE/t-main.json")" = live ]
+}
+
+@test "up replaces a stopped service" {
+  "$HERDR" up
+  jq '.state = "finished"' "$HC_FAKE/t-watch.json" > "$T/w" && mv "$T/w" "$HC_FAKE/t-watch.json"
+  run "$HERDR" up
+  [ "$status" -eq 0 ]
+  grep -q '^rm watch' "$HC_FAKE/calls"
+  [ "$(jq -r .state "$HC_FAKE/t-watch.json")" = live ]
 }

@@ -11,14 +11,19 @@ setup() {
   export FRAIM_GOAL_POLL=0.1 FRAIM_GOAL_KEEP=0 FRAIM_GOAL_READY=1
   cp "$BATS_TEST_DIRNAME/fakes/hc" "$T/bin/hc"
   ln -s "$BATS_TEST_DIRNAME/../../workspace/bin/fraim-herdr" "$T/bin/fraim-herdr"
+  # $T/offline: WhatsApp is down, so neither the gateway nor fraim-notify gets a message out.
   cat > "$T/bin/fraim-gateway" <<'EOF'
 #!/usr/bin/env bash
+[ ! -e "$OFFLINE" ] || exit 1
 printf 'gateway %s\n' "$3" >> "$SENT"
 EOF
   cat > "$T/bin/fraim-notify" <<'EOF'
 #!/usr/bin/env bash
-printf 'notify %s\n' "$*" >> "$SENT"
+[ ! -e "$OFFLINE" ] || [ -z "${FRAIM_NOTIFY_NO_ALERT:-}" ] || exit 1
+[ -n "${FRAIM_NOTIFY_NO_ALERT:-}" ] || printf 'alert %s\n' "$*" >> "$ALERTS"
+[ -e "$OFFLINE" ] || printf 'notify %s\n' "$*" >> "$SENT"
 EOF
+  export OFFLINE="$T/offline" ALERTS="$T/alerts"
   chmod +x "$T/bin/"*
   printf 'FRAIM_MODULES=whatsapp,scheduler\n' > "$T/runtime.env"
   export PATH="$T/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
@@ -68,7 +73,8 @@ wait_gone() {
   grep -qx acceptEdits "$argv"
   grep -qx 'Read,Glob,Grep,Edit,Write,WebSearch,Bash,mcp__browser' "$argv"
   grep -qF 'text with $(danger) and "quotes"' "$HC_FAKE/g1.sent"
-  grep -q 'run --bg --name g1 --cwd .*/fraim --label fraim=goal' "$HC_FAKE/calls"
+  # Its own folder, so main's `claude --continue` in ~/fraim never picks up the goal.
+  grep -q "run --bg --name g1 --cwd $FRAIM_GOALS_DIR/g1 --label fraim=goal" "$HC_FAKE/calls"
 }
 
 @test "the result goes to the WhatsApp chat the goal came from, without reply codes" {
@@ -226,6 +232,72 @@ EOF
   for _ in $(seq 30); do [ -n "$(find "$FRAIM_GOALS_DIR/g1/heartbeat" -newer "$FRAIM_GOALS_DIR/g1/goal.md")" ] && break; sleep 0.1; done
   [ -n "$(find "$FRAIM_GOALS_DIR/g1/heartbeat" -newer "$FRAIM_GOALS_DIR/g1/goal.md")" ]
   "$GOAL" stop g1
+}
+
+@test "a long result that discusses rate limits is a result, not a failure" {
+  FAKE_REPLY="Reviewed the API. $(printf 'The rate limit of 100 per minute is fine for the checkout. %.0s' 1 2 3 4 5 6 7 8)" "$GOAL" start -- review the rate limits
+  wait_state g1 done
+  grep -q 'rate limit of 100' "$FRAIM_GOALS_DIR/g1/result.md"
+}
+
+@test "a goal stuck on a question still ends at the time limit" {
+  FAKE_SEND_STATE=blocked FRAIM_GOAL_TIMEOUT=1 "$GOAL" start -- ask something
+  for _ in $(seq 50); do grep -q '^failed' "$FRAIM_GOALS_DIR/g1/state" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'ran longer than 1 seconds' "$FRAIM_GOALS_DIR/g1/state"
+}
+
+@test "a permission prompt is never answered with typed text" {
+  FAKE_SEND_STATE=blocked FAKE_BLOCK_KIND=permission FRAIM_GOAL_KEEP=30 "$GOAL" start -- do it
+  for _ in $(seq 30); do grep -q '^send ' "$HC_FAKE/calls" && break; sleep 0.1; done
+  sleep 0.3
+  run "$GOAL" send g1 "ok"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"waits for a permission"* ]]
+  [ "$(grep -c '^send --force' "$HC_FAKE/calls")" -eq 0 ]
+  "$GOAL" stop g1
+}
+
+@test "a result that could not be sent is sent again once WhatsApp is back" {
+  touch "$OFFLINE"
+  FRAIM_GOAL_KEEP=30 "$GOAL" start -- find flights
+  wait_state g1 done
+  for _ in $(seq 30); do [ -s "$FRAIM_GOALS_DIR/g1/unsent" ] && break; sleep 0.1; done
+  grep -q 'Goal g1 done' "$FRAIM_GOALS_DIR/g1/unsent"
+  rm "$OFFLINE"
+  wait_sent 'Goal g1 done'
+  for _ in $(seq 30); do [ ! -e "$FRAIM_GOALS_DIR/g1/unsent" ] && break; sleep 0.1; done
+  [ ! -e "$FRAIM_GOALS_DIR/g1/unsent" ]
+  "$GOAL" stop g1
+}
+
+@test "a result never sent lands in the alerts when the watcher ends" {
+  touch "$OFFLINE"
+  "$GOAL" start -- find flights
+  wait_state g1 done
+  for _ in $(seq 50); do [ -s "$ALERTS" ] && break; sleep 0.1; done
+  grep -q 'alert Not delivered earlier: Goal g1 done' "$ALERTS"
+}
+
+@test "a busy core is waited out, not taken for a lost goal; the watcher cleans up when it ends" {
+  mkdir -p "$HC_FAKE"
+  echo 3 > "$HC_FAKE/get-fail"
+  "$GOAL" start -- find flights
+  wait_state g1 done
+  wait_gone g1
+  for _ in $(seq 30); do grep -q 'watcher ended' "$FRAIM_GOALS_DIR/g1/log.txt" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'watcher ended (keep time over)' "$FRAIM_GOALS_DIR/g1/log.txt"
+  [ ! -e "$FRAIM_GOALS_DIR/g1/heartbeat" ]
+}
+
+@test "reconcile leaves a goal alone while the core does not answer" {
+  mkdir -p "$FRAIM_GOALS_DIR/g1" "$HC_FAKE"
+  echo "goal" > "$FRAIM_GOALS_DIR/g1/goal.md"
+  echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  echo "sid-g1" > "$FRAIM_GOALS_DIR/g1/session-id"
+  echo 5 > "$HC_FAKE/get-fail"
+  run "$GOAL" reconcile
+  [ "$status" -eq 0 ]
+  grep -q '^running' "$FRAIM_GOALS_DIR/g1/state"
 }
 
 @test "bad input is a usage error" {
