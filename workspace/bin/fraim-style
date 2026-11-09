@@ -61,6 +61,18 @@ style_of() {
   printf '%s' "${v:-$DEFAULT_STYLE}"
 }
 
+# Rules for every text the owner reads, whatever the style: the owner does not know the
+# server's ids, commands or internals and must understand a message without asking.
+plain_words() { cat <<'EOF'
+Plain words, always (every style). The owner reads this and must understand it without asking:
+- Never show ids or internal names (g5, q6, s2, r3, lead names as codes, file paths, commands). Name the thing itself: the product or repo, and what the task was for. Not "g5 (Dependabot)" but "the Dependabot updates for the pupstar shop".
+- Say what happened and the real cause in everyday words. Not "the run disappeared" but "the server restarted during the task, so it stopped halfway". When you do not know the cause, say so and say what you will check.
+- Leave out tests, retries and internal steps that change nothing for the owner.
+- Times as people say them: "this morning at 11:05", "an hour ago".
+- A question names what will happen when the owner says yes, so a yes is enough: "Shall I run the Dependabot updates for pupstar again?", not "Retry g5?".
+EOF
+}
+
 valid_place() { case " $PLACES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 set_place() {
@@ -98,7 +110,7 @@ case "$cmd" in
     place="$1"; valid_place "$place" || place=default
     style="$(style_of "$place")"
     rules="$(style_text "$style" 2>/dev/null || true)"
-    [ -n "$rules" ] || exit 0
-    printf 'Writing style for %s (%s). Follow it unless the owner asks for more or less detail in this message:\n%s\n' "$place" "$style" "$rules" ;;
+    [ -z "$rules" ] || printf 'Writing style for %s (%s). Follow it unless the owner asks for more or less detail in this message:\n%s\n\n' "$place" "$style" "$rules"
+    plain_words ;;
   *) usage "fraim-style [set PLACE STYLE | list | show STYLE | prompt PLACE]" ;;
 esac

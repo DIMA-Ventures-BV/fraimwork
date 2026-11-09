@@ -19,6 +19,7 @@
 #   fraim-lead run NAME          what its automation runs; also fine by hand
 #   fraim-lead tell NAME [--from WHO] -- TEXT    leave a note in the lead's inbox and wake it now
 #   fraim-lead ask [NAME|--chief] -- TEXT        the owner asks a lead (the chief by default); it runs now
+#   fraim-lead brief                             what the chief knows, for the chat that talks as the chief
 #   fraim-lead events NAME [--every 15m] [--off] wake the lead on new queue events (the chief has it)
 #   fraim-lead pause NAME | resume NAME
 #
@@ -631,6 +632,52 @@ cmd_tell() {
   fi
 }
 
+# brief: everything the chief knows, in one text, for the chat that talks as the chief: its brief
+# and notes, what the owner was told, goals with what they were for, coding sessions, leads,
+# automations, open decisions and the owner's rules. Ids are for commands, never for the owner.
+cmd_brief() {
+  local chief="" dir g id st by
+  printf 'Briefing for the chief of staff, %s. Ids (g.., s.., q..) are for commands only; tell the owner what a thing is and what it was for.\n' "$(date '+%A %Y-%m-%d %H:%M')"
+  if chief="$(the_chief)"; then
+    dir="$leads/$chief"
+    printf '\n## Your brief\n%s\n' "$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$dir/lead.md")"
+    printf '\n## Your notes\n%s\n' "$(head -c 4000 "$dir/state.md" 2>/dev/null)"
+  fi
+  if command -v fraim-relay >/dev/null; then
+    printf '\n## What the owner was told lately (newest last)\n%s\n' "$(fraim-relay said 5 2>/dev/null | tail -c 3000)"
+  fi
+  printf '\n## Background tasks (newest first)\n'
+  if [ -d "$goals" ]; then
+    for id in $(find "$goals" -mindepth 1 -maxdepth 1 -type d -name 'g[0-9]*' -exec basename {} \; | sed 's/^g//' | grep -E '^[0-9]+$' | sort -rn | head -12); do
+      g="$goals/g$id"
+      st="$(cat "$g/state" 2>/dev/null || echo unknown)"
+      by="the owner"
+      [ ! -s "$g/lead" ] || by="lead $(cat "$g/lead")"
+      printf -- '- g%s, %s, started by %s. Task: %s\n' "$id" "$st" "$by" "$(tr '\n' ' ' < "$g/goal.md" 2>/dev/null | cut -c1-300)"
+      [ ! -s "$g/result.md" ] || printf '  Result: %s\n' "$(tr '\n' ' ' < "$g/result.md" | cut -c1-300)"
+    done
+  fi
+  if command -v fraim-sessions >/dev/null; then
+    printf '\n## Coding sessions\n%s\n' "$(fraim-sessions list 2>/dev/null)"
+  fi
+  printf '\n## Leads\n'
+  for g in "$leads"/*/lead.md; do
+    [ -f "$g" ] || continue
+    id="$(basename "$(dirname "$g")")"
+    [ "$id" != "$chief" ] || continue
+    printf -- '- %s: %s Last run: %s\n' "$id" "$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front && NF' "$g" | head -3 | tr '\n' ' ' | cut -c1-200)" "$(cat "$(dirname "$g")/last" 2>/dev/null || echo never)"
+  done
+  if command -v fraim-auto >/dev/null; then
+    printf '\n## Automations\n%s\n' "$(fraim-auto list 2>/dev/null | head -40)"
+  fi
+  if command -v fraim-queue >/dev/null; then
+    printf '\n## Open decisions for the owner\n%s\n' "$(fraim-queue list --json 2>/dev/null | jq -r '.[:15][] | "- \(.id) p\(.priority): \(.title)" + (if (.ask // "") != "" then " | asks: \(.ask)" else "" end)' 2>/dev/null)"
+  fi
+  if command -v fraim-brain >/dev/null; then
+    printf "\n## The owner's rules\n%s\n" "$(fraim-brain show --plain 2>/dev/null | head -c 3000)"
+  fi
+}
+
 # ask [NAME|--chief] -- TEXT: the owner's message, answered now by a background run.
 cmd_ask() {
   local name="" text input
@@ -716,6 +763,7 @@ case "$action" in
     echo "Lead $1 resumed." ;;
   tell) cmd_tell "$@" ;;
   ask) cmd_ask "$@" ;;
+  brief) cmd_brief ;;
   events) cmd_events "$@" ;;
   *) usage 'new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME [--later] -- TEXT | ask [NAME] -- TEXT | events NAME [--every 15m] [--off] | pause NAME | resume NAME' ;;
 esac
