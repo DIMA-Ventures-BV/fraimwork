@@ -169,7 +169,10 @@ EOF
     run fraim-lead run web
   [ "$status" -eq 0 ]
   [ "$(grep -c '^notify' "$SENT")" = 1 ]
-  grep -q 'Lead web: 2 new in your queue, 0 goal(s) started' "$SENT"
+  grep -q 'web checked in.' "$SENT"
+  grep -q -- '- A' "$SENT"
+  grep -q -- '- B' "$SENT"
+  ! grep -q 'goal(s)' "$SENT"
 }
 
 @test "the chief's answer is the digest, SILENT sends nothing" {
