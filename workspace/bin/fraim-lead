@@ -563,12 +563,18 @@ cmd_run() {
       *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*) reason="the server is not signed in to Claude" ;;
       *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*) reason="the Claude plan's usage limit was reached" ;;
     esac
-    printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/last"
     # Unread notes go back to the inbox for the next run.
     if [ -s "$dir/.running/inbox.md" ]; then
       cat "$dir/.running/inbox.md" "$dir/inbox.md" 2>/dev/null > "$dir/.running/inbox.new"
       mv "$dir/.running/inbox.new" "$dir/inbox.md"
     fi
+    # 75: no free memory, Claude was not started (fraim-capacity). Not a failure: no alert,
+    # the notes wait in the inbox, and the runner reports it as skipped.
+    if [ "$code" -eq 75 ]; then
+      printf 'skipped %s the server had no free memory\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/last"
+      exit 75
+    fi
+    printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/last"
     # Run by its automation, the runner alerts once and puts the failure in the queue.
     if [ -n "${FRAIM_LEAD_IN_AUTO:-}" ]; then
       echo "Lead $name failed: $reason. Log: ${log#"$HOME"/}" >&2

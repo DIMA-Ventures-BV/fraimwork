@@ -268,7 +268,9 @@ sysctl -q -p /etc/sysctl.d/90-fraim.conf || warn "could not set vm.swappiness"
 if command -v earlyoom >/dev/null || apt_wait install -y -q earlyoom >/dev/null; then
   cat > /etc/default/earlyoom <<'EOF'
 # Installed by fraimwork install.sh: stop a Claude before the server runs out of memory.
-EARLYOOM_ARGS="-m 6 -s 90 -r 3600 --prefer '(^|/)claude$' --avoid '(^|/)(sshd|tailscaled|dockerd|containerd|containerd-shim-runc-v2|systemd|herdr-core)$'"
+# No quotes around the patterns: the unit splits $EARLYOOM_ARGS on spaces and passes quotes
+# through literally, so a quoted pattern would never match.
+EARLYOOM_ARGS="-m 6 -s 90 -r 3600 --prefer ^claude$ --avoid ^(sshd|tailscaled|dockerd|containerd|containerd-shim|systemd|herdr-core)$"
 EOF
   systemctl enable earlyoom >/dev/null 2>&1 || true
   systemctl restart earlyoom || warn "earlyoom did not start"

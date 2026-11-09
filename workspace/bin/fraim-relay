@@ -226,7 +226,9 @@ relay_chat() {
     ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_RELAY_TIMEOUT:-180}")
     [ -z "${FRAIM_RELAY_MODEL:-}" ] || model=(--model "$FRAIM_RELAY_MODEL")
     mkdir -p "$relay"
-    output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1;"${limit[@]}" fraim-claude -p "$(prompt_for "$chief" "$notices")" \
+    # A message to the owner never waits for free memory (fraim-capacity): it is one short
+    # run, and the reserve keeps room for it.
+    output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1; "${limit[@]}" fraim-claude -p "$(prompt_for "$chief" "$notices")" \
       ${model[@]+"${model[@]}"} --allowedTools "Read,Glob,Grep,Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-sessions list:*),Bash(fraim-lead list:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*)" \
       2>>"$relay/errors.log")"
     code=$?

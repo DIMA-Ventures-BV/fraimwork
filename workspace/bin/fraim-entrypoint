@@ -75,9 +75,11 @@ as_claude() {
   su - claude -c "$1"
 }
 
+# Registered again at every start when the command changed (an update can add flags).
 register_mcp() {
   local name="$1" command="$2"
-  if ! as_claude "claude mcp get $name >/dev/null 2>&1"; then
+  if ! as_claude "claude mcp get $name 2>/dev/null | grep -qF -- '$command'"; then
+    as_claude "claude mcp remove --scope user $name >/dev/null 2>&1 || true"
     as_claude "claude mcp add --scope user $name -- $command" >/dev/null \
       || echo "fraim: could not register MCP server '$name'" >&2
   fi
@@ -88,7 +90,8 @@ register_mcp() {
 register_main_mcp() {
   local name="$1" command="$2"
   as_claude "claude mcp remove --scope user $name >/dev/null 2>&1 || true"
-  if ! as_claude "cd ~/fraim && claude mcp get $name >/dev/null 2>&1"; then
+  if ! as_claude "cd ~/fraim && claude mcp get $name 2>/dev/null | grep -qF -- '$command'"; then
+    as_claude "cd ~/fraim && claude mcp remove --scope local $name >/dev/null 2>&1 || true"
     as_claude "cd ~/fraim && claude mcp add --scope local $name -- $command" >/dev/null \
       || echo "fraim: could not register MCP server '$name'" >&2
   fi
@@ -118,13 +121,13 @@ case "$role" in
     fi
 
     if has_module browser; then
-      register_mcp browser "chrome-devtools-mcp --browser-url ${BROWSER_CDP_URL}"
+      register_mcp browser "chrome-devtools-mcp --no-usage-statistics --browser-url ${BROWSER_CDP_URL}"
     fi
     # Every MCP server starts once per Claude. WhatsApp and the lent laptop Chrome are for
     # main only, so they belong to main's folder (~/fraim, local scope): goals and coding
     # sessions run in their own folders and do not start them (each copy took 60 to 160 MB;
     # ten Claudes froze a 4 GB server on 2026-11-09).
-    register_main_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"
+    register_main_mcp my-chrome "chrome-devtools-mcp --no-usage-statistics --browser-url http://127.0.0.1:9222"
     if has_module whatsapp; then
       register_main_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
     fi

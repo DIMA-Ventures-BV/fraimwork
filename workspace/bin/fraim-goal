@@ -296,7 +296,7 @@ wait_for_room() {
   local dir="$1" start said=""
   command -v fraim-capacity >/dev/null || return 0
   start="$(date +%s)"
-  until fraim-capacity check || fraim-capacity reclaim; do
+  until fraim-capacity admit || { fraim-capacity reclaim && fraim-capacity admit; }; do
     [ $(( $(date +%s) - start )) -lt "${FRAIM_GOAL_TIMEOUT:-14400}" ] || return 1
     if [ -z "$said" ]; then
       printf '%s waiting for free memory\n' "$(date '+%H:%M:%S')" >> "$dir/log.txt"
