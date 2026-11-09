@@ -141,7 +141,7 @@ Chains: after a delivered answer the runner runs each automation with `trigger: 
 | `none` | Only the run folder | built (runner) |
 | `email:<address>` | Gmail through the google container, as a draft unless the automation allows sending | step 5 |
 
-The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent`. Failures always go to `fraim-notify` and to the review queue as one `failed` item, never to the normal outputs, so a broken mail digest does not mail anyone. Approving that item starts a goal that fixes the automation.
+The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent`. Failures always go to `fraim-notify` and to the review queue as one `failed` item, never to the normal outputs, so a broken mail digest does not mail anyone. With an engineer lead ([queue.md](queue.md#the-engineer)), the engineer gets the failure at once and fixes it, and the item only informs. Without one, approving the item starts a goal that fixes the automation. `fraim-auto on NAME` switches on an automation made with `enabled: false` (or a lead made with `--off`); the owner's approval of a `--switch-on` queue item runs it, and a headless run cannot.
 
 ### Leads are automations
 

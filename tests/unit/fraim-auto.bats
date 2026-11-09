@@ -451,3 +451,22 @@ Meta spent 400 euro this week for 3 orders." run "$AUTO" run ads
   [[ "$output" == *"Automation digest failed"* ]]
   [[ "$output" == *"building-automations skill"* ]]
 }
+
+@test "on switches on an automation made off, only outside a headless run" {
+  run fraim-auto new report --off
+  [[ "$output" == *"switched off"* ]]
+  printf -- '---\nenabled: false\ndescription: r\nschedule: "0 8 * * *"\noutput: none\n---\nSay hi.\n' > "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
+  fraim-auto sync
+  ! grep -q 'report' "$FRAIM_AUTO_CRONTAB"
+  FRAIM_HEADLESS=1 run fraim-auto on report
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"only the owner switches"* ]]
+  grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
+  run fraim-auto on report
+  [ "$status" -eq 0 ]
+  ! grep -q 'enabled' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
+  grep -qx 'Say hi.' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
+  grep -qx '0 8 \* \* \* fraim-auto fire report' "$FRAIM_AUTO_CRONTAB"
+  FRAIM_LEAD_ROLE=engineer fraim-auto new other >/dev/null
+  grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/other/automation.md"
+}

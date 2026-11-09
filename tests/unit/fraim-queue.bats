@@ -127,6 +127,36 @@ EOF
   grep -q 'approved q1 "PR ready": looks good' "$FRAIM_BRAIN_DIR/log.md"
 }
 
+@test "approve of a --switch-on item switches the automation on; reject and dismiss leave it off" {
+  cat > "$T/bin/fraim-auto" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$AUTO_ARGS"
+echo "$2 is on."
+EOF
+  chmod +x "$T/bin/fraim-auto"
+  export AUTO_ARGS="$T/auto.args"
+  "$Q" add --quiet --lead engineer --kind decision --title "Monday ad spend" --switch-on ad-spend
+  "$Q" add --quiet --lead engineer --kind decision --title "Other" --switch-on other
+  run "$Q" show q1
+  [[ "$output" == *"On approve: switch on ad-spend"* ]]
+  run "$Q" approve q1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ad-spend is on."* ]]
+  [ "$(cat "$AUTO_ARGS")" = "on ad-spend" ]
+  [ ! -f "$GOAL_ARGS" ]
+  "$Q" reject q2 --note "not yet"
+  [ "$(wc -l < "$AUTO_ARGS" | tr -d ' ')" = 1 ]
+  run "$Q" add --title x --switch-on "Bad Name"
+  [ "$status" -eq 2 ]
+}
+
+@test "a headless run cannot approve a --switch-on item" {
+  "$Q" add --quiet --title "Monday ad spend" --switch-on ad-spend
+  FRAIM_HEADLESS=1 run "$Q" approve q1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"only the owner decides"* ]]
+}
+
 @test "dismiss closes without a goal or a brain note" {
   "$Q" add --quiet --title x --goal g1
   "$Q" dismiss q1

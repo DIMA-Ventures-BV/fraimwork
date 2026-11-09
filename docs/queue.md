@@ -133,6 +133,38 @@ When a chief exists, it writes every message the server sends you on its own. Go
 - Some messages skip the chief and go out word for word: its own digest and answers, rules the brain saved, an approval from the command line, and permission prompts.
 - `FRAIM_RELAY=off` in the runtime env turns the relay off. Pausing the chief does the same.
 
+## The engineer
+
+The chief manages; the engineer builds. `fraim lead new engineer --engineer` makes it (one per server). It is a lead like the others, so it can send and receive notes, shows in `fraim-auto list` and the Active view, and reports to the chief.
+
+```
+you: "send me the Meta ad spend every Monday"
+  └─► server's Claude ──tell──► engineer ──builds, tests (switched off)──► queue: "Switch on: ...?"
+                                   ▲                                          │ you approve
+  chief, any lead ──tell───────────┤                                          ▼
+  failed automation ──tell─────────┘                               fraim-auto on: it runs
+```
+
+| Work | Who asks | What the engineer does |
+|---|---|---|
+| New automation, reminder, report, watcher | you, the chief, a lead | `fraim-auto new NAME --off`, writes it, `check`, `run --dry`, then one queue item with `--switch-on NAME` |
+| New lead | you, the chief | `fraim-lead new NAME --off`, writes the brief, same queue item |
+| Change to an automation that runs | you, the chief | edits, checks, dry-runs; it stays on. New people or tools reached: asks first |
+| Failed automation | the runner, on its own | finds the cause and fixes it; tells the chief. The queue item only informs. A login or a usage limit goes to you |
+| Trigger or output plugin | anyone | writes it in `~/fraim/automations/_triggers` or `_outputs` and tests it through an automation |
+| Skill | anyone | drafts it and proposes it with `fraim-brain skill propose`; you approve |
+| Bug in fraimwork itself | anyone | a goal in `~/code/fraimwork` that opens a pull request; never merges or deploys. Without the repo on the server: an idea in the queue |
+| Login, key, MCP server, server update | anyone | a queue item that tells you what to ask Claude on your laptop |
+
+Guards:
+
+- **New things start off.** While the engineer runs, `fraim-auto new` and `fraim-lead new` always make it switched off (`FRAIM_LEAD_ROLE=engineer`), even when it forgets `--off`.
+- **Only you switch on.** Approving a `--switch-on NAME` item runs `fraim-auto on NAME`: it removes `enabled: false`, resumes a paused lead and updates the scheduler. A headless run (goal, lead, automation) cannot run `fraim-auto on`, and the engineer's tools do not include `resume`.
+- **No loops.** A failure of the engineer's own runs goes to the queue as before, not back to the engineer.
+- It cannot send mail or messages, post, pay, merge or deploy.
+
+Its schedule (default Monday 06:00) is a weekly check for automations that fail, are paused or answer nothing useful. All other runs start from a note.
+
 ## The brain
 
 `fraim-queue` gives every reason you write to the brain as evidence. Every Sunday at 20:00 the brain proposes rule changes as one queue item; approve applies them, reject with a reason makes it try again. Goals can propose skills the same way. `remember: ...` on WhatsApp adds a rule at once. Details: [brain.md](brain.md).

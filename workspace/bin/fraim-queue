@@ -5,11 +5,12 @@
 //   fraim-queue add --title T [--ask QUESTION] [--advise approve|reject|dismiss] [--why REASON]...
 //                   [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
 //                   [--priority 1|2|3] [--source S] [--goal gN] [--lead NAME] [--link URL]...
-//                   [--media FILE]... [--on-approve TEXT] [--brain pN | --skill sN] [--quiet]
+//                   [--media FILE]... [--on-approve TEXT] [--brain pN | --skill sN] [--switch-on NAME] [--quiet]
 //                                                               prints the id (q1, q2, ...)
 //   fraim-queue list [--all] [--json] [--lead NAME]   open items, most urgent first
 //   fraim-queue show ID [--json]
-//   fraim-queue approve ID [--note TEXT]   runs the item's on-approve step as a goal, if it has one
+//   fraim-queue approve ID [--note TEXT]   switches on the item's automation (--switch-on) and runs its
+//                                          on-approve step as a goal, if it has them
 //   fraim-queue reject ID --note TEXT      saves the reason for the brain; reworks the goal behind it
 //   fraim-queue dismiss ID                 closes the item, nothing else happens
 //   fraim-queue prio ID 1|2|3
@@ -175,6 +176,7 @@ export function addItem(opts) {
   if (![1, 2, 3].includes(priority)) usage('--priority must be 1, 2 or 3')
   if (opts.brain && !/^p\d{1,6}$/.test(opts.brain)) usage('--brain needs a proposal id (p1, p2, ...)')
   if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
+  if (opts.switchOn && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(opts.switchOn)) usage('--switch-on needs an automation name')
   const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
   if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
   const why = (Array.isArray(opts.why) ? opts.why : opts.why ? [opts.why] : []).map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
@@ -198,6 +200,8 @@ export function addItem(opts) {
     on_approve: String(opts.onApprove || ''),
     brain: opts.brain || '',
     skill: opts.skill || '',
+    // An automation or lead the engineer built switched off; approve switches it on.
+    switch_on: opts.switchOn || '',
     state: 'open',
     note: '',
     created: now(),
@@ -224,6 +228,12 @@ function brainNote(item, verdict, note) {
   const args = ['log', '--verdict', verdict, '--item', item.id, '--title', item.title]
   if (item.lead) args.push('--lead', item.lead)
   try { brain([...args, '--', note]) } catch (err) { process.stderr.write(`fraim-queue: the brain did not save the reason: ${err.message}\n`) }
+}
+
+function switchOn(name) {
+  const res = spawnSync(tool('fraim-auto'), ['on', name], { encoding: 'utf8', timeout: 30000 })
+  if (res.status !== 0) throw new Error(`could not switch on ${name}: ${(res.stderr || res.error?.message || '').trim().replace(/^fraim-auto: /, '')}`)
+  return res.stdout.trim()
 }
 
 function startGoal(text, item) {
@@ -285,8 +295,9 @@ export function decide(id, verdict, note = '', via = 'cli') {
     outcome = verdict === 'approved' ? brain(['apply', item.brain]) : brain(['discard', item.brain, '--note', verdict === 'rejected' ? note : ''])
   } else if (item.skill) {
     outcome = verdict === 'approved' ? brain(['skill', 'install', item.skill]) : brain(['skill', 'discard', item.skill, '--note', note])
-  } else if (verdict === 'approved' && item.on_approve) {
-    followUp = startGoal(approveText(item, note), item)
+  } else if (verdict === 'approved' && (item.switch_on || item.on_approve)) {
+    if (item.switch_on) outcome = switchOn(item.switch_on)
+    if (item.on_approve) followUp = startGoal(approveText(item, note), item)
   } else if (verdict === 'rejected' && item.goal) {
     // A rejected idea only teaches the brain; a rejected piece of work is done again.
     followUp = startGoal(reworkText(item, note), item)
@@ -452,6 +463,7 @@ function describe(item) {
   if (item.summary) parts.push('', item.ask ? 'Details:' : '', item.summary)
   if (item.links.length) parts.push('', ...item.links.map((l) => `link: ${l}`))
   if (item.media.length) parts.push('', ...item.media.map((m) => `media: ${path.join(itemDir(item.id), 'media', m)}`))
+  if (item.switch_on) parts.push('', `On approve: switch on ${item.switch_on}`)
   if (item.on_approve) parts.push('', `On approve: ${item.on_approve}`)
   if (item.note) parts.push('', `Owner: ${item.note}`)
   if (item.follow_up) parts.push(`Follow-up goal: ${item.follow_up}`)
@@ -910,7 +922,7 @@ function renderDetail() {
       (it.advise ? '<div class="adv" style="--advc:' + ADV[it.advise][1] + '">Advice: <b>' + ADV[it.advise][0] + '</b></div>' : '') +
       (it.why && it.why.length ? '<ul>' + it.why.map(function (w) { return '<li>' + esc(w) + '</li>' }).join('') + '</ul>' : '') +
       '</div>' : '') +
-    (card && it.on_approve ? '<div class="h3" style="margin-top:0">If you approve</div><div class="next" style="margin-bottom:20px">' + esc(it.on_approve) + '</div>' : '') +
+    (card && (it.on_approve || it.switch_on) ? '<div class="h3" style="margin-top:0">If you approve</div><div class="next" style="margin-bottom:20px">' + esc(it.on_approve || ('It starts running: ' + it.switch_on + '.')) + '</div>' : '') +
     '<dl class="props">' +
     '<dt>Status</dt><dd>' + statusIcon(it) + (open ? 'Waiting for you' : VERB[it.state] + ' ' + ago(it.decided) + ' ago') + '</dd>' +
     '<dt>Type</dt><dd><span class="label" style="--lc:' + KIND_COLOR[it.kind] + '"><i></i>' + esc(KIND[it.kind] || it.kind) + '</span></dd>' +
