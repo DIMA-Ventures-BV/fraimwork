@@ -2047,12 +2047,42 @@ cmd_goal() {
   local action="${1:-}"
   case "$action" in
     list|"") workspace_ssh "fraim-goal list" ;;
-    show|stop)
+    show|stop|read)
       [ -n "${2:-}" ] || usage "fraim goal $action ID"
       workspace_ssh "fraim-goal $action $(printf '%q' "$2")" ;;
+    send)
+      [ -n "${2:-}" ] && [ -n "${3:-}" ] || usage 'fraim goal send ID "message"'
+      workspace_ssh "fraim-goal send $(printf '%q' "$2") $(printf '%q' "${*:3}")" ;;
+    attach)
+      [ -n "${2:-}" ] || usage "fraim goal attach ID"
+      cmd_shell "$2" ;;
     *)
       server_logged_in || need_login_step
       workspace_ssh "fraim-goal start -- $(printf '%q' "$*")" ;;
+  esac
+}
+
+# Coding sessions on the server: live Claude Code sessions in a repo under ~/code.
+cmd_session() {
+  load_config
+  local action="${1:-list}"
+  case "$action" in
+    list|ls) workspace_ssh "fraim-sessions list" ;;
+    all) workspace_ssh "fraim-herdr ls" ;;
+    new)
+      [ -n "${2:-}" ] || usage 'fraim session new REPO ["task"]'
+      server_logged_in || need_login_step
+      workspace_ssh "fraim-sessions new $(printf '%q' "$2") -- $(printf '%q' "${*:3}")" ;;
+    send)
+      [ -n "${2:-}" ] && [ -n "${3:-}" ] || usage 'fraim session send ID "message"'
+      workspace_ssh "fraim-sessions send $(printf '%q' "$2") $(printf '%q' "${*:3}")" ;;
+    read|stop)
+      [ -n "${2:-}" ] || usage "fraim session $action ID"
+      workspace_ssh "fraim-sessions $action $(printf '%q' "$2")" ;;
+    attach)
+      [ -n "${2:-}" ] || usage "fraim session attach ID"
+      cmd_shell "$2" ;;
+    *) usage 'fraim session [list | all | new REPO ["task"] | send ID "message" | read ID | attach ID | stop ID]' ;;
   esac
 }
 
@@ -2229,11 +2259,14 @@ cmd_brain() {
   esac
 }
 
+# Every Claude session on the server lives in a herdr terminal (docs/sessions.md): main,
+# goals (g3), coding sessions (s1); any other name is a plain shell that stays.
 cmd_shell() {
   load_config
   is_tty || usage "fraim shell is interactive and for humans; use 'fraim exec' or 'fraim ask' instead"
   local session="${1:-main}" remote mosh_ports
-  if [ "$session" = main ]; then remote="tmux new-session -A -s main fraim-session"; else remote="tmux new-session -A -s $session"; fi
+  printf '%s' "$session" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,31}$' || usage "fraim shell [main|g3|s1|NAME]"
+  remote="fraim-herdr attach $session"
   if command -v mosh >/dev/null && [ "$FRAIM_ACCESS" != local ]; then
     mosh_ports="$(space_get MOSH_PORTS 60000-60010)"
     exec mosh --ssh="ssh $(ssh_opts)" --port="${mosh_ports/-/:}" "claude@$FRAIM_HOST" -- sh -c "$remote"
@@ -2668,6 +2701,10 @@ Operate
   fraim login [--token-stdin]                store a Claude login token on the server
   fraim ask "PROMPT" [--allow TOOLS] [--json]  one-off claude -p run on the server
   fraim goal "TASK" | list | show ID | stop ID  background task on the server; result on WhatsApp
+  fraim goal send ID "MSG" | read ID | attach ID   talk to a live goal, see its screen, take it over
+  fraim session [list | all | new REPO ["TASK"] | send ID "MSG" | read ID | attach ID | stop ID]
+                                             coding sessions on the server (s1, s2, ...) that keep
+                                             working with the laptop closed; all = every session
   fraim auto [list | show NAME | runs NAME | run NAME [--dry] | pause NAME | resume NAME | check]
                                              automations in ~/fraim/automations (trigger, prompt, output)
   fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
@@ -2699,7 +2736,7 @@ Operate
                                              (env and file keys are readable by Claude, as on a laptop)
   fraim tool add npm:PKG@VER|uv:PKG@VER ... | list | rm NAME   extra command-line tools for the space
   fraim mirror FILE [--yes] [--only KIND,...] [--dry-run]   set up the space from a mirror file (docs/mirror.md)
-  fraim shell [NAME]                         humans only: attach to the Claude tmux session
+  fraim shell [main|g3|s1|NAME]              humans only: take over a session (Ctrl+\ leaves it)
 
 Spaces: separate fraims on one server (own Claude, browser, keys, files). Every command
 takes --space NAME; without it a command works on the main space. See docs/spaces.md.
@@ -2780,6 +2817,7 @@ main() {
     exec) cmd_exec "$@" ;;
     ask) cmd_ask "$@" ;;
     goal) cmd_goal "$@" ;;
+    session|sessions) cmd_session "$@" ;;
     auto|automation|automations) cmd_auto "$@" ;;
     queue) cmd_queue "$@" ;;
     lead) cmd_lead "$@" ;;

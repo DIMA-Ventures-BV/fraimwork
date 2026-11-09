@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Types a Claude Code command into the always-on session (tmux session "main") once the
+# Types a Claude Code command into the always-on session (herdr terminal "main") once the
 # current turn has ended, so the server's Claude can run /clear, /compact or /model when
 # the owner asks in plain words. Only the commands below are allowed.
 #
@@ -18,10 +18,11 @@ set -uo pipefail
 usage() { echo "fraim-session-command: $*" >&2; exit 2; }
 die() { echo "fraim-session-command: $*" >&2; exit 1; }
 
-session="${FRAIM_SESSION_TMUX:-main}"
+session="${FRAIM_SESSION_NAME:-main}"
 
-screen() { tmux capture-pane -p -t "$session" 2>/dev/null; }
-busy() { screen | grep -qi 'esc to interrupt'; }
+screen() { hc read "$session" --lines 0 2>/dev/null; }
+# Claude Code reports its own status to herdr; "working" means a reply is still running.
+busy() { [ "$(hc get "$session" --json 2>/dev/null | jq -r '.status.state // ""')" = working ]; }
 
 confirm() {
   local chat="$1" text="$2"
@@ -43,15 +44,16 @@ deliver() {
     confirm "$chat" "I could not run $line: the session stayed busy for $limit seconds."
     exit 1
   fi
-  tmux send-keys -t "$session" -l -- "$line"
-  sleep 0.3
-  tmux send-keys -t "$session" Enter
+  if ! hc send "$session" "$line" >/dev/null 2>&1; then
+    confirm "$chat" "I could not run $line: the session did not take it."
+    exit 1
+  fi
   # Some commands ask first ("Switch model?" with "1. Yes" selected). The owner already
   # asked for it, so pick Yes; no menu means the command ran.
   for _ in 1 2 3 4 5; do
     sleep 1
     if screen | grep -Eq '❯ *1\. *Yes'; then
-      tmux send-keys -t "$session" Enter
+      hc keys "$session" enter >/dev/null 2>&1
       break
     fi
   done
@@ -79,7 +81,8 @@ case "$command" in
   *) usage "clear | compact [FOCUS] | model opus|sonnet|haiku|default" ;;
 esac
 
-tmux has-session -t "$session" 2>/dev/null || die "the Claude session ($session) is not running"
+[ "$(hc get "$session" --json 2>/dev/null | jq -r '.state // ""')" = live ] \
+  || die "the Claude session ($session) is not running"
 
 if [ -n "${FRAIM_SESSION_FOREGROUND:-}" ]; then
   deliver "$line" "$chat"

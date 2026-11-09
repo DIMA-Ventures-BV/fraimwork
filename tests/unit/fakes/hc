@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# A fake herdr-core CLI for the unit tests. Terminals are JSON files in $HC_FAKE.
+#   FAKE_REPLY       what Claude "answers" after a send (written to its transcript)
+#   FAKE_SEND_STATE  status after a send: done (default), working (stays busy), blocked, error
+#   FAKE_RUN_FAIL=1  run fails
+#   FAKE_SCREEN      what read prints
+#   FAKE_SEND_HOOK   a program to run on every send (to write files a real run writes)
+# Every call is logged to $HC_FAKE/calls.
+set -u
+d="${HC_FAKE:?}"
+mkdir -p "$d"
+printf '%s\n' "$*" >> "$d/calls"
+json=0
+args=()
+for a in "$@"; do [ "$a" = --json ] && json=1 || args+=("$a"); done
+set -- ${args[@]+"${args[@]}"}
+cmd="${1:-}"
+[ $# -eq 0 ] || shift
+
+file() { printf '%s/t-%s.json' "$d" "$1"; }
+need() { [ -f "$(file "$1")" ] || { echo '{"error":{"kind":"not_found"}}' >&2; exit 3; }; }
+set_field() { local f; f="$(file "$1")"; jq "$2" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }
+
+case "$cmd" in
+  server) echo '{"live":0}' ;;
+  run)
+    [ -z "${FAKE_RUN_FAIL:-}" ] || { echo '{"error":{"kind":"spawn_failed"}}' >&2; exit 1; }
+    name="" cwd="" labels='{}'
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --cwd) cwd="$2"; shift 2 ;;
+        --label) labels="$(jq --arg k "${2%%=*}" --arg v "${2#*=}" '. + {($k): $v}' <<<"$labels")"; shift 2 ;;
+        --bg|--no-parent|--no-notify|--keep|--rm|--outlive-parent) shift ;;
+        --) shift; break ;;
+        *) break ;;
+      esac
+    done
+    [ -n "$name" ] || name="t$RANDOM"
+    printf '%s\n' "$@" > "$d/$name.argv"
+    jq -n --arg n "$name" --arg c "$cwd" --argjson l "$labels" \
+      '{address: $n, name: $n, cwd: $c, labels: $l, state: "live", status: {app: "claude-code", state: "idle"}, turn: 0}' > "$(file "$name")"
+    jq -c '{address, name, state}' "$(file "$name")" ;;
+  get) need "$1"; cat "$(file "$1")" ;;
+  ls)
+    # Like the real hc: live terminals only, a short record (status as one word, no labels).
+    label=""
+    [ "${1:-}" != --label ] || label="$2"
+    shopt -s nullglob
+    files=("$d"/t-*.json)
+    if [ ${#files[@]} -eq 0 ]; then echo '{"terminals":[],"hidden_finished":0}'
+    else
+      jq -s --arg k "${label%%=*}" --arg v "${label#*=}" \
+        '{terminals: [.[] | select(.state == "live") | select($k == "" or .labels[$k] == $v)
+          | {address, name, cwd, state, status: (.status.state // null), turn}], hidden_finished: 0}' "${files[@]}"
+    fi ;;
+  wait)
+    need "$1"
+    [ "$(jq -r '.status.state' "$(file "$1")")" != working ] || sleep 0.2
+    jq -c '{reason: "status", status: .status.state, turn}' "$(file "$1")" ;;
+  send)
+    force=0
+    [ "$1" != --force ] || { force=1; shift; }
+    need "$1"
+    st="$(jq -r '.status.state' "$(file "$1")")"
+    if [ "$st" = blocked ] && [ "$force" = 0 ]; then echo '{"error":{"kind":"blocked"}}' >&2; exit 9; fi
+    printf '%s\n---\n' "$2" >> "$d/$1.sent"
+    [ -z "${FAKE_SEND_HOOK:-}" ] || "$FAKE_SEND_HOOK"
+    sid="$(grep -A1 -E '^--(session-id|resume)$' "$d/$1.argv" | tail -1)"
+    if [ -n "$sid" ] && [ -n "${FAKE_REPLY:-}" ]; then
+      mkdir -p "$HOME/.claude/projects/-fake"
+      jq -cn --arg t "$FAKE_REPLY" '{type: "assistant", message: {content: [{type: "text", text: $t}]}}' >> "$HOME/.claude/projects/-fake/$sid.jsonl"
+    fi
+    set_field "$1" ".turn += 1 | .status.state = \"${FAKE_SEND_STATE:-done}\""
+    echo '{"started":true}' ;;
+  keys) need "$1"; n="$1"; shift; printf '%s\n' "$*" >> "$d/$n.keys" ;;
+  read) need "$1"; printf '%s\n' "${FAKE_SCREEN:-screen of $1}" ;;
+  kill) need "$1"; set_field "$1" '.state = "finished" | .status = null' ;;
+  rm) [ -f "$(file "$1")" ] && rm -f "$(file "$1")" ;;
+  attach) need "$1"; echo "attached $1" ;;
+  events) exit 0 ;;
+  *) echo "fake hc: $cmd not faked" >&2; exit 2 ;;
+esac
+: "$json"
