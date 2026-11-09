@@ -159,9 +159,11 @@ function queueUrl() {
   return `on the laptop: fraim queue open${env.FRAIM_SPACE && env.FRAIM_SPACE !== 'main' ? ` --space ${env.FRAIM_SPACE}` : ''}`
 }
 
-function notify(text) {
+// direct: the owner reads it word for word (a security notice), not rewritten by the chief.
+function notify(text, direct = false) {
   if (process.env.FRAIM_QUEUE_QUIET === '1') return
-  spawnSync('fraim-notify', [text], { env: { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1' }, stdio: 'ignore', timeout: 30000 })
+  const env = { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1', ...(direct ? { FRAIM_NOTIFY_DIRECT: '1' } : {}) }
+  spawnSync('fraim-notify', [text], { env, stdio: 'ignore', timeout: 30000 })
 }
 
 export function addItem(opts) {
@@ -297,7 +299,7 @@ export function decide(id, verdict, note = '', via = 'cli') {
   item.via = via
   writeItem(item)
   // A change to the brain from the command line could come from an agent: tell the owner.
-  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`)
+  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`, true)
   if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead) {
     tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}`)

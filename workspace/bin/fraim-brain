@@ -629,9 +629,10 @@ export function checkItems(items, convs, model) {
   return out
 }
 
+// Word for word, not through the chief: the owner must see exactly what the brain saved.
 function notifyOwner(text) {
   if (process.env.FRAIM_BRAIN_QUIET === '1') return
-  spawnSync('fraim-notify', [text], { env: { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1' }, stdio: 'ignore', timeout: 30000 })
+  spawnSync('fraim-notify', [text], { env: { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1', FRAIM_NOTIFY_DIRECT: '1' }, stdio: 'ignore', timeout: 30000 })
 }
 
 function review(opts) {

@@ -68,13 +68,10 @@ tools() {
   fi
 }
 
-# Sends the outcome to the chat the goal came from, or to the owner.
+# Sends the outcome to the chat the goal came from, or to the owner. With a chief of staff,
+# fraim-notify hands it to the chief, who writes what the owner reads.
 tell() {
-  local chat="$1" text="$2"
-  if [ -n "$chat" ] && case ",${FRAIM_MODULES:-}," in *,whatsapp,*) true ;; *) false ;; esac; then
-    fraim-gateway POST /send "$(jq -cn --arg chat "$chat" --arg text "$text" '{chat_id: $chat, text: $text}')" >/dev/null && return 0
-  fi
-  FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$text"
+  FRAIM_NOTIFY_NO_ALERT=1 FRAIM_NOTIFY_CHAT="$1" fraim-notify "$2"
 }
 
 # Goals a lead started today, rework from the queue not counted.

@@ -17,7 +17,7 @@ printf 'gateway %s\n' "$3" >> "$SENT"
 EOF
   cat > "$T/bin/fraim-notify" <<'EOF'
 #!/usr/bin/env bash
-printf 'notify %s\n' "$*" >> "$SENT"
+printf 'notify%s %s\n' "${FRAIM_NOTIFY_CHAT:+ to $FRAIM_NOTIFY_CHAT}" "$*" >> "$SENT"
 EOF
   chmod +x "$T/bin/"*
   printf 'FRAIM_MODULES=whatsapp,scheduler\n' > "$T/runtime.env"
@@ -71,11 +71,11 @@ wait_gone() {
   grep -q 'run --bg --name g1 --cwd .*/fraim --label fraim=goal' "$HC_FAKE/calls"
 }
 
-@test "the result goes to the WhatsApp chat the goal came from, without reply codes" {
+@test "the result goes through fraim-notify to the chat the goal came from, without reply codes" {
   run "$GOAL" start --chat 316@s.whatsapp.net -- find flights
   wait_state g1 done
   wait_sent 'Goal g1 done'
-  grep -q '"chat_id":"316@s.whatsapp.net"' "$SENT"
+  grep -q '^notify to 316@s.whatsapp.net Goal g1 done' "$SENT"
   run grep -q 'g1: <message>' "$SENT"
   [ "$status" -eq 1 ]
   grep -q 'flights.md' "$FRAIM_GOALS_DIR/g1/result.md"
