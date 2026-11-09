@@ -88,7 +88,9 @@ hours) of work. Each becomes a priority 1 queue item, as before.
 under the home folder), marks the folder trusted in `~/.claude.json` (otherwise Claude Code
 waits at its trust question), opens terminal `sN` with `fraim-claude --session-id SID`, and sends
 the task. These sessions are the owner's own: `FRAIM_HEADLESS` is not set. At most
-`FRAIM_SESSIONS_MAX` (default 4) run at once, because each Claude takes 300 to 500 MB.
+`FRAIM_SESSIONS_MAX` run at once, because each Claude takes 300 to 500 MB. The default
+follows the server's memory: 1.5 GB stays free for main, the browser and WhatsApp, and every
+500 MB of the rest is one session (4 on a 4 GB server, about 12 on 8 GB, at most 20).
 `stop` closes the terminal; `send` reopens it with `--resume`.
 
 ## Limits
@@ -96,7 +98,7 @@ the task. These sessions are the owner's own: `FRAIM_HEADLESS` is not set. At mo
 - A server or container restart ends the running programs. herdr does not restore a process;
   main starts again, a goal fails or gets a new watcher (above), and a coding session can be
   reopened with `send`.
-- Memory: the default server has 4 GB. Two Claude sessions leave about 850 MB.
+- Memory: on a 4 GB server two extra Claude sessions leave about 850 MB; fraim-michael runs on 8 GB (CX33) since 2026-11-09.
 - herdr-core is pre-1.0 (protocol generation 1). fraim pins the version and uses only the CLI.
 - The core trusts every process of user claude (no separate API password), as tmux did.
 - Phone access is WhatsApp and the Claude app for main; there is no terminal on the phone.
