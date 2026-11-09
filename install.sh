@@ -89,21 +89,7 @@ start_space() {
 # the server's own fraim ports. A systemd unit puts them back after a reboot or Docker restart.
 isolate_spaces() {
   command -v iptables >/dev/null || return 1
-  cat > /usr/local/sbin/fraim-isolation <<'EOF'
-#!/bin/sh
-# Installed by fraimwork install.sh: containers may not reach the server's own fraim ports.
-for _ in $(seq 60); do iptables -L DOCKER-USER -n >/dev/null 2>&1 && break; sleep 1; done
-rule() { iptables -C "$@" 2>/dev/null || iptables -I "$@"; }
-for src in 172.29.0.0/16 172.30.0.0/16 172.31.0.0/16; do
-  rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p tcp -m multiport --dports 22,2222:2226,3100:3149,6080:6084,8384:8388,22000:22004 -j DROP
-  rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p udp -m multiport --dports 22000:22004,60000:60090 -j DROP
-  # Published ports reached by DNAT pass FORWARD, where Docker lets DOCKER-USER decide first.
-  if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
-    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT -j DROP
-  fi
-done
-EOF
-  chmod 0755 /usr/local/sbin/fraim-isolation
+  install -m 0755 bin/fraim-isolation /usr/local/sbin/fraim-isolation
   cat > /etc/systemd/system/fraim-isolation.service <<'EOF'
 [Unit]
 Description=fraimwork: keep spaces from reaching each other's published ports
