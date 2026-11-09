@@ -69,6 +69,22 @@ test('the page needs the token, shows items, serves media and records decisions'
     FRAIM_QUEUE_PORT: String(port), FRAIM_QUEUE_BIND: '127.0.0.1',
   }
   const cli = (...args) => execFileSync(process.execPath, [bin, ...args], { env, encoding: 'utf8' }).trim()
+  const autos = path.join(home, 'fraim/automations')
+  const state = path.join(home, '.local/state/fraim/automations')
+  for (const d of ['chief', 'web', 'digest']) {
+    await mkdir(path.join(autos, d), { recursive: true })
+    await mkdir(path.join(state, d), { recursive: true })
+  }
+  await mkdir(path.join(home, 'fraim/leads/chief/runs'), { recursive: true })
+  await mkdir(path.join(home, 'fraim/leads/web'), { recursive: true })
+  await writeFile(path.join(home, 'fraim/leads/chief/lead.md'), '---\nrole: chief\n---\n')
+  await writeFile(path.join(home, 'fraim/leads/web/lead.md'), '---\nrole: lead\n---\n')
+  await writeFile(path.join(home, 'fraim/leads/chief/runs/20261109-080000.md'), 'Two things today.\n')
+  await writeFile(path.join(autos, 'chief/automation.md'), '---\nschedule: "0 8 * * *"\nlead: chief\n---\n')
+  await writeFile(path.join(autos, 'web/automation.md'), '---\ndescription: Lead web: the shop\nschedule: "0 6 * * 1-5"\nlead: web\n---\n')
+  await writeFile(path.join(autos, 'digest/automation.md'), '---\ndescription: Mail digest\nevery: 1h  # hourly\n---\nDo it.\n')
+  await writeFile(path.join(state, 'web/last_status'), 'failed 2026-11-09 06:00 Claude stopped with exit code 1\n')
+  await writeFile(path.join(state, 'digest/paused'), 'by the owner\n')
   await writeFile(path.join(home, 'shot.png'), 'png-bytes')
   cli('add', '--title', 'With a picture', '--goal', 'g1', '--media', path.join(home, 'shot.png'))
   cli('add', '--title', 'Plain', '--priority', '1')
@@ -94,6 +110,13 @@ test('the page needs the token, shows items, serves media and records decisions'
   const items = await (await get('/api/items')).json()
   assert.deepEqual(items.map((i) => i.id), ['q2', 'q1'], 'priority 1 first')
   assert.equal(await (await get('/media/q1/shot.png')).text(), 'png-bytes')
+  const team = await (await get('/api/team')).json()
+  assert.equal(team.chief.text, 'Two things today.')
+  assert.equal(team.chief.time, '2026-11-09 08:00')
+  assert.deepEqual(team.leads.map((l) => [l.name, l.role, l.status]), [['chief', 'chief', 'never'], ['web', 'lead', 'failed']])
+  assert.equal(team.leads[1].description, 'the shop')
+  assert.deepEqual(team.automations.map((a) => [a.name, a.when, a.status]), [['digest', 'every 1h', 'paused']])
+  assert.equal((await fetch(`${base}/api/team`)).status, 401)
   assert.equal((await get('/media/q1/..%2Fitem.json')).status, 404)
 
   assert.equal((await post('/api/items/q1/decide', { verdict: 'approved' }, {})).status, 403, 'no cross-site posts')
