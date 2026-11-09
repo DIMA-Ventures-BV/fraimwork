@@ -561,6 +561,9 @@ cmd_reconcile() {
         if [ -s "$dir/session-id" ]; then
           touch "$dir/heartbeat"
           spawn_watcher "$id" follow
+        elif [ "$st" = running ]; then
+          # No conversation to follow: start the goal again (restart_goal starts fresh).
+          restart_goal "$id" "$dir"
         fi ;;
       unknown) ;;
       *)

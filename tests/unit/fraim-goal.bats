@@ -359,6 +359,17 @@ Not logged in · Please run /login"
   grep -q '^done' "$FRAIM_GOALS_DIR/g1/state"
 }
 
+@test "reconcile restarts a running goal whose live terminal has no conversation id" {
+  mkdir -p "$FRAIM_GOALS_DIR/g1" "$HC_FAKE"
+  echo "count the orders" > "$FRAIM_GOALS_DIR/g1/goal.md"
+  echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  jq -n '{address: "g1", name: "g1", labels: {fraim: "goal"}, state: "live", status: {state: "working"}, turn: 0}' > "$HC_FAKE/t-g1.json"
+  run "$GOAL" reconcile
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FRAIM_GOALS_DIR/g1/restarts")" = 1 ]
+  wait_state g1 done
+}
+
 @test "reconcile sends a failure it could not deliver to the alerts" {
   mkdir -p "$FRAIM_GOALS_DIR/g1"
   echo "goal" > "$FRAIM_GOALS_DIR/g1/goal.md"
