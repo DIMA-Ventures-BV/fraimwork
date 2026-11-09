@@ -95,12 +95,26 @@ EOF
   [ ! -e "$FRAIM_CRONTAB" ]
 }
 
-@test "the chief gets budget 0 and its own brief" {
+@test "the chief gets budget 2, its own brief and an events automation" {
   fraim-lead new chief --chief
-  [ "$(cat "$FRAIM_LEADS_DIR/chief/budget")" = 0 ]
+  [ "$(cat "$FRAIM_LEADS_DIR/chief/budget")" = 2 ]
   grep -q '^role: chief' "$FRAIM_LEADS_DIR/chief/lead.md"
   run fraim-lead list
   [[ "$output" == *"chief  chief  30 7 * * *"* ]]
+  grep -qx 'trigger: queue: events' "$FRAIM_AUTOMATIONS_DIR/chief-events/automation.md"
+  grep -qx 'lead: chief' "$FRAIM_AUTOMATIONS_DIR/chief-events/automation.md"
+  run fraim-auto check chief-events
+  [ "$status" -eq 0 ]
+  grep -qx '\*/15 \* \* \* \* fraim-auto poll chief-events' "$FRAIM_AUTO_CRONTAB"
+  fraim-lead pause chief
+  run fraim-auto list
+  [[ "$output" == *"chief-events (lead)  [paused]"* ]]
+  fraim-lead resume chief
+  run fraim-lead events chief --off
+  [ ! -e "$FRAIM_AUTOMATIONS_DIR/chief-events" ]
+  run fraim-lead events chief --every 30m
+  [ "$status" -eq 0 ]
+  grep -qx 'every: 30m' "$FRAIM_AUTOMATIONS_DIR/chief-events/automation.md"
 }
 
 @test "run gives the lead its brief, notes, brain rules and queue history, with narrow tools" {
@@ -166,7 +180,11 @@ EOF
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-queue prio:*)"* ]]
   [[ "$tools" == *"Bash(fraim-auto show:*)"* ]]
-  [[ "$tools" != *"fraim-goal start"* ]]
+  [[ "$tools" == *"Bash(fraim-goal start --lead chief:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
+  [[ "$tools" != *"Bash,"* ]]
+  grep -q 'Goal budget: 0 of 2 used today' "$CLAUDE_ARGS"
+  grep -q 'daily digest' "$CLAUDE_ARGS"
   grep -q 'chief (lead)  \[on\]' "$CLAUDE_ARGS"
   rm -f "$SENT"
   FAKE_OUTPUT=SILENT run fraim-lead run chief
@@ -220,4 +238,80 @@ EOF
   grep -q 'Write in Dutch' "$CLAUDE_ARGS"
   grep -q 'phone screen' "$CLAUDE_ARGS"
   ! grep -q 'backups first' "$CLAUDE_ARGS"
+}
+
+@test "tell leaves a note the next run reads first; a good run clears it, a failed run keeps it" {
+  fraim-lead new web
+  run fraim-lead tell web --from chief -- "Customers ask for a PDF export"
+  [ "$status" -eq 0 ]
+  grep -q 'from chief: Customers ask for a PDF export' "$FRAIM_LEADS_DIR/web/inbox.md"
+  FAKE_FAIL=1 run fraim-lead run web
+  grep -q 'Customers ask for a PDF export' "$CLAUDE_ARGS"
+  grep -q 'PDF export' "$FRAIM_LEADS_DIR/web/inbox.md"
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  grep -q 'Your inbox' "$CLAUDE_ARGS"
+  [ ! -e "$FRAIM_LEADS_DIR/web/inbox.md" ]
+  grep -q 'PDF export' "$FRAIM_LEADS_DIR"/web/runs/*.md
+  run fraim-lead tell web -- "   "
+  [ "$status" -eq 2 ]
+  run fraim-lead tell nobody -- hi
+  [ "$status" -eq 1 ]
+}
+
+@test "ask runs the chief now with the owner's message, and it always answers" {
+  fraim-lead new chief --chief
+  FAKE_OUTPUT="Started g1 for the export." run fraim-lead ask -- "customers want a PDF export"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"chief is on it"* ]]
+  for _ in $(seq 50); do grep -q 'Started g1' "$SENT" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'The owner wrote: customers want a PDF export' "$CLAUDE_ARGS"
+  grep -q 'Never answer SILENT' "$CLAUDE_ARGS"
+  grep -q 'Chief of staff:' "$SENT"
+  grep -q 'Started g1 for the export.' "$SENT"
+  ls "$FRAIM_AUTOMATIONS_DIR"/chief/runs/*/trigger.json >/dev/null
+}
+
+@test "ask without a chief says how to make one" {
+  run fraim-lead ask -- "hello"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no chief of staff"* ]]
+}
+
+@test "a queue event wakes the chief; it stays quiet unless the owner must act" {
+  fraim-lead new chief --chief
+  FRAIM_LEAD_TRIGGER=queue FRAIM_LEAD_INPUT="q4 p2 review from goal g2: Export done" FAKE_OUTPUT=SILENT run fraim-lead run chief
+  [ "$status" -eq 0 ]
+  grep -q 'q4 p2 review from goal g2: Export done' "$CLAUDE_ARGS"
+  grep -q 'only when the owner must act today' "$CLAUDE_ARGS"
+  [ ! -s "$SENT" ]
+}
+
+@test "the queue trigger reports goal results, failures, automation answers and urgent items, not ideas or the chief's own" {
+  fraim-lead new chief --chief
+  fraim-lead new web
+  P="$BATS_TEST_DIRNAME/../../workspace/automation-kit/triggers/queue"
+  export FRAIM_TRIGGER_STATE="$BATS_TEST_TMPDIR/state"
+  mkdir -p "$FRAIM_TRIGGER_STATE"
+  fraim-queue add --quiet --title "Before" >/dev/null
+  run bash "$P" events
+  [ -z "$output" ]
+  fraim-queue add --quiet --lead web --kind idea --title "Lead idea" >/dev/null
+  fraim-queue add --quiet --lead web --kind idea --priority 1 --title "Urgent idea" >/dev/null
+  fraim-queue add --quiet --lead web --goal g3 --kind review --title "Goal result" >/dev/null
+  fraim-queue add --quiet --source "automation mail" --kind decision --title "Mail asks for export" >/dev/null
+  fraim-queue add --quiet --lead chief --kind decision --title "Chief asks" >/dev/null
+  run bash "$P" events
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Lead idea"* ]]
+  [[ "$output" != *"Chief asks"* ]]
+  [[ "$output" == *"q3 p1 idea from lead web: Urgent idea"* ]]
+  [[ "$output" == *"Goal result"* ]]
+  [[ "$output" == *"from automation mail: Mail asks for export"* ]]
+  run bash "$P" events
+  [ -z "$output" ]
+  run bash "$P" --check events
+  [ "$status" -eq 0 ]
+  run bash "$P" --check sometimes
+  [ "$status" -eq 1 ]
 }

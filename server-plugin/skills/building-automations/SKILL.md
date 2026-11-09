@@ -60,6 +60,7 @@ Placeholders in the prompt: `{{since}}` (the last good run), `{{now}}`, `{{input
 | `trigger: files: inbox` | New files appear in that folder inside `~/fraim` (subfolders too). The first check only remembers what is there | one line per new file |
 | `trigger: page: https://...` | The text of a public web page changes. It cannot see pages behind a login | the new lines, at most 40 |
 | `trigger: after: <name>` | Right after automation `<name>` sent an answer (not after SILENT or a failure) | that answer |
+| `trigger: queue: events` | New items in the review queue: `events` (goal results, failures, automation answers, priority 1), `urgent` or `all` | one line per item |
 | `trigger: <your-type>: ...` | Whatever the owner's own plugin in `_triggers/` reports | its lines |
 
 A check that finds nothing costs no tokens. Claude runs only when something happened, once per check with all events together.
@@ -153,4 +154,6 @@ When a plugin would help every fraim owner, tell the owner: it can move into the
 
 Leads are automations too. An automation with `lead: <name>` runs the lead `~/fraim/leads/<name>` on its schedule; `fraim-lead new` makes it. Do not write a prompt for it and do not change `output: none`. To change when a lead runs, edit its `schedule:`; to stop it, `fraim-lead pause <name>`.
 
-When the owner wants to decide on an answer rather than only read it, use `output: queue` (or `queue: decision`). The chief of staff reads the queue, every automation's state and the recent answers, and puts what matters in the morning digest.
+When the owner wants to decide on an answer rather than only read it, use `output: queue` (or `queue: decision`). The chief of staff reads the queue, every automation's state and the recent answers, and puts what matters in the morning digest. A new `queue` item from an automation also wakes the chief during the day (its `chief-events` automation), so it can start the work, hand it to a lead or ask the owner.
+
+A watcher is an automation that checks a source on an interval and puts what someone asks of the owner in the queue: start from the examples `mail-requests` (Gmail) or `linear-new` (Linear) with `fraim-auto new <name> --from <example>`.

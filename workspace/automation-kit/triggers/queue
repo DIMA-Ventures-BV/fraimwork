@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# usage: queue:events | queue:urgent | queue:all
+# description: New items in the owner's review queue. events: goal results, failures, automation answers and anything urgent, not a lead's own ideas. urgent: priority 1 only. all: every new item. Items from the chief of staff never count. One line per item is {{input}}.
+# Trigger plugin. $1 is the filter. It prints one line per new open item, or nothing.
+# $FRAIM_TRIGGER_STATE is a folder that stays between checks; the first check only remembers the newest item.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  case "${2:-}" in events|urgent|all) exit 0 ;; esac
+  echo "'${2:-}' is not a queue filter (events, urgent or all)"; exit 1
+fi
+filter="${1:-events}"
+state="${FRAIM_TRIGGER_STATE:?}"
+leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
+command -v fraim-queue >/dev/null || { echo "this server has no review queue"; exit 1; }
+items="$(fraim-queue list --all --json 2>/dev/null)" || { echo "cannot read the review queue"; exit 1; }
+
+chiefs="$(for f in "$leads"/*/lead.md; do
+  grep -q '^role: chief' "$f" 2>/dev/null && basename "$(dirname "$f")"
+done | jq -R . | jq -sc .)"
+newest="$(printf '%s' "$items" | jq '[.[].id | ltrimstr("q") | tonumber] | max // 0')"
+last="$(cat "$state/last" 2>/dev/null)"
+printf '%s\n' "$newest" > "$state/last"
+[ -n "$last" ] || exit 0
+
+printf '%s' "$items" | jq -r --argjson last "$last" --argjson chiefs "$chiefs" --arg filter "$filter" '
+  map(select((.id | ltrimstr("q") | tonumber) > $last and .state == "open"))
+  | map(select(.lead as $l | ($chiefs | index($l)) | not))
+  | map(select(
+      if $filter == "all" then true
+      elif $filter == "urgent" then .priority == 1
+      else .priority == 1 or .kind == "failed" or .goal != "" or .lead == ""
+      end))
+  | sort_by(.id | ltrimstr("q") | tonumber)
+  | .[] | "\(.id) p\(.priority) \(.kind) from \(.source): \(.title)"'

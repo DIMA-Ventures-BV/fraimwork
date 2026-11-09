@@ -9,6 +9,7 @@
 //   "why r3" / "forget r3"               where a rule came from / remove it
 //   "undo rules"                         put the rules back as they were before the last change
 //   "leads"                              list the lead agents
+//   "chief: <message>"                   the chief of staff handles it now and answers here
 // A leading slash is allowed. Only the owner may use them.
 const LIST_RE = /^\s*\/?queue\s*$/i
 const LEADS_RE = /^\s*\/?leads\s*$/i
@@ -19,6 +20,7 @@ const RULES_RE = /^\s*\/?rules\s*$/i
 const RULE_RE = /^\s*\/?(why|forget)\s+(r\d{1,6})\s*$/i
 const UNDO_RE = /^\s*\/?undo\s+rules\s*$/i
 const REMEMBER_RE = /^\s*\/?remember\s*:\s*([\s\S]*\S[\s\S]*)$/i
+const CHIEF_RE = /^\s*\/?chief\s*:\s*([\s\S]*\S[\s\S]*)$/i
 
 // { action, id?, note?, text? } for a queue command from the owner, otherwise null.
 export function parseQueueCommand(event, owner) {
@@ -38,6 +40,8 @@ export function parseQueueCommand(event, owner) {
   if (m) return { action: m[1].toLowerCase(), id: m[2].toLowerCase() }
   m = REMEMBER_RE.exec(text)
   if (m) return { action: 'remember', text: m[1].trim() }
+  m = CHIEF_RE.exec(text)
+  if (m) return { action: 'chief', text: m[1].trim() }
   return null
 }
 
@@ -47,6 +51,7 @@ export function queueArgs(command) {
     case 'list': return ['fraim-queue', ['list']]
     case 'leads': return ['fraim-lead', ['list']]
     case 'remember': return ['fraim-brain', ['note', command.text]]
+    case 'chief': return ['fraim-lead', ['ask', '--chief', '--', command.text]]
     case 'rules': return ['fraim-brain', ['show']]
     case 'why': return ['fraim-brain', ['why', command.id]]
     case 'forget': return ['fraim-brain', ['forget', command.id]]

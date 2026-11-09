@@ -433,7 +433,9 @@ run_once() {
   elif [ -n "$lead" ]; then
     # The lead builds its own prompt and tools; this runner keeps the schedule, the history
     # and the failure rules. FRAIM_LEAD_IN_AUTO stops the lead from alerting a second time.
-    text="$(cd "$fraim_dir" && FRAIM_LEAD_IN_AUTO=1 FRAIM_LEAD_TIMEOUT="$t" "${limit[@]}" fraim-lead run "$lead" 2> "$run/stderr.txt")"
+    # A trigger's events or the owner's message reach the lead as FRAIM_LEAD_INPUT.
+    text="$(cd "$fraim_dir" && FRAIM_LEAD_IN_AUTO=1 FRAIM_LEAD_TIMEOUT="$t" FRAIM_LEAD_TRIGGER="$trigger" FRAIM_LEAD_INPUT="$input" \
+      "${limit[@]}" fraim-lead run "$lead" 2> "$run/stderr.txt")"
     code=$?
   elif is_true "$(get "$f" script_only)"; then
     text="$check_out"; code=0
