@@ -376,6 +376,56 @@ export function team() {
   return { chief, leads, automations }
 }
 
+// --- active agents: who works right now --------------------------------------------------
+// Interactive Claudes (the main chat, goals, coding sessions) come from herdr when it is
+// installed; headless lead and automation runs come from the fraim-auto run locks.
+
+function run(cmd, args, timeout = 8000) {
+  const r = spawnSync(tool(cmd), args, { encoding: 'utf8', timeout, env: runtimeEnv() })
+  return r.status === 0 ? r.stdout : null
+}
+
+export function active() {
+  const out = []
+  const herd = run('fraim-herdr', ['ls', '--json'])
+  if (herd) {
+    try {
+      for (const a of JSON.parse(herd)) {
+        if (!a || !a.name || a.kind === 'shell') continue
+        out.push({ name: String(a.name), kind: String(a.kind || 'session'), status: String(a.status || 'none'), question: String(a.question || ''), cwd: String(a.cwd || ''), turn: String(a.turn || ''), live: true })
+      }
+    } catch {}
+  }
+  let names = []
+  try { names = fs.readdirSync(AUTO_STATE) } catch {}
+  for (const name of names) {
+    if (!fs.existsSync(path.join(AUTO_STATE, name, 'lock'))) continue
+    const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
+    const since = (() => { try { return fs.statSync(path.join(AUTO_STATE, name, 'lock')).mtime.toISOString() } catch { return '' } })()
+    out.push({ name, kind: h.lead ? 'lead' : 'automation', status: 'working', question: '', cwd: '', turn: since, live: false })
+  }
+  const order = { blocked: 0, working: 1, error: 2, idle: 3, done: 4, none: 5 }
+  return out.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name))
+}
+
+const validAgent = (n) => /^[a-z0-9][a-z0-9_-]{0,47}$/.test(n)
+
+export function agentScreen(name) {
+  if (!validAgent(name)) usage('not an agent name')
+  const text = /^g\d+$/.test(name) ? run('fraim-goal', ['read', name]) : run('hc', ['read', name, '--lines', '80'])
+  return { name, text: text == null ? '' : text.slice(-20000) }
+}
+
+export function agentSend(name, text) {
+  if (!validAgent(name)) usage('not an agent name')
+  text = String(text || '').trim()
+  if (!text) usage('write a message first')
+  const r = /^g\d+$/.test(name) ? run('fraim-goal', ['send', name, text], 15000)
+    : /^s\d+$/.test(name) ? run('fraim-sessions', ['send', name, text], 15000) : null
+  if (r == null) throw new Error(`could not send to ${name}; only goals (g1) and sessions (s1) take messages`)
+  return { ok: true }
+}
+
 function line(item) {
   const flag = item.state === 'open' ? `p${item.priority}` : item.state
   const extra = item.media.length ? `  [${item.media.length} media]` : ''
@@ -458,6 +508,13 @@ export function createServer(secret = token()) {
         return send(res, 200, rank(allItems().filter((i) => all || i.state === 'open')))
       }
       if (req.method === 'GET' && url.pathname === '/api/team') return send(res, 200, team())
+      if (req.method === 'GET' && url.pathname === '/api/active') return send(res, 200, active())
+      const agent = /^\/api\/active\/([a-z0-9][a-z0-9_-]{0,47})\/(screen|send)$/.exec(url.pathname)
+      if (agent && req.method === 'GET' && agent[2] === 'screen') return send(res, 200, agentScreen(agent[1]))
+      if (agent && req.method === 'POST' && agent[2] === 'send') {
+        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
+        return send(res, 200, agentSend(agent[1], (await readBody(req)).text))
+      }
       const media = /^\/media\/(q\d{1,6})\/([^/]+)$/.exec(url.pathname)
       if (req.method === 'GET' && media) {
         const item = readItem(media[1])
@@ -602,6 +659,13 @@ svg { display: block; flex: none; }
 .act.primary:hover { filter: brightness(1.06); }
 .act.danger { color: var(--red); }
 
+.screen { margin: 0; background: var(--side); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--soft); white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; }
+.ask { border: 1px solid color-mix(in srgb, var(--yellow) 45%, var(--line)); background: color-mix(in srgb, var(--yellow) 8%, var(--panel)); border-radius: 8px; padding: 10px 12px; margin: 0 0 16px; color: var(--ink); white-space: pre-wrap; }
+.cmd { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.cmd code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; background: var(--side); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; color: var(--soft); }
+.live { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent); animation: live 1.6s ease-out infinite; }
+@keyframes live { to { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) { .live { animation: none; } }
 .empty { margin: auto; text-align: center; padding: 40px; color: var(--muted); max-width: 360px; }
 .empty svg { margin: 0 auto 12px; color: var(--faint); }
 .empty b { display: block; color: var(--ink); font-weight: 500; font-size: 14px; margin-bottom: 4px; }
@@ -633,6 +697,9 @@ svg { display: block; flex: none; }
 </div>
 <div class="toast" id="toast" role="status"></div>
 <script>
+var agents = [], screenTimer = null
+var AGENT_STATUS = { working: 'Working', blocked: 'Waiting for you', idle: 'Idle', done: 'Done', error: 'Error', none: 'Starting' }
+var AGENT_COLOR = { working: 'var(--green)', blocked: 'var(--yellow)', idle: 'var(--gray)', done: 'var(--accent)', error: 'var(--red)', none: 'var(--faint)' }
 var all = [], items = [], teamData = { leads: [], automations: [], chief: null }, sel = 0, view = 'inbox', showDone = false, rec = null, briefOpen = false
 var KIND = { review: 'Review', decision: 'Decision', idea: 'Idea', info: 'Info', failed: 'Failed' }
 var KIND_COLOR = { review: 'var(--green)', decision: 'var(--blue)', idea: 'var(--yellow)', info: 'var(--gray)', failed: 'var(--red)' }
@@ -692,6 +759,17 @@ async function load(keepId) {
   if (!res.ok) { $('#detail').innerHTML = '<div class="empty"><b>No access</b>' + esc(await res.text()) + '</div>'; return }
   all = await res.json()
   try { var t = await fetch('/api/team'); if (t.ok) teamData = await t.json() } catch (e) {}
+  try { var ag = await fetch('/api/active'); if (ag.ok) agents = await ag.json() } catch (e) {}
+  if (view === 'active') {
+    var keep = keepId || (items[sel] && items[sel].name)
+    items = agents
+    var ai = keep ? items.findIndex(function (a) { return a.name === keep }) : -1
+    sel = ai >= 0 ? ai : Math.min(sel, Math.max(items.length - 1, 0))
+    $('#toggle').style.display = 'none'
+    renderSide(all.filter(function (i) { return i.state === 'open' }), []); renderAgents(); renderAgent()
+    return
+  }
+  clearInterval(screenTimer)
   var open = all.filter(function (i) { return i.state === 'open' })
   var done = all.filter(function (i) { return i.state !== 'open' }).sort(function (a, b) { return String(b.decided).localeCompare(String(a.decided)) })
   if (view === 'done') items = done
@@ -722,6 +800,7 @@ function renderSide(open, done) {
   var leads = teamData.leads.filter(function (m) { return m.role !== 'chief' })
   var html = '<div class="ws"><span class="logo">f</span>fraim</div><div class="nav">' +
     navBtn('inbox', ICON.inbox, 'Inbox', open.length) +
+    navBtn('active', agents.some(function (a) { return a.status === 'working' }) ? '<span class="live" style="margin:0 3px"></span>' : ICON.done, 'Active', agents.filter(function (a) { return a.status === 'working' || a.status === 'blocked' }).length) +
     navBtn('p1', prioIcon(1), 'Today', open.filter(function (i) { return i.priority === 1 }).length) +
     navBtn('p2', prioIcon(2), 'This week', open.filter(function (i) { return i.priority === 2 }).length) +
     navBtn('p3', prioIcon(3), 'Later', open.filter(function (i) { return i.priority === 3 }).length) +
@@ -729,7 +808,7 @@ function renderSide(open, done) {
   if (leads.length) html += '<div class="sec">Leads</div><div class="nav">' + leads.map(function (m) { return memberBtn(m, open) }).join('') + '</div>'
   if (teamData.automations.length) html += '<div class="sec">Automations</div><div class="nav">' + teamData.automations.map(function (m) { return memberBtn(m, open) }).join('') + '</div>'
   $('#side').innerHTML = html
-  var title = view === 'inbox' ? 'Inbox' : view === 'done' ? 'Decided' : /^p/.test(view) ? WHEN[+view[1]] : view.slice(4)
+  var title = view === 'active' ? 'Active' : view === 'inbox' ? 'Inbox' : view === 'done' ? 'Decided' : /^p/.test(view) ? WHEN[+view[1]] : view.slice(4)
   $('#view-title').textContent = title
   $('#view-count').textContent = items.filter(function (i) { return i.state === 'open' }).length || ''
 }
@@ -819,8 +898,61 @@ function renderDetail() {
   el.innerHTML = html
   var ta = $('#note'); if (ta) ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px' })
 }
+function agentIcon(a) {
+  var c = AGENT_COLOR[a.status] || 'var(--faint)'
+  if (a.status === 'working') return '<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.3" fill="none" stroke="' + c + '" stroke-width="1.5" stroke-dasharray="4 2.4"><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="2.4s" repeatCount="indefinite"/></circle><circle cx="8" cy="8" r="2.4" fill="' + c + '"/></svg>'
+  if (a.status === 'blocked') return '<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="' + c + '"/><path d="M8 4.2v4.6" stroke="#111" stroke-width="1.8" stroke-linecap="round"/><circle cx="8" cy="11.3" r="1" fill="#111"/></svg>'
+  if (a.status === 'error') return '<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.3" fill="none" stroke="' + c + '" stroke-width="1.5"/><path d="M6 6l4 4M10 6l-4 4" stroke="' + c + '" stroke-width="1.5" stroke-linecap="round"/></svg>'
+  return '<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.3" fill="none" stroke="' + c + '" stroke-width="1.5"/></svg>'
+}
+var KIND_LABEL = { main: 'WhatsApp chat', goal: 'Goal', session: 'Coding session', lead: 'Lead run', automation: 'Automation' }
+function renderAgents() {
+  $('#view-count').textContent = items.length || ''
+  if (!items.length) { $('#list').innerHTML = '<div class="none">Nobody is working right now. Goals, coding sessions, lead runs and automations show up here while they run.</div>'; return }
+  $('#list').innerHTML = items.map(function (a, i) {
+    var sub = a.status === 'blocked' && a.question ? a.question : (a.cwd || KIND_LABEL[a.kind] || a.kind)
+    return '<button class="row" data-i="' + i + '" aria-current="' + (i === sel) + '" style="grid-template-columns:16px minmax(0,1fr) auto">' + agentIcon(a) +
+      '<span class="t">' + esc(a.name) + ' <span style="color:var(--muted);font-weight:400">' + esc(sub) + '</span></span>' +
+      '<span class="r"><span class="label" style="--lc:' + (AGENT_COLOR[a.status] || 'var(--faint)') + '"><i></i>' + esc(AGENT_STATUS[a.status] || a.status) + '</span></span></button>'
+  }).join('')
+}
+function renderAgent() {
+  var el = $('#detail'), a = items[sel]
+  clearInterval(screenTimer)
+  if (!a) { el.innerHTML = '<div class="empty">' + ICON.clear + '<b>All quiet</b>No agent is running right now.</div>'; return }
+  var canSend = /^[gs]\\d+$/.test(a.name)
+  var html = '<div class="bar"><div class="crumb">Active<span>/</span><b>' + esc(a.name) + '</b></div><span class="grow"></span><span class="c">' + (sel + 1) + ' / ' + items.length + '</span><button class="icon" id="prev" title="Previous (k)" aria-label="Previous">' + ICON.up + '</button><button class="icon" id="next" title="Next (j)" aria-label="Next">' + ICON.down + '</button></div>' +
+    '<div class="doc"><div class="doc-in"><h2>' + esc(a.name) + '</h2><dl class="props">' +
+    '<dt>Status</dt><dd>' + agentIcon(a) + esc(AGENT_STATUS[a.status] || a.status) + '</dd>' +
+    '<dt>Type</dt><dd>' + esc(KIND_LABEL[a.kind] || a.kind) + '</dd>' +
+    (a.cwd ? '<dt>Folder</dt><dd>' + esc(a.cwd) + '</dd>' : '') +
+    (a.turn ? '<dt>Since</dt><dd>' + esc(/T/.test(a.turn) ? ago(a.turn) + ' ago' : a.turn) + '</dd>' : '') +
+    (a.kind === 'session' ? '<dt>Take over</dt><dd class="cmd"><code>fraim shell ' + esc(a.name) + '</code><button class="btn" id="copy">Copy</button></dd>' : '') +
+    '</dl>' + (a.status === 'blocked' && a.question ? '<div class="ask">' + esc(a.question) + '</div>' : '') +
+    (a.live || /^g\\d+$/.test(a.name) ? '<div class="h3">Screen</div><pre class="screen" id="screen">Loading...</pre>' : '<div class="desc" style="color:var(--muted)">This run works in the background. Its answer lands in the inbox or the run history when it is done.</div>') +
+    '</div></div>'
+  if (canSend) html += '<div class="composer"><div class="composer-in"><textarea id="note" rows="1" placeholder="Send a message to ' + esc(a.name) + '"></textarea><div class="ctl"><button class="icon" id="mic" title="Dictate (v)" aria-label="Dictate">' + ICON.mic + '</button><span class="grow"></span><button class="act primary" id="send">Send <kbd>Ctrl Enter</kbd></button></div></div></div>'
+  el.innerHTML = html
+  if (a.live || /^g\\d+$/.test(a.name)) { loadScreen(a.name); screenTimer = setInterval(function () { loadScreen(a.name) }, 4000) }
+}
+async function loadScreen(name) {
+  try {
+    var r = await fetch('/api/active/' + encodeURIComponent(name) + '/screen'); var s = $('#screen'); if (!s || !r.ok) return
+    var d = await r.json(), atEnd = s.scrollTop + s.clientHeight >= s.scrollHeight - 20
+    s.textContent = d.text || '(nothing on the screen yet)'
+    if (atEnd) s.scrollTop = s.scrollHeight
+  } catch (e) {}
+}
+async function sendToAgent() {
+  var a = items[sel], ta = $('#note'); if (!a || !ta || !ta.value.trim()) return
+  var r = await fetch('/api/active/' + encodeURIComponent(a.name) + '/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Fraim-Queue': '1' }, body: JSON.stringify({ text: ta.value.trim() }) })
+  var out = await r.json()
+  if (!r.ok) { toast(out.error || 'That did not work.'); return }
+  ta.value = ''; toast('Sent to ' + a.name + '.'); loadScreen(a.name)
+}
 function select(i) {
   if (i < 0 || i >= items.length || i === sel) return
+  if (view === 'active') { sel = i; renderAgents(); renderAgent(); return }
   sel = i; renderList(); renderDetail()
   var el = document.querySelector('.row[aria-current="true"]'); if (el) el.scrollIntoView({ block: 'nearest' })
 }
@@ -861,13 +993,15 @@ $('#list').addEventListener('click', function (e) {
 $('#detail').addEventListener('click', function (e) {
   var b = e.target.closest('button'); if (!b) return
   if (b.dataset.v) decide(b.dataset.v); else if (b.dataset.p) setPrio(+b.dataset.p)
+  else if (b.id === 'send') sendToAgent()
+  else if (b.id === 'copy') { var c = b.previousElementSibling; if (navigator.clipboard && c) navigator.clipboard.writeText(c.textContent).then(function () { toast('Copied. Paste it in a terminal.') }) }
   else if (b.id === 'mic') dictate(); else if (b.id === 'prev') select(sel - 1); else if (b.id === 'next') select(sel + 1)
 })
 $('#toggle').onclick = function () { showDone = !showDone; load() }
 document.addEventListener('keydown', function (e) {
   if (e.target.tagName === 'TEXTAREA') {
     if (e.key === 'Escape') e.target.blur()
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); decide('rejected') }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (view === 'active') sendToAgent(); else decide('rejected') }
     return
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return
