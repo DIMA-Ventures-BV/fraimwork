@@ -71,12 +71,12 @@ wait_gone() {
   grep -q 'run --bg --name g1 --cwd .*/fraim --label fraim=goal' "$HC_FAKE/calls"
 }
 
-@test "the result goes to the WhatsApp chat the goal came from, with how to continue" {
+@test "the result goes to the WhatsApp chat the goal came from, without reply codes" {
   run "$GOAL" start --chat 316@s.whatsapp.net -- find flights
   wait_state g1 done
   wait_sent 'Goal g1 done'
   grep -q '"chat_id":"316@s.whatsapp.net"' "$SENT"
-  grep -q 'g1: <message>' "$SENT"
+  [ "$(grep -c 'g1: <message>\|reply \*' "$SENT")" -eq 0 ]
   grep -q 'flights.md' "$FRAIM_GOALS_DIR/g1/result.md"
 }
 

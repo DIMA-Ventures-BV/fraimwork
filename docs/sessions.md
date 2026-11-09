@@ -14,21 +14,24 @@ SSH connection drops, and the owner can look in, answer a question, correct it, 
 
 ## What the owner does
 
-| Want | Laptop | WhatsApp |
+On WhatsApp the owner uses plain words, never ids or commands. The server's Claude (main)
+decides by meaning which session a message is for (`fraim-herdr ls` shows each one with its
+status and question) and passes it on with `fraim-goal send` or `fraim-sessions send`.
+
+| Want | Laptop | WhatsApp (plain words to main) |
 | --- | --- | --- |
-| Start coding work on the server | `fraim session new vertelboek "fix the login bug"` | ask main: "work on vertelboek: fix the login bug" |
-| See all sessions and their status | `fraim session all` | `sessions` (coding), `goals` |
-| Talk to one | `fraim session send s1 "run the tests"`, `fraim goal send g3 "..."` | `s1: run the tests`, `g3: use the cheaper hotel` |
-| Answer a question it asks | the same | the same (`g3: tea`) |
-| See its screen | `fraim session read s1` | `show s1` |
+| Start coding work on the server | `fraim session new vertelboek "fix the login bug"` | "work on vertelboek: fix the login bug" |
+| See all sessions and their status | `fraim session all` | "what is running?" |
+| Talk to one, or answer its question | `fraim session send s1 "run the tests"`, `fraim goal send g3 "..."` | answer the message it sent, in your own words |
+| See its screen | `fraim session read s1` | "how far is the login fix?" |
 | Take it over | `fraim shell s1` (Ctrl+\ leaves, the session keeps running) | the Claude app, for main |
-| Close it | `fraim session stop s1` | `stop s1`, `stop g3` |
+| Close it | `fraim session stop s1` | "stop the login fix" |
 
-The owner gets a WhatsApp message when:
+The owner gets a WhatsApp message (no ids) when:
 
-- any session asks something or waits for a permission (`s1 needs you: <the question>`),
-- a coding session finishes a turn (`s1 is done.` with Claude's last message),
-- a goal has its result (unchanged from before), or answers a follow-up (`Goal g3 answered.`),
+- a goal or coding session asks something or waits for a permission ("The coding session in vertelboek asks you: ..."),
+- a coding session finishes a turn ("The coding session in vertelboek is done." with Claude's last message),
+- a goal has its result (unchanged from before), or answers a follow-up,
 - main stays on a question screen for more than a minute.
 
 ## How it works

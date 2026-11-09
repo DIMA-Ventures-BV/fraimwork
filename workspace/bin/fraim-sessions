@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Coding sessions on the server: interactive Claude Code sessions in a repo under ~/code,
 # each in its own herdr terminal (s1, s2, ...), so they keep working while the laptop is
-# closed. The owner talks to them from the laptop, the phone (WhatsApp "s1: ...") or by
+# closed. The owner talks to them from the laptop, the phone (in plain words on WhatsApp,
+# passed on by the server's Claude) or by
 # taking one over (attach). fraim-herdr watch tells the owner when one finishes a turn or
 # asks something. See docs/sessions.md.
 #
