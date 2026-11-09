@@ -17,6 +17,11 @@ if [ -r /etc/fraim/runtime.env ]; then
   . /etc/fraim/runtime.env
   export FRAIM_SECRETS_URL FRAIM_SECRETS_TOKEN FRAIM_SPACE
 fi
+# PERMISSIONS=all in .env (the default): nobody is there to approve a tool, so skip the
+# prompts. Managed deny rules and --disallowedTools still apply; --allowedTools no longer limits.
+if [ "${FRAIM_PERMISSIONS:-all}" = all ]; then
+  set -- --dangerously-skip-permissions "$@"
+fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
 if command -v fraim-config >/dev/null; then
   exec fraim-config exec -- claude "$@"
