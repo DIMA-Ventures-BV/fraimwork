@@ -73,6 +73,8 @@ EOF
   [[ "$tools" != *"fraim-queue prio"* ]]
   grep -q '^ok ' "$FRAIM_LEADS_DIR/web/last"
   [ ! -s "$SENT" ]
+  [ ! -e "$FRAIM_LEADS_DIR/web/.running" ]
+  [[ "$output" != *"unbound variable"* ]]
 }
 
 @test "a run that adds to the queue sends one message" {
