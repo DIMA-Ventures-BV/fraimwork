@@ -93,6 +93,14 @@ test('the page needs the token, shows items, serves media and records decisions'
   assert.deepEqual(act.map((a) => [a.name, a.kind, a.status]), [['s2', 'session', 'blocked'], ['web', 'lead', 'working']], 'shells are left out, blocked first')
   assert.equal(act[0].question, 'Old covers too?')
   assert.equal((await (await get('/api/active/s2/screen')).json()).text.trim(), 'screen of s2')
+  await mkdir(path.join(home, 'fraim/leads/web/.running'), { recursive: true })
+  await writeFile(path.join(home, 'fraim/leads/web/.running/live.jsonl'), [
+    { type: 'system', subtype: 'init' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Checking the shop.' }, { type: 'tool_use', name: 'Bash', input: { command: 'curl -s https://shop.example/health' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n')
+  assert.equal(act[1].live, true, 'a lead run shows what it does')
+  assert.equal((await (await get('/api/active/web/screen')).json()).text, 'Checking the shop.\n\n> Bash: curl -s https://shop.example/health')
   assert.equal((await get('/api/active/..%2Fx/screen')).status, 404)
   assert.equal((await post('/api/active/s2/send', { text: 'hi' }, {})).status, 403, 'no cross-site sends')
   assert.equal((await post('/api/active/web/send', { text: 'hi' })).status, 500, 'a lead run takes no messages')

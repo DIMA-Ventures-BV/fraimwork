@@ -551,10 +551,27 @@ cmd_run() {
   [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
   # What the engineer creates starts switched off (fraim-auto new and fraim-lead new read it).
   if is_engineer "$dir"; then export FRAIM_LEAD_ROLE=engineer; else unset FRAIM_LEAD_ROLE; fi
-  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} 2>"$log.err")"
+  # stream-json writes each step as it happens, so the queue page shows what the run does now
+  # (.running/live.jsonl). The answer is the last "result" line; plain text is kept as it is.
+  local live="$dir/.running/live.jsonl"
+  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+    --output-format stream-json --verbose > "$live" 2>"$log.err"
   code=$?
+  if grep -q '"type":"result"' "$live" 2>/dev/null; then
+    output="$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .result // empty' "$live" 2>/dev/null)"
+    if [ "$code" -eq 0 ] && [ "$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .is_error // false' "$live" 2>/dev/null)" = true ]; then
+      code=1
+    fi
+  else
+    output="$(cat "$live" 2>/dev/null)"
+  fi
   printf '%s\n' "$output" > "$log"
-  ls -1t "$dir/runs" 2>/dev/null | tail -n +61 | while IFS= read -r old; do rm -f "$dir/runs/$old"; done
+  cp "$live" "$log.jsonl" 2>/dev/null || true
+  # The newest 60 runs stay; each run is its .md with .md.jsonl (and .md.err) next to it.
+  local runs=("$dir"/runs/[0-9]*-[0-9]*.md) old
+  if [ "${#runs[@]}" -gt 60 ]; then
+    for old in "${runs[@]:0:${#runs[@]}-60}"; do rm -f "$old" "$old".*; done
+  fi
 
   if [ "$code" -ne 0 ]; then
     local reason="exit $code"

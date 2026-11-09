@@ -19,7 +19,7 @@
 //
 // Items live in ~/fraim/queue/<id>/item.json, media next to it. Priority 1 is urgent.
 // Exit codes: 0 ok, 1 failure, 2 usage.
-import { spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -40,6 +40,19 @@ const MEDIA_TYPES = {
 
 class UsageError extends Error {}
 function usage(msg) { throw new UsageError(msg) }
+
+// The page server answers one request at a time, so it never waits on a message to send: it
+// starts fraim-notify and fraim-lead tell and moves on. The command line waits for them.
+let SERVING = false
+function fire(cmd, args, env = process.env) {
+  if (!SERVING) return void spawnSync(cmd, args, { env, stdio: 'ignore', timeout: 30000 })
+  try {
+    const child = spawn(cmd, args, { env, stdio: 'ignore' })
+    child.on('error', () => {})
+    const kill = setTimeout(() => child.kill(), 30000)
+    child.on('exit', () => clearTimeout(kill))
+  } catch {}
+}
 
 function runtimeEnv() {
   const env = {}
@@ -164,7 +177,7 @@ function queueUrl() {
 function notify(text, direct = false) {
   if (process.env.FRAIM_QUEUE_QUIET === '1') return
   const env = { ...process.env, FRAIM_NOTIFY_NO_ALERT: '1', ...(direct ? { FRAIM_NOTIFY_DIRECT: '1' } : {}) }
-  spawnSync('fraim-notify', [text], { env, stdio: 'ignore', timeout: 30000 })
+  fire('fraim-notify', [text], env)
 }
 
 const ADVICE_WORD = { approve: 'Approve', reject: 'Send back', dismiss: 'Skip' }
@@ -386,7 +399,7 @@ function isChief(lead) {
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
 function tellLead(lead, from, text) {
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(lead) || !fs.existsSync(path.join(LEADS, lead, 'lead.md'))) return
-  spawnSync('fraim-lead', ['tell', lead, '--from', from, '--', text], { stdio: 'ignore', timeout: 30000 })
+  fire('fraim-lead', ['tell', lead, '--from', from, '--', text])
 }
 
 function readText(file, max = 20000) {
@@ -451,14 +464,61 @@ export function team() {
 // Interactive Claudes (the main chat, goals, coding sessions) come from herdr when it is
 // installed; headless lead and automation runs come from the fraim-auto run locks.
 
+// Never blocks the page server: other requests go on while herdr or hc answers.
 function run(cmd, args, timeout = 8000) {
-  const r = spawnSync(tool(cmd), args, { encoding: 'utf8', timeout, env: runtimeEnv() })
-  return r.status === 0 ? r.stdout : null
+  return new Promise((resolve) => {
+    execFile(tool(cmd), args, { encoding: 'utf8', timeout, env: runtimeEnv(), maxBuffer: 4 << 20 }, (err, stdout) => resolve(err ? null : stdout))
+  })
 }
 
-export function active() {
+// The steps of a headless run (claude -p --output-format stream-json), as lines a person reads:
+// what Claude wrote and each tool it used, newest last.
+const TOOL_ARG = ['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt', 'skill']
+export function transcript(jsonl) {
   const out = []
-  const herd = run('fraim-herdr', ['ls', '--json'])
+  for (const raw of String(jsonl || '').split('\n')) {
+    let e
+    try { e = JSON.parse(raw) } catch { continue }
+    if (!e || typeof e !== 'object') continue
+    if (e.type === 'assistant') {
+      for (const c of e.message?.content || []) {
+        if (c.type === 'text' && c.text?.trim()) out.push(c.text.trim())
+        if (c.type === 'tool_use') {
+          const i = c.input || {}
+          const k = TOOL_ARG.find((key) => typeof i[key] === 'string' && i[key])
+          const arg = k ? String(i[k]).replace(/\s+/g, ' ').slice(0, 160) : ''
+          out.push(`> ${c.name}${arg ? `: ${arg}` : ''}`)
+        }
+      }
+    } else if (e.type === 'result') {
+      out.push(e.is_error ? `Stopped with an error: ${String(e.result || '').slice(0, 400)}` : `Done.${e.result ? `\n\n${String(e.result).slice(0, 4000)}` : ''}`)
+    }
+  }
+  return out.slice(-120).join('\n\n')
+}
+
+// The live log of a lead or automation run: while it works, the file it writes now; after,
+// the log of its last run.
+function runLog(name) {
+  const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
+  if (!Object.keys(h).length) return null
+  const newest = (dir, re) => { try { return fs.readdirSync(dir).filter((f) => re.test(f)).sort().at(-1) } catch { return undefined } }
+  if (h.lead) {
+    if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(h.lead)) return null
+    const dir = path.join(LEADS, h.lead)
+    const live = path.join(dir, '.running/live.jsonl')
+    if (fs.existsSync(live)) return live
+    const f = newest(path.join(dir, 'runs'), /^\d{8}-\d{6}\.md\.jsonl$/)
+    return f ? path.join(dir, 'runs', f) : ''
+  }
+  const runs = path.join(AUTOS, name, 'runs')
+  const f = newest(runs, /^\d{4}-\d{2}-\d{2}T/)
+  return f && fs.existsSync(path.join(runs, f, 'log.jsonl')) ? path.join(runs, f, 'log.jsonl') : ''
+}
+
+export async function active() {
+  const out = []
+  const herd = await run('fraim-herdr', ['ls', '--json'])
   if (herd) {
     try {
       for (const a of JSON.parse(herd)) {
@@ -473,7 +533,7 @@ export function active() {
     if (!fs.existsSync(path.join(AUTO_STATE, name, 'lock'))) continue
     const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
     const since = (() => { try { return fs.statSync(path.join(AUTO_STATE, name, 'lock')).mtime.toISOString() } catch { return '' } })()
-    out.push({ name, kind: h.lead ? 'lead' : 'automation', status: 'working', question: '', cwd: '', turn: since, live: false })
+    out.push({ name, kind: h.lead ? 'lead' : 'automation', status: 'working', question: '', cwd: '', turn: since, live: true })
   }
   const order = { blocked: 0, working: 1, error: 2, idle: 3, done: 4, none: 5 }
   return out.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name))
@@ -481,18 +541,22 @@ export function active() {
 
 const validAgent = (n) => /^[a-z0-9][a-z0-9_-]{0,47}$/.test(n)
 
-export function agentScreen(name) {
+export async function agentScreen(name) {
   if (!validAgent(name)) usage('not an agent name')
-  const text = /^g\d+$/.test(name) ? run('fraim-goal', ['read', name]) : run('hc', ['read', name, '--lines', '80'])
+  if (fs.existsSync(path.join(AUTO_STATE, name, 'lock'))) {
+    const log = runLog(name)
+    if (log != null) return { name, text: log ? transcript(readText(log, 4000000)) : '' }
+  }
+  const text = /^g\d+$/.test(name) ? await run('fraim-goal', ['read', name]) : await run('hc', ['read', name, '--lines', '80'])
   return { name, text: text == null ? '' : text.slice(-20000) }
 }
 
-export function agentSend(name, text) {
+export async function agentSend(name, text) {
   if (!validAgent(name)) usage('not an agent name')
   text = String(text || '').trim()
   if (!text) usage('write a message first')
-  const r = /^g\d+$/.test(name) ? run('fraim-goal', ['send', name, text], 15000)
-    : /^s\d+$/.test(name) ? run('fraim-sessions', ['send', name, text], 15000) : null
+  const r = /^g\d+$/.test(name) ? await run('fraim-goal', ['send', name, text], 15000)
+    : /^s\d+$/.test(name) ? await run('fraim-sessions', ['send', name, text], 15000) : null
   if (r == null) throw new Error(`could not send to ${name}; only goals (g1) and sessions (s1) take messages`)
   return { ok: true }
 }
@@ -586,12 +650,12 @@ export function createServer(secret = token()) {
         return send(res, 200, rank(allItems().filter((i) => all || i.state === 'open')))
       }
       if (req.method === 'GET' && url.pathname === '/api/team') return send(res, 200, team())
-      if (req.method === 'GET' && url.pathname === '/api/active') return send(res, 200, active())
+      if (req.method === 'GET' && url.pathname === '/api/active') return send(res, 200, await active())
       const agent = /^\/api\/active\/([a-z0-9][a-z0-9_-]{0,47})\/(screen|send)$/.exec(url.pathname)
-      if (agent && req.method === 'GET' && agent[2] === 'screen') return send(res, 200, agentScreen(agent[1]))
+      if (agent && req.method === 'GET' && agent[2] === 'screen') return send(res, 200, await agentScreen(agent[1]))
       if (agent && req.method === 'POST' && agent[2] === 'send') {
         if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
-        return send(res, 200, agentSend(agent[1], (await readBody(req)).text))
+        return send(res, 200, await agentSend(agent[1], (await readBody(req)).text))
       }
       const media = /^\/media\/(q\d{1,6})\/([^/]+)$/.exec(url.pathname)
       if (req.method === 'GET' && media) {
@@ -661,6 +725,9 @@ svg { display: block; flex: none; }
 .sec { display: flex; align-items: center; justify-content: space-between; padding: 16px 8px 4px; color: var(--muted); font-size: 12px; font-weight: 500; }
 .dot { width: 8px; height: 8px; border-radius: 50%; margin: 0 3px; }
 .d-ok { background: var(--green); } .d-failed { background: var(--red); } .d-paused { border: 1.5px solid var(--yellow); } .d-never { border: 1.5px solid var(--faint); } .d-off { background: var(--faint); }
+.nav .st { font-size: 11px; color: var(--faint); white-space: nowrap; }
+.nav .st-failed { color: var(--red); } .nav .st-paused { color: var(--yellow); } .nav .st-running { color: var(--green); }
+.nav .st + .c { margin-left: 6px; } .nav .nm + .st { margin-left: auto; }
 
 /* list */
 .list { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
@@ -792,7 +859,7 @@ details.more .desc { margin-top: 10px; }
 <div class="toast" id="toast" role="status"></div>
 <script>
 var agents = [], screenTimer = null
-var AGENT_STATUS = { working: 'Working', blocked: 'Waiting for you', idle: 'Idle', done: 'Done', error: 'Error', none: 'Starting' }
+var AGENT_STATUS = { working: 'Working', blocked: 'Waiting for you', idle: 'Idle', done: 'Done', error: 'Error', none: 'No Claude running in it' }
 var AGENT_COLOR = { working: 'var(--green)', blocked: 'var(--yellow)', idle: 'var(--gray)', done: 'var(--accent)', error: 'var(--red)', none: 'var(--faint)' }
 var all = [], items = [], teamData = { leads: [], automations: [], chief: null }, sel = 0, view = 'inbox', showDone = false, rec = null, briefOpen = false
 var KIND = { review: 'Review', decision: 'Decision', idea: 'Idea', info: 'Info', failed: 'Failed' }
@@ -849,11 +916,13 @@ var ICON = {
 }
 
 async function load(keepId) {
-  var res = await fetch('/api/items?all=1')
+  var got = await Promise.all([fetch('/api/items?all=1'), fetch('/api/team').catch(function () {}), fetch('/api/active').catch(function () {})])
+  var res = got[0]
   if (!res.ok) { $('#detail').innerHTML = '<div class="empty"><b>No access</b>' + esc(await res.text()) + '</div>'; return }
   all = await res.json()
-  try { var t = await fetch('/api/team'); if (t.ok) teamData = await t.json() } catch (e) {}
-  try { var ag = await fetch('/api/active'); if (ag.ok) agents = await ag.json() } catch (e) {}
+  try { if (got[1] && got[1].ok) teamData = await got[1].json() } catch (e) {}
+  try { if (got[2] && got[2].ok) agents = await got[2].json() } catch (e) {}
+  tellApp()
   if (view === 'active') {
     var keep = keepId || (items[sel] && items[sel].name)
     items = agents
@@ -884,11 +953,38 @@ async function load(keepId) {
 function navBtn(id, icon, label, count) {
   return '<button data-view="' + esc(id) + '" aria-current="' + (view === id) + '">' + icon + '<span class="nm">' + esc(label) + '</span><span class="c">' + (count || '') + '</span></button>'
 }
+// The state of a lead or automation in words: the dot alone did not say what it meant.
+var MEMBER_WORD = { running: 'running', failed: 'failed', paused: 'paused', never: 'not run yet', off: 'off' }
+function memberState(m) {
+  if (agents.some(function (a) { return a.name === m.name && a.status === 'working' })) return 'running'
+  return m.off ? 'off' : m.status
+}
+function memberTitle(m) {
+  var st = memberState(m)
+  return st === 'running' ? 'Running now. Click to see what it does.' : st === 'off' ? 'Switched off: it does not run until it is switched on.'
+    : st === 'failed' ? 'Failed ' + since(m.last) + (m.detail ? ': ' + m.detail : '') : st === 'paused' ? 'Paused: it skips its runs until resumed.'
+    : st === 'never' ? 'Not run yet (' + m.when + ')' : 'Last run ' + since(m.last) + ' went fine (' + m.when + ')'
+}
 function memberBtn(m, open) {
   var n = open.filter(function (i) { return owner(i) === m.name }).length
-  var st = m.off ? 'off' : m.status
-  var title = m.status === 'failed' ? 'Failed ' + since(m.last) + (m.detail ? ': ' + m.detail : '') : m.status === 'paused' ? 'Paused' : m.status === 'never' ? 'Not run yet (' + m.when + ')' : 'Last run ' + since(m.last)
-  return '<button data-view="who:' + esc(m.name) + '" aria-current="' + (view === 'who:' + m.name) + '" title="' + esc(title) + '"><span class="dot d-' + st + '"></span><span class="nm">' + esc(m.name) + '</span><span class="c">' + (n || '') + '</span></button>'
+  var st = memberState(m)
+  var dot = st === 'running' ? '<span class="live" style="margin:0 3px"></span>' : '<span class="dot d-' + st + '"></span>'
+  var word = MEMBER_WORD[st] ? '<span class="st st-' + st + '">' + MEMBER_WORD[st] + '</span>' : ''
+  return '<button data-view="who:' + esc(m.name) + '" aria-current="' + (view === 'who:' + m.name) + '" title="' + esc(memberTitle(m)) + '">' + dot + '<span class="nm">' + esc(m.name) + '</span>' + word + '<span class="c">' + (n || '') + '</span></button>'
+}
+function memberOf(name) {
+  return teamData.leads.concat(teamData.automations).filter(function (m) { return m.name === name })[0]
+}
+// The app shell (Fraim Queue.app) shows the inbox count on its Dock icon and a notice for each
+// new item. In a browser there is no shell and this does nothing.
+var seenIds = null
+function tellApp() {
+  var h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.fraim
+  if (!h) return
+  var open = all.filter(function (i) { return i.state === 'open' })
+  var fresh = seenIds ? open.filter(function (i) { return !seenIds[i.id] }) : []
+  seenIds = {}; open.forEach(function (i) { seenIds[i.id] = true })
+  try { h.postMessage({ count: open.length, fresh: fresh.slice(0, 5).map(function (i) { return { id: i.id, title: i.title, body: i.ask || i.need || owner(i) } }) }) } catch (e) {}
 }
 function renderSide(open, done) {
   var leads = teamData.leads.filter(function (m) { return m.role !== 'chief' })
@@ -929,7 +1025,17 @@ function rowHtml(it, i) {
 }
 function renderList() {
   var html = briefHtml()
-  if (!items.length) { $('#list').innerHTML = html + '<div class="none">' + (view === 'done' ? 'Nothing decided yet.' : 'Nothing here.') + '</div>'; return }
+  if (!items.length) {
+    var m = /^who:/.test(view) && memberOf(view.slice(4))
+    var none = view === 'done' ? 'Nothing decided yet.' : 'Nothing here.'
+    if (m) {
+      none = '<b>' + esc(m.name) + '</b>' + (m.description ? '<br>' + esc(m.description) : '') + '<br><br>' + esc(memberTitle(m)) + '<br>Nothing from ' + esc(m.name) + ' waits for you.'
+      if (memberState(m) === 'running') none += '<br><br><button class="btn" id="watch">See what it does now</button>'
+    }
+    $('#list').innerHTML = html + '<div class="none">' + none + '</div>'
+    var w = $('#watch'); if (w) w.onclick = function () { view = 'active'; load(m.name) }
+    return
+  }
   var last = null
   items.forEach(function (it, i) {
     var g = it.state === 'open' ? 'p' + it.priority : 'done'
@@ -1192,6 +1298,7 @@ function main(argv) {
     case 'token':
       return console.log(token())
     case 'serve': {
+      SERVING = true
       const server = createServer()
       server.on('error', (err) => {
         process.stderr.write(`fraim-queue: ${err.message}\n`)
