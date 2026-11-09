@@ -10,7 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { sessionCommandArgs } from './goal-command.mjs'
-import { Unanswered } from './unanswered.mjs'
+import { Unanswered, lastAnswer } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
 
 function loadEnvFile(file) {
@@ -248,17 +248,53 @@ async function handleEvent(event) {
   unanswered.received(event.chat_id, event.text, event.name)
 }
 
+// The herdr terminal this session runs in (the always-on session is "main").
+const TERMINAL = env.FRAIM_TERMINAL || 'main'
+
+async function sessionState() {
+  const r = await runTool('hc', ['get', TERMINAL, '--json'], 10000)
+  try { return JSON.parse(r.out)?.status?.state || '' } catch { return '' }
+}
+
+// After the reminders, the bridge sends what Claude wrote on its screen, so the owner always
+// hears back. Without readable text it says the message arrived and is being looked at.
+async function sendFallback(r) {
+  const screen = await runTool('hc', ['read', TERMINAL, '--lines', '300'], 10000)
+  const answer = screen.ok ? lastAnswer(screen.out) : ''
+  const text = answer || 'Your message arrived, but my answer did not come through. I am looking at it now.'
+  await gateway('/send', { chat_id: r.chatId, text })
+  log(`sent the ${answer ? 'answer from the screen' : 'fallback line'} to ${r.chatId}`)
+  if (!answer) {
+    await mcp.notification({
+      method: 'notifications/claude/channel',
+      params: { content: `The WhatsApp bridge could not find your answer to "${r.text}" and told the owner you are looking at it. Answer now with the reply tool.`, meta: { chat_id: r.chatId, sender: 'fraim', name: 'reminder', message_id: '', owner: 'no' } },
+    })
+  }
+}
+
+let checking = false
 setInterval(async () => {
-  for (const r of unanswered.due()) {
-    log(`no answer yet for a message in ${r.chatId}; reminder ${r.reminded}`)
-    try {
-      await mcp.notification({
-        method: 'notifications/claude/channel',
-        params: { content: r.content, meta: { chat_id: r.chatId, sender: 'fraim', name: 'reminder', message_id: '', owner: 'no' } },
-      })
-    } catch (err) {
-      log('could not send the reminder:', err.message)
+  if (checking || !unanswered.pending()) return
+  checking = true
+  try {
+    const busy = (await sessionState()) === 'working'
+    for (const r of unanswered.due(Date.now(), busy)) {
+      try {
+        if (r.fallback) {
+          await sendFallback(r)
+          continue
+        }
+        log(`no answer yet for a message in ${r.chatId}; reminder ${r.reminded}`)
+        await mcp.notification({
+          method: 'notifications/claude/channel',
+          params: { content: r.content, meta: { chat_id: r.chatId, sender: 'fraim', name: 'reminder', message_id: '', owner: 'no' } },
+        })
+      } catch (err) {
+        log('could not remind or send the fallback:', err.message)
+      }
     }
+  } finally {
+    checking = false
   }
 }, 15000).unref()
 
