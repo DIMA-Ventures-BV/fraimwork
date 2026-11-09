@@ -121,6 +121,24 @@ EOF
   wait_sent 'Tell me what you think of it in your own words'
 }
 
+@test "each extra question becomes its own decision, and the prompt asks for plain words" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
+  cat > "$T/bin/write-results" <<'EOF'
+#!/usr/bin/env bash
+printf '{"title":"Check the orders? I advise yes","kind":"decision","on_approve":"check the orders","more":["Count checkout at payment? I advise yes"]}' > "$FRAIM_GOALS_DIR/g1/queue.json"
+EOF
+  chmod +x "$T/bin/write-results"
+  FAKE_SEND_HOOK="$T/bin/write-results" "$GOAL" start --lead perf -- check meta
+  wait_state g1 done
+  grep -q 'no internal names' "$HC_FAKE/g1.sent"
+  for _ in $(seq 20); do [ -s "$FRAIM_QUEUE_DIR/q2/item.json" ] && break; sleep 0.1; done
+  [ "$(jq -r .on_approve "$FRAIM_QUEUE_DIR/q1/item.json")" = "check the orders" ]
+  [ "$(jq -r .ask "$FRAIM_QUEUE_DIR/q2/item.json")" = "Count checkout at payment? I advise yes" ]
+  [ "$(jq -r .kind "$FRAIM_QUEUE_DIR/q2/item.json")" = decision ]
+  [ "$(jq -r .lead "$FRAIM_QUEUE_DIR/q2/item.json")" = perf ]
+  [[ "$(jq -r .on_approve "$FRAIM_QUEUE_DIR/q2/item.json")" == *"Count checkout at payment"* ]]
+}
+
 @test "a run that ends on a usage limit fails, says why and becomes a priority 1 item" {
   export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
   FAKE_REPLY="You've hit your usage limit" "$GOAL" start -- x
