@@ -348,6 +348,32 @@ every: 10m' 'New: {{input}}'
   grep -q 'New: new file: ~/fraim/inbox/invoice.pdf' "$(last_run inbox)/prompt.md"
 }
 
+@test "a run takes at most 50 trigger lines; the rest come with the next check, none twice" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_triggers"
+  # Prints 60 lines once, then nothing.
+  printf '[ "$1" = --check ] && exit 0\n[ -f "$FRAIM_TRIGGER_STATE/done" ] && exit 0\ntouch "$FRAIM_TRIGGER_STATE/done"\nseq 1 60 | sed "s/^/line /"\n' > "$FRAIM_AUTOMATIONS_DIR/_triggers/burst"
+  make_auto burst 'trigger: burst: x' 'Got: {{input}}'
+  run "$AUTO" poll burst
+  p="$(last_run burst)/prompt.md"
+  grep -qx 'line 50' "$p"
+  ! grep -qx 'line 51' "$p"
+  sleep 1
+  run "$AUTO" poll burst
+  p="$(last_run burst)/prompt.md"
+  grep -q 'Got: line 51' "$p"
+  grep -qx 'line 60' "$p"
+  ! grep -qx 'line 50' "$p"
+  [ ! -f "$HOME/.local/state/fraim/automations/burst/deferred" ]
+}
+
+@test "a manual or dry run the server had no memory for keeps nothing for later" {
+  mkdir -p "$HOME/fraim/inbox"
+  make_auto inbox 'trigger: files: inbox
+every: 10m' 'New: {{input}}'
+  FAKE_BUSY=1 run "$AUTO" run inbox --input "typed by hand"
+  [ ! -f "$HOME/.local/state/fraim/automations/inbox/deferred" ]
+}
+
 @test "a failing trigger of the owner alerts once and says when it works again" {
   mkdir -p "$FRAIM_AUTOMATIONS_DIR/_triggers"
   printf '[ "$1" = --check ] && exit 0\n[ -f "$HOME/ok" ] && exit 0\necho "the shop API answered 503" >&2\nexit 1\n' > "$FRAIM_AUTOMATIONS_DIR/_triggers/shop"

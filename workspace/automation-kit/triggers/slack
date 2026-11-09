@@ -1,44 +1,68 @@
 #!/usr/bin/env bash
 # usage: slack:channel-name (or slack:C0123ABCD)
-# description: New messages in a Slack channel (for example the channel a production app posts its errors to). The new messages (at most 50, oldest first) are {{input}}.
-# Trigger plugin. $1 is the channel: its name (with or without #) or its id (C0123...). Reads through the secrets
-# proxy service "slack" (fraim secret add slack --upstream https://slack.com --header
-# Authorization --format 'Bearer %s'), a bot token with channels:history and channels:read
-# that is a member of the channel. The first check only remembers where the channel is now.
+# description: New messages in a Slack channel (for example the channel a production app posts its errors to). One line per message, oldest first, is {{input}}.
+# Trigger plugin. $1 is the channel: its name (with or without #; a public channel) or its id
+# (C..., G...; also a private channel). Reads through the secrets proxy service "slack"
+# (fraim secret add slack --upstream https://slack.com --header Authorization --format
+# 'Bearer %s'): a bot token with channels:history and channels:read (groups:history for a
+# private channel by id) that is a member of the channel.
+# The first check only remembers where the channel is now. After that every new message is
+# reported once, all pages of them, oldest first; a message without text uses its
+# attachments, and channel joins, leaves and topic changes are left out.
 # $FRAIM_TRIGGER_STATE is a folder that stays between checks.
 set -uo pipefail
+valid() { [[ "$1" =~ ^#?[a-z0-9][a-z0-9_-]{0,79}$ || "$1" =~ ^[CG][A-Z0-9]{6,20}$ ]]; }
 if [ "${1:-}" = --check ]; then
-  printf '%s' "${2:-}" | grep -Eq '^(#?[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{6,})$' && exit 0
+  valid "${2:-}" && exit 0
   echo "'${2:-}' must be a channel: its name (mlv-alerts) or an id like C0123ABCD"; exit 1
 fi
 channel="${1:-}"
+valid "$channel" || { echo "'$channel' is not a Slack channel name or id"; exit 1; }
 state="${FRAIM_TRIGGER_STATE:?}"
-api() { fraim-api slack "$@" 2>/dev/null; }
+# Short calls: a check must finish well inside the runner's two minutes.
+export FRAIM_API_TIMEOUT="${FRAIM_API_TIMEOUT:-20}"
 
-# A name (in an automation header a # starts a comment, so it may come without one) is
-# looked up once and remembered; an id (C..., G...) is used as it is.
-id="$channel"
-case "$channel" in
-  [CG][A-Z0-9]*) ;;
-  *)
-    channel="#${channel#\#}"
-    if [ -s "$state/channel-id" ]; then
-      id="$(cat "$state/channel-id")"
-    else
-      name="${channel#\#}" cursor="" id=""
-      for _ in 1 2 3 4 5 6 7 8 9 10; do
-        page="$(api "/api/conversations.list?limit=200&exclude_archived=true&types=public_channel,private_channel${cursor:+&cursor=$cursor}")" \
-          || { echo "cannot reach Slack (is the slack service set up? fraim secret list)"; exit 1; }
-        [ "$(jq -r '.ok' <<<"$page")" = true ] || { echo "Slack said: $(jq -r '.error // "unknown error"' <<<"$page")"; exit 1; }
-        id="$(jq -r --arg n "$name" '.channels[] | select(.name == $n) | .id' <<<"$page" | head -1)"
-        [ -z "$id" ] || break
-        cursor="$(jq -r '.response_metadata.next_cursor // ""' <<<"$page")"
-        [ -n "$cursor" ] || break
-      done
-      [ -n "$id" ] || { echo "no channel $channel that the Slack bot can see; invite the bot to it"; exit 1; }
-      printf '%s\n' "$id" > "$state/channel-id"
-    fi ;;
-esac
+# One Slack call; prints the JSON, or says why it failed (rate limit, scope, no service).
+api() {
+  local out err
+  err="$(mktemp)"
+  out="$(fraim-api slack "$1" 2>"$err")"
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    if [ -z "$out" ]; then
+      echo "cannot reach Slack: $(tail -1 "$err" | cut -c1-200) (is the slack service set up? fraim secret list)" >&2
+      rm -f "$err"; return 1
+    fi
+  fi
+  rm -f "$err"
+  if [ "$(jq -r '.ok // false' <<<"$out" 2>/dev/null)" != true ]; then
+    echo "Slack said: $(jq -r '.error // "an unreadable answer"' <<<"$out" 2>/dev/null)" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+# A name is looked up once and remembered next to the name it belongs to.
+id="${channel#\#}"
+if [[ ! "$id" =~ ^[CG][A-Z0-9]{6,20}$ ]]; then
+  name="$id" id=""
+  if [ -s "$state/channel" ] && [ "$(cut -f1 "$state/channel")" = "$name" ]; then
+    id="$(cut -f2 "$state/channel")"
+  else
+    rm -f "$state/last-ts" "$state/channel"
+    cursor="" pages=0
+    while [ "$pages" -lt 20 ]; do
+      page="$(api "/api/conversations.list?limit=1000&exclude_archived=true&types=public_channel${cursor:+&cursor=$cursor}")" || exit 1
+      id="$(jq -r --arg n "$name" '.channels[] | select(.name == $n) | .id' <<<"$page" | head -1)"
+      [ -z "$id" ] || break
+      cursor="$(jq -r '.response_metadata.next_cursor // ""' <<<"$page")"
+      [ -n "$cursor" ] || break
+      pages=$((pages + 1))
+    done
+    [ -n "$id" ] || { echo "no public channel '$name' found; check the name, or use the channel id (C...) for a private channel"; exit 1; }
+    printf '%s\t%s\n' "$name" "$id" > "$state/channel"
+  fi
+fi
 
 last="$(cat "$state/last-ts" 2>/dev/null)"
 if [ -z "$last" ]; then
@@ -46,11 +70,26 @@ if [ -z "$last" ]; then
   date +%s > "$state/last-ts"
   exit 0
 fi
-resp="$(api "/api/conversations.history?channel=$id&oldest=$last&limit=50")" \
-  || { echo "cannot reach Slack (is the slack service set up? fraim secret list)"; exit 1; }
-[ "$(jq -r '.ok' <<<"$resp")" = true ] || { echo "Slack said: $(jq -r '.error // "unknown error"' <<<"$resp")"; exit 1; }
-[ "$(jq '.messages | length' <<<"$resp")" -gt 0 ] || exit 0
-jq -r '.messages | max_by(.ts | tonumber) | .ts' <<<"$resp" > "$state/last-ts"
-# Oldest first; each message on one block, Slack markup left as it is.
-jq -r '.messages | sort_by(.ts | tonumber) | .[] |
-  "[\(.ts | tonumber | strftime("%Y-%m-%d %H:%M"))] \(.text // "" | gsub("\n"; " / "))"' <<<"$resp"
+
+# Every page since the last check (newest first from Slack), at most 2000 messages.
+all="$(mktemp)"
+trap 'rm -f "$all"' EXIT
+cursor="" pages=0
+while [ "$pages" -lt 10 ]; do
+  resp="$(api "/api/conversations.history?channel=$id&oldest=$last&limit=200${cursor:+&cursor=$cursor}")" || exit 1
+  jq -c '.messages[]' <<<"$resp" >> "$all"
+  [ "$(jq -r '.has_more // false' <<<"$resp")" = true ] || break
+  cursor="$(jq -r '.response_metadata.next_cursor // ""' <<<"$resp")"
+  [ -n "$cursor" ] || break
+  pages=$((pages + 1))
+done
+[ -s "$all" ] || exit 0
+
+# Only now move on, once every page is read.
+jq -rs 'max_by(.ts | tonumber) | .ts' "$all" > "$state/last-ts"
+jq -rs '
+  map(select((.subtype // "") as $s | $s == "" or $s == "bot_message" or $s == "thread_broadcast"))
+  | sort_by(.ts | tonumber) | .[]
+  | (if (.text // "") != "" then .text else ([.attachments[]? | .text // .fallback // empty] | join(" ")) end) as $t
+  | select($t != "")
+  | "[\(.ts | tonumber | floor | strftime("%Y-%m-%d %H:%M"))] " + ($t | gsub("[\r\n\t]+"; " / ") | .[0:300])' "$all"

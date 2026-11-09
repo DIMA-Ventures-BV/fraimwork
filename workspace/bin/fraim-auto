@@ -503,8 +503,11 @@ run_once() {
   if [ "$code" -eq 75 ]; then
     RUN_STATUS=skipped RUN_OUTPUT="the server had no free memory; it runs at the next trigger"
     printf 'skipped %s\n' "$RUN_OUTPUT" > "$run/status"
-    # What the trigger reported is kept for the next check, so no alert or file is lost.
-    [ -z "$input" ] || printf '%s\n' "$input" >> "$state_root/$name/deferred"
+    # What a trigger plugin reported is kept for the next check, so no alert or file is lost.
+    # Only for a poll run: a manual or dry run's text is not trigger input.
+    if [ -n "$input" ] && [ "$dry" != 1 ] && [ "${FRAIM_POLL_RUN:-}" = 1 ]; then
+      printf '%s\n' "$input" >> "$state_root/$name/deferred"
+    fi
     return 0
   fi
 
@@ -674,15 +677,23 @@ cmd_poll() {
       rm -f "$state_root/$name/last_alert"
       sset "$name" streak 0 ;;
   esac
-  # Events of a run the server had no memory for (exit 75) come along with the new ones.
-  if [ -s "$state_root/$name/deferred" ]; then
-    events="$(cat "$state_root/$name/deferred")
-$events"
-    rm -f "$state_root/$name/deferred"
-  fi
-  events="$(printf '%s\n' "$events" | grep -v '^[[:space:]]*$' | head -50)"
-  [ -n "$events" ] || exit 0
-  cmd_run "$name" "$t" "${events:0:8000}" 0 1
+  # Events waiting from earlier checks (a run the server had no memory for, or more than one
+  # run holds) come first. One run takes at most 50 lines and 8000 characters; the rest waits
+  # in `deferred` for the next check, so nothing a trigger reported is dropped.
+  local deferred="$state_root/$name/deferred" all batch="" rest="" n=0 size=0 line
+  all="$( { cat "$deferred" 2>/dev/null; printf '%s\n' "$events"; } | grep -v '^[[:space:]]*$')"
+  [ -n "$all" ] || exit 0
+  while IFS= read -r line; do
+    # A single line longer than a whole run is cut, not kept forever.
+    [ "${#line}" -lt 8000 ] || line="${line:0:7999}"
+    if [ "$n" -lt 50 ] && [ $(( size + ${#line} + 1 )) -le 8000 ] && [ -z "$rest" ]; then
+      batch="$batch$line"$'\n'; n=$((n + 1)); size=$(( size + ${#line} + 1 ))
+    else
+      rest="$rest$line"$'\n'
+    fi
+  done <<<"$all"
+  if [ -n "$rest" ]; then printf '%s' "$rest" > "$deferred"; else rm -f "$deferred"; fi
+  FRAIM_POLL_RUN=1 cmd_run "$name" "$t" "$batch" 0 1
 }
 
 trigger_of() {
