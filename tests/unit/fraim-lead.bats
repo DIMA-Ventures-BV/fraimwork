@@ -508,3 +508,25 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
   [ "$status" -eq 0 ]
   [[ "$output" == *"Background tasks"* ]]
 }
+
+@test "the chief asks the engineer to hire; the engineer hires a first team on a fresh server" {
+  fraim-lead new chief --chief
+  fraim-lead new engineer --engineer
+  fraim-lead run chief
+  grep -q 'Grow the team' "$CLAUDE_ARGS"
+  grep -q 'Nobody works for the owner yet' "$CLAUDE_ARGS"
+  grep -q 'fraim-lead tell engineer --from chief -- "Hire: someone for' "$CLAUDE_ARGS"
+  fraim-lead run engineer
+  grep -q 'Hire someone for <area> of <company>' "$CLAUDE_ARGS"
+  grep -q 'hire a first team of at most 3 leads' "$CLAUDE_ARGS"
+
+  fraim-lead new web --off
+  fraim-lead run chief
+  grep -q 'At most one hire a week' "$CLAUDE_ARGS"
+  ! grep -q 'Nobody works for the owner yet' "$CLAUDE_ARGS"
+  fraim-lead run engineer
+  ! grep -q 'hire a first team' "$CLAUDE_ARGS"
+  fraim-lead resume web
+  fraim-lead run web
+  ! grep -q 'Grow the team' "$CLAUDE_ARGS"
+}

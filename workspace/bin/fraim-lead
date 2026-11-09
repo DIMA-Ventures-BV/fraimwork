@@ -254,6 +254,22 @@ queue_view() {
 }
 
 # The engineer's part of the prompt: how it builds, tests, asks to switch on, and reports.
+# Leads other than the chief and the engineer: the owner's team of "employees".
+team_size() { cmd_list 2>/dev/null | grep -Ec '^[a-z0-9-]+  lead  ' || true; }
+
+# The chief grows the team: it notices work nobody owns and asks the engineer to hire.
+team_line() {
+  local name="$1" eng="$2" size
+  size="$(team_size)"
+  printf '\n- Grow the team. Leads are the owner'"'"'s employees, one per area of one of the owner'"'"'s companies or projects (a product, a repo, ads, sales, support, finance, ops). Besides you and the engineer there are %s.' "$size"
+  if [ "$size" = 0 ]; then
+    printf ' Nobody works for the owner yet: from the repos in ~/code, the automations, the queue and the owner'"'"'s rules, pick the first employees the owner needs most (at most 3) and ask the engineer to hire each one.'
+  else
+    printf ' When work keeps coming that no lead owns (three or more items or notes in two weeks), or one lead'"'"'s area is clearly too big, ask the engineer to hire. At most one hire a week; never one the owner already turned down.'
+  fi
+  printf ' Ask like this: fraim-lead tell %s --from %s -- "Hire: someone for <area> of <company> because <what you saw, with numbers>". The engineer builds it and asks the owner once.' "$eng" "$name"
+}
+
 engineer_prompt() {
   local name="$1" used="$2" budget="$3" chief_name fw
   chief_name="$(the_chief)" || chief_name=""
@@ -273,7 +289,7 @@ How you work:
 2. A new automation: fraim-auto new NAME [--from EXAMPLE] --off, then edit ~/fraim/automations/NAME/automation.md. Keep the line "enabled: false"; never remove it yourself.
 3. Test it: fraim-auto check NAME until it says "No mistakes found", then fraim-auto run NAME --dry (with --input "<a sample event>" for a trigger). The dry run delivers nothing. Fix the prompt until the answer is what the owner asked for.
 4. Ask the owner once to switch it on: fraim-queue add --lead $name --kind decision --priority 2 --quiet --switch-on NAME --title "<what it does, at most 60 characters>" --ask "Switch on: <when it runs and what the owner gets, in plain words>?" --advise approve --why "<who asked for it and why>" --why "<what the dry run gave>" --summary "<the file ~/fraim/automations/NAME/automation.md, the dry-run answer, what it may reach>". Approve switches it on; nothing else is needed.
-5. A new lead: fraim-lead new NAME --area "<area>" --at "<cron>" --off, then write its brief in ~/fraim/leads/NAME/lead.md (where to look, what good looks like, what it may start alone). Ask the same way, with --switch-on NAME.
+5. A new lead (hiring an employee): fraim-lead new NAME --area "<area>" --at "<cron>" --off, then write its brief in ~/fraim/leads/NAME/lead.md (where to look, what good looks like, what it may start alone). Fill the brief from what is really on this server: the repos in ~/code, the automations, fraim-api, the MCP servers and the owner's rules; a lead without places to look is not ready. A small budget (1 to 3) and a weekday-morning schedule fit most. Ask the same way, with --switch-on NAME, and phrase it as a hire: --ask "Hire someone for <area> of <company>: <what it checks, how often>?" with --why "<who asked and why>". Do not hire when a lead already owns the area; tell who asked instead.
 6. A change to an automation that runs: only when the owner or the chief asked for it, or to fix a failure. Edit, check, dry run. It stays on. When the change makes it reach new people or new tools, ask the owner first as in step 4 without --switch-on, with --on-approve "<the change>".
 7. A failed automation: read its last run (fraim-auto runs NAME, then the files in ~/fraim/automations/NAME/runs/<time>/), find the cause, fix it, check it and dry-run it. When the cause is outside the automation (a login, an expired key, a service down), do not change the automation: tell the chief what the owner must do.
 8. A trigger or output plugin: write ~/fraim/automations/_triggers/<type> or _outputs/<type>, chmod +x it, and test it through an automation that uses it (fraim-auto check, then a dry run).
@@ -284,7 +300,7 @@ How you work:
 13. Do not send mail or messages, post, pay, merge or deploy yourself, and never switch something on yourself.
 14. Rewrite ~/fraim/leads/$name/state.md: what you built, what waits to be switched on, what broke and why, what to watch. At most 150 lines.
 
-A run with an empty inbox is the weekly check: look for automations that failed, are paused or answered nothing useful (fraim-auto list, fraim-auto runs NAME), fix what is broken, and propose cleanups in the queue.
+A run with an empty inbox is the weekly check: look for automations that failed, are paused or answered nothing useful (fraim-auto list, fraim-auto runs NAME), fix what is broken, and propose cleanups in the queue.$([ "$(team_size)" != 0 ] || printf ' Nobody works for the owner yet besides the chief and you: when nothing is proposed yet, hire a first team of at most 3 leads as in step 5, for the areas with the most going on.')
 
 Goal budget: $used of $budget used today. Goals are only for work on fraimwork itself.
 $(repos_note)
@@ -333,6 +349,7 @@ EOF
   if [ -n "$eng" ]; then
     eng_line="
 - Build or fix the setup: hand it to the engineer, never to a goal: fraim-lead tell $eng --from $name -- \"<what the owner wants, in the owner's words, and why>\". This covers a new or changed automation, a watcher, a reminder or report on a schedule, a new lead, a trigger or output plugin, a skill, and a bug in fraim itself. The engineer builds new things switched off and asks the owner once to switch them on. Failed automations go to the engineer on their own: leave their queue items alone."
+    [ "$chief" = 0 ] || eng_line="$eng_line$(team_line "$name" "$eng")"
   fi
   if [ "$chief" = 1 ]; then
     local budget_line="Goal budget: $used of $budget used today."
