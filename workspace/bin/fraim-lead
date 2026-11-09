@@ -7,12 +7,14 @@
 #   fraim-lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief]
 #   fraim-lead list
 #   fraim-lead show NAME
-#   fraim-lead run NAME          what the scheduler runs; also fine by hand
+#   fraim-lead run NAME          what its automation runs; also fine by hand
 #   fraim-lead pause NAME | resume NAME
 #
 # Each lead lives in ~/fraim/leads/<name>/: lead.md (its brief, the owner edits it),
 # state.md (its own notes between runs), budget (goals per day), tools (extra tools,
-# optional), runs/ (one log per run). The schedule is a line in ~/fraim/jobs/crontab.
+# optional), runs/ (one log per run). Its schedule is an automation with "lead: <name>"
+# in ~/fraim/automations/<name>/, so leads and automations share one list, one pause and
+# one set of failure rules (fraim-auto list).
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
@@ -23,6 +25,8 @@ set -uo pipefail
 leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
 crontab="${FRAIM_CRONTAB:-$HOME/fraim/jobs/crontab}"
 goals="${FRAIM_GOALS_DIR:-$HOME/fraim/goals}"
+autos="${FRAIM_AUTOMATIONS_DIR:-$HOME/fraim/automations}"
+has_auto() { [ -f "$autos/$1/automation.md" ] && grep -q "^lead: $1\$" "$autos/$1/automation.md"; }
 
 usage() { echo "fraim-lead: $*" >&2; exit 2; }
 die() { echo "fraim-lead: $*" >&2; exit 1; }
@@ -92,6 +96,7 @@ cmd_new() {
   done
   valid_name "$name" || usage "'$name' is not a lead name (lowercase letters, digits and -)"
   [ ! -e "$leads/$name" ] || die "lead $name already exists: $leads/$name"
+  [ ! -e "$autos/$name" ] || die "an automation is already called $name; pick another name"
   if [ "$chief" = 1 ]; then at="${at:-30 7 * * *}"; budget="${budget:-0}"; else at="${at:-0 7 * * 1-5}"; budget="${budget:-3}"; fi
   printf '%s' "$budget" | grep -Eq '^[0-9]{1,2}$' || usage "--budget must be a number from 0 to 99"
   [ "$(printf '%s' "$at" | wc -w | tr -d ' ')" = 5 ] || usage "--at needs five cron fields, for example \"0 7 * * 1-5\""
@@ -102,9 +107,13 @@ cmd_new() {
   printf '# Notes of lead %s\n\nNothing yet.\n' "$name" > "$leads/$name/state.md"
   printf '%s\n' "$budget" > "$leads/$name/budget"
 
-  mkdir -p "$(dirname "$crontab")"
-  [ -f "$crontab" ] || printf '# Your scheduled jobs. See fraim-job and fraim-lead.\n' > "$crontab"
-  grep -q "fraim-lead run $name\$" "$crontab" || printf '%s fraim-lead run %s\n' "$at" "$name" >> "$crontab"
+  if command -v fraim-auto >/dev/null; then
+    fraim-auto lead "$name" "$at" || die "could not schedule lead $name as an automation"
+  else
+    mkdir -p "$(dirname "$crontab")"
+    [ -f "$crontab" ] || printf '# Your scheduled jobs. See fraim-job and fraim-lead.\n' > "$crontab"
+    grep -q "fraim-lead run $name\$" "$crontab" || printf '%s fraim-lead run %s\n' "$at" "$name" >> "$crontab"
+  fi
 
   echo "Lead $name created: $leads/$name/lead.md"
   echo "It runs at: $at (server time). Edit lead.md to tell it what to watch."
@@ -121,7 +130,11 @@ cmd_list() {
     [ -f "$dir/lead.md" ] || continue
     name="$(basename "$dir")"
     kind=lead; is_chief "$dir" && kind=chief
-    at="$(grep -E "fraim-lead run $name\$" "$crontab" 2>/dev/null | grep -v '^\s*#' | head -1 | cut -d' ' -f1-5)"
+    if has_auto "$name"; then
+      at="$(sed -n 's/^schedule:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$autos/$name/automation.md" | head -1)"
+    else
+      at="$(grep -E "fraim-lead run $name\$" "$crontab" 2>/dev/null | grep -v '^\s*#' | head -1 | cut -d' ' -f1-5)"
+    fi
     [ ! -f "$dir/paused" ] || at="paused"
     last="$(cat "$dir/last" 2>/dev/null || echo 'never ran')"
     printf '%s  %s  %s  budget %s/day  last: %s\n' "$name" "$kind" "${at:-no schedule}" "$(cat "$dir/budget" 2>/dev/null || echo 3)" "$last"
@@ -185,6 +198,14 @@ EOF
 
 Other leads: run fraim-lead list, then read their lead.md and state.md under ~/fraim/leads.
 
+The owner's automations (fixed tasks on a schedule or a trigger; leads are marked "(lead)"):
+$(fraim-auto list 2>/dev/null | head -40)
+
+What automations answered recently (newest last; fraim-auto show NAME has more):
+$(tail -c 4000 "${FRAIM_FILES_DIR:-$HOME/fraim}/outbox.md" 2>/dev/null)
+
+Put in the digest: an automation that failed or is paused, and an automation answer that needs the owner. Automation failures are also queue items of kind failed.
+
 Rules:
 - You cannot start goals. You may change priorities with fraim-queue prio ID 1|2|3, and add a decision for the owner with fraim-queue add --lead $name --kind decision --priority N --quiet --title "..." --summary "...".
 - Rewrite ~/fraim/leads/$name/state.md: what you saw, what you changed, what to watch next time. At most 150 lines.
@@ -204,6 +225,7 @@ What to do this run:
 2. Pick the most valuable actions. Do not repeat a running goal or an open queue item, and do not re-propose what the owner rejected unless something changed.
 3. For clear work inside the limits of your brief: fraim-goal start --lead $name -- "<a complete task description>". The goal does the work in the background and puts its result in the owner's queue.
 4. For an idea or a decision the owner must make: fraim-queue add --lead $name --kind idea|decision --priority 1|2|3 --quiet --title "<80 characters>" --summary "<why, what it costs, your recommendation>" --on-approve "<the task to start when the owner approves>". Add at most 3 items per run; priority 1 only when it cannot wait a day.
+   When something should be checked or reported on a fixed rhythm without judgement (a weekly number, a page that must stay up), propose an automation: --kind decision with --on-approve "Make an automation with the building-automations skill: <trigger>, <what it does>, <output>". Check fraim-auto list first so you do not propose one that exists.
 5. Rewrite ~/fraim/leads/$name/state.md: what you watch, what you started, what the owner decided, what is next. At most 150 lines.
 6. Do not send mail or messages, post, pay, merge or deploy yourself.
 $(repos_note)
@@ -235,6 +257,7 @@ tools_for() {
     "Bash(fraim-queue list:*)" "Bash(fraim-queue show:*)" "Bash(fraim-queue add:*)"
     "Bash(fraim-goal list:*)" "Bash(fraim-goal show:*)"
     "Bash(fraim-lead list:*)" "Bash(fraim-lead show:*)"
+    "Bash(fraim-auto list:*)" "Bash(fraim-auto show:*)" "Bash(fraim-auto runs:*)"
     "Bash(fraim-api:*)"
     "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
     "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh pr list:*)" "Bash(gh pr view:*)" "Bash(gh run list:*)")
@@ -288,11 +311,18 @@ cmd_run() {
       *"usage limit"*|*"Usage limit"*|*"rate limit"*|*"limit reached"*) reason="the Claude plan's usage limit was reached" ;;
     esac
     printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/last"
-    fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"
+    # Run by its automation, the runner alerts once and puts the failure in the queue.
+    if [ -n "${FRAIM_LEAD_IN_AUTO:-}" ]; then
+      echo "Lead $name failed: $reason. Log: ${log#"$HOME"/}" >&2
+    else
+      fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"
+    fi
     exit 1
   fi
   printf 'ok %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/last"
   rm -f "$log.err"
+  # The automation keeps this as the run's answer (its output is "none", so nothing is sent).
+  printf '%s\n' "$output"
 
   if [ "$chief" = 1 ]; then
     [ "$(printf '%s' "$output" | tr -d '[:space:]')" = SILENT ] && return 0
@@ -323,7 +353,15 @@ case "$action" in
   list) cmd_list ;;
   show) [ $# -eq 1 ] || usage "show NAME"; cmd_show "$1" ;;
   run) [ $# -eq 1 ] || usage "run NAME"; cmd_run "$1" ;;
-  pause) [ $# -eq 1 ] || usage "pause NAME"; dir="$(lead_dir "$1")" || exit $?; touch "$dir/paused"; echo "Lead $1 paused." ;;
-  resume) [ $# -eq 1 ] || usage "resume NAME"; dir="$(lead_dir "$1")" || exit $?; rm -f "$dir/paused"; echo "Lead $1 resumed." ;;
+  pause)
+    [ $# -eq 1 ] || usage "pause NAME"; dir="$(lead_dir "$1")" || exit $?
+    touch "$dir/paused"
+    ! has_auto "$1" || fraim-auto pause "$1" >/dev/null
+    echo "Lead $1 paused." ;;
+  resume)
+    [ $# -eq 1 ] || usage "resume NAME"; dir="$(lead_dir "$1")" || exit $?
+    rm -f "$dir/paused"
+    ! has_auto "$1" || fraim-auto resume "$1" >/dev/null
+    echo "Lead $1 resumed." ;;
   *) usage 'new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | pause NAME | resume NAME' ;;
 esac
