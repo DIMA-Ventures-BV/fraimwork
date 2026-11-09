@@ -157,6 +157,30 @@ EOF
   [[ "$output" == *"only the owner decides"* ]]
 }
 
+@test "supersede closes only open failures of the same decision, and only for a goal that finished it" {
+  for g in g1 g2 g3 g4 g5; do mkdir -p "$FRAIM_GOALS_DIR/$g"; done
+  echo q9 > "$FRAIM_GOALS_DIR/g1/queue"; echo q9 > "$FRAIM_GOALS_DIR/g2/queue"; echo q8 > "$FRAIM_GOALS_DIR/g3/queue"
+  echo q9 > "$FRAIM_GOALS_DIR/g4/queue"; echo q9 > "$FRAIM_GOALS_DIR/g5/queue"
+  echo 'done 2026-11-09 10:00' > "$FRAIM_GOALS_DIR/g5/state"
+  echo running > "$FRAIM_GOALS_DIR/g4/state"
+  "$Q" add --quiet --goal g1 --kind failed --title "same decision"
+  "$Q" add --quiet --goal g3 --kind failed --title "other decision"
+  "$Q" add --quiet --goal g2 --title "same decision, a result"
+  "$Q" add --quiet --goal g2 --kind failed --title "same decision, already decided"
+  "$Q" dismiss q4
+  run "$Q" supersede --origin q9 --by g4
+  [ "$status" -ne 0 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = open ]
+  run "$Q" supersede --origin q9 --by g5
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q2/item.json")" = open ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q3/item.json")" = open ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q4/item.json")" != system ]
+  run "$Q" supersede --origin ../x --by g5
+  [ "$status" -eq 2 ]
+}
+
 @test "dismiss closes without a goal or a brain note" {
   "$Q" add --quiet --title x --goal g1
   "$Q" dismiss q1

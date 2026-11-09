@@ -50,7 +50,7 @@ test('the page needs the token, shows items, serves media and records decisions'
   await mkdir(path.join(home, 'fraim/leads/web'), { recursive: true })
   await writeFile(path.join(home, 'fraim/leads/chief/lead.md'), '---\nrole: chief\n---\n')
   await writeFile(path.join(home, 'fraim/leads/web/lead.md'), '---\nrole: lead\n---\n')
-  await writeFile(path.join(home, 'fraim/leads/chief/runs/20261109-080000.md'), 'Two things today.\n')
+  await writeFile(path.join(home, 'fraim/leads/chief/runs/20261109-080000.md'), 'Two things today.\n\n--- inbox this run read ---\n[m1] engineer: built it\n')
   await writeFile(path.join(autos, 'chief/automation.md'), '---\nschedule: "0 8 * * *"\nlead: chief\n---\n')
   await writeFile(path.join(autos, 'web/automation.md'), '---\ndescription: Lead web: the shop\nschedule: "0 6 * * 1-5"\nlead: web\n---\n')
   await writeFile(path.join(autos, 'digest/automation.md'), '---\ndescription: Mail digest\nevery: 1h  # hourly\n---\nDo it.\n')

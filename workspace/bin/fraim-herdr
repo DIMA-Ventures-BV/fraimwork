@@ -216,6 +216,18 @@ transcript_text() {
   jq -rs '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' "$file" 2>/dev/null
 }
 
+# Exit 0 when Claude in this terminal still has a shell running: a background task it
+# started (an install, a test run) that it waits for, even though its turn ended. Asked through
+# the core (hc exec), so it works from the scheduler container too.
+cmd_busy() {
+  local rec pid
+  in_workspace || alive || return 1
+  rec="$(hc get "$1" --json 2>/dev/null)" || return 1
+  pid="$(jq -r '.foreground.pid // empty' <<<"$rec")"
+  [ -n "$pid" ] || return 1
+  hc exec ps -o comm= --ppid "$pid" 2>/dev/null | grep -qxE 'bash|sh|dash|zsh'
+}
+
 cmd_last_text() {
   local name="$1" sid=""
   case "$(kind_of_name "$name")" in
@@ -303,5 +315,6 @@ case "$action" in
   watch) cmd_watch ;;
   status) [ $# -eq 1 ] || usage "status NAME"; status_of "$1" ;;
   last-text) [ $# -eq 1 ] || usage "last-text NAME"; cmd_last_text "$1" ;;
+  busy) [ $# -eq 1 ] || usage "busy NAME"; cmd_busy "$1" ;;
   *) usage "supervise | up | alive | hc ARGS | ls [--json] | attach [NAME] | watch | status NAME | last-text NAME" ;;
 esac

@@ -385,6 +385,45 @@ Not logged in · Please run /login"
   [ ! -e "$FRAIM_GOALS_DIR/g1/unsent" ]
 }
 
+@test "a turn that ends while a background task still runs is not the result yet" {
+  mkdir -p "$HC_FAKE"
+  touch "$HC_FAKE/busy"
+  FRAIM_GOAL_KEEP=30 "$GOAL" start -- install and test
+  for _ in $(seq 20); do grep -q '^send ' "$HC_FAKE/calls" 2>/dev/null && break; sleep 0.1; done
+  sleep 1
+  grep -q '^running' "$FRAIM_GOALS_DIR/g1/state"
+  [ ! -s "$SENT" ]
+  rm "$HC_FAKE/busy"
+  wait_state g1 done
+  wait_sent 'Goal g1 done'
+  "$GOAL" stop g1
+}
+
+@test "a background task that never ends holds the result back only until the busy limit" {
+  mkdir -p "$HC_FAKE"
+  touch "$HC_FAKE/busy"
+  FRAIM_GOAL_BUSY_MAX=2 FRAIM_GOAL_KEEP=30 "$GOAL" start -- start the dev server
+  wait_state g1 done
+  wait_sent 'Goal g1 done'
+  [ -e "$HC_FAKE/busy" ]
+  "$GOAL" stop g1
+}
+
+@test "a goal from a queue decision gets the decision's topic as its title, and closes earlier failures" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
+  # An earlier attempt at decision q5 (goal g9) failed and still waits in the queue.
+  mkdir -p "$FRAIM_GOALS_DIR/g9"
+  echo q5 > "$FRAIM_GOALS_DIR/g9/queue"
+  fraim-queue add --quiet --goal g9 --kind failed --priority 1 --title "Failed: try" --summary "it broke" >/dev/null
+  FRAIM_GOAL_FROM_QUEUE=1 "$GOAL" start --queue q5 -- 'The owner approved queue item q5 ("Meta pixel tests"). Do this approved next step now: rerun them'
+  wait_state g1 done
+  for _ in $(seq 30); do [ -s "$FRAIM_QUEUE_DIR/q2/item.json" ] && break; sleep 0.1; done
+  [ "$(jq -r .title "$FRAIM_QUEUE_DIR/q2/item.json")" = "Meta pixel tests" ]
+  for _ in $(seq 30); do [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ] && break; sleep 0.1; done
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = system ]
+}
+
 @test "bad input is a usage error" {
   run "$GOAL" start
   [ "$status" -eq 2 ]
