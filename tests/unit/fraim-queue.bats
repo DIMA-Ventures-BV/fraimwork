@@ -57,6 +57,20 @@ EOF
   [ "$status" -eq 2 ]
   run "$Q" show q99
   [ "$status" -eq 1 ]
+  run "$Q" add --title x --advise maybe
+  [ "$status" -eq 2 ]
+}
+
+@test "an item carries the question, the advice and at most 3 reasons, shown before the details" {
+  run "$Q" add --quiet --title "Meta ads" --ask "May I read the orders?" --advise send-back \
+    --why "one" --why "two" --why "three" --why "four" --summary "All the numbers."
+  [ "$status" -eq 0 ]
+  run "$Q" show q1 --json
+  [ "$(printf '%s' "$output" | jq -r '.ask')" = "May I read the orders?" ]
+  [ "$(printf '%s' "$output" | jq -r '.advise')" = reject ]
+  [ "$(printf '%s' "$output" | jq -c '.why')" = '["one","two","three"]' ]
+  run "$Q" show q1
+  [[ "$output" == *"Question: May I read the orders?"*"Advice: Send back"*"- one"*"Details:"*"All the numbers."* ]]
 }
 
 @test "media are copied in, other files are skipped" {

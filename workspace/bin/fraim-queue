@@ -2,7 +2,8 @@
 // fraim-queue: one prioritized list of everything that needs the owner. Goals and lead
 // agents add items; the owner clears them in batches on a web page, on WhatsApp or here.
 //
-//   fraim-queue add --title T [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
+//   fraim-queue add --title T [--ask QUESTION] [--advise approve|reject|dismiss] [--why REASON]...
+//                   [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
 //                   [--priority 1|2|3] [--source S] [--goal gN] [--lead NAME] [--link URL]...
 //                   [--media FILE]... [--on-approve TEXT] [--brain pN | --skill sN] [--quiet]
 //                                                               prints the id (q1, q2, ...)
@@ -30,6 +31,7 @@ const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
 const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
 const KINDS = ['review', 'decision', 'idea', 'info', 'failed']
 const STATES = ['open', 'approved', 'rejected', 'dismissed']
+const ADVICE = ['approve', 'reject', 'dismiss']
 const MEDIA_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
   '.webm': 'video/webm', '.mp4': 'video/mp4', '.mov': 'video/quicktime',
@@ -171,11 +173,18 @@ export function addItem(opts) {
   if (![1, 2, 3].includes(priority)) usage('--priority must be 1, 2 or 3')
   if (opts.brain && !/^p\d{1,6}$/.test(opts.brain)) usage('--brain needs a proposal id (p1, p2, ...)')
   if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
+  const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
+  if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
+  const why = (Array.isArray(opts.why) ? opts.why : opts.why ? [opts.why] : []).map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
   const id = newId()
   const dir = itemDir(id)
   const item = {
     id,
     title: title.slice(0, 200),
+    // The decision in one look: the question for the owner, the advice and at most 3 reasons.
+    ask: String(opts.ask || '').trim().slice(0, 300),
+    advise,
+    why: why.map((w) => w.slice(0, 300)),
     summary: String(opts.summary || '').slice(0, 20000),
     kind,
     priority,
@@ -434,7 +443,11 @@ function line(item) {
 
 function describe(item) {
   const parts = [`${item.id}: ${item.title}`, `${item.kind}, priority ${item.priority}, ${item.state}, from ${item.source}, ${item.created}`]
-  if (item.summary) parts.push('', item.summary)
+  const verb = { approve: 'Approve', reject: 'Send back', dismiss: 'Skip' }
+  if (item.ask) parts.push('', `Question: ${item.ask}`)
+  if (item.advise) parts.push(`Advice: ${verb[item.advise]}`)
+  for (const w of item.why || []) parts.push(`- ${w}`)
+  if (item.summary) parts.push('', item.ask ? 'Details:' : '', item.summary)
   if (item.links.length) parts.push('', ...item.links.map((l) => `link: ${l}`))
   if (item.media.length) parts.push('', ...item.media.map((m) => `media: ${path.join(itemDir(item.id), 'media', m)}`))
   if (item.on_approve) parts.push('', `On approve: ${item.on_approve}`)
@@ -666,6 +679,18 @@ svg { display: block; flex: none; }
 .live { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent); animation: live 1.6s ease-out infinite; }
 @keyframes live { to { box-shadow: 0 0 0 6px transparent; } }
 @media (prefers-reduced-motion: reduce) { .live { animation: none; } }
+.decide { border: 1px solid var(--line2); border-radius: 10px; background: var(--side); padding: 16px 18px; margin: 0 0 20px; }
+.decide .q { font-size: 17px; line-height: 1.4; font-weight: 600; color: var(--ink); margin: 0 0 12px; }
+.decide .adv { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 0 0 8px; }
+.decide .adv b { color: var(--advc, var(--accent)); font-weight: 600; }
+.decide ul { margin: 0; padding: 0 0 0 18px; color: var(--soft); }
+.decide li { margin: 3px 0; }
+details.more { margin: 0 0 20px; }
+details.more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; font-weight: 500; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+details.more summary::before { content: ""; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .15s; }
+details.more[open] summary::before { transform: rotate(90deg); }
+details.more .desc { margin-top: 10px; }
+.act.advised { box-shadow: 0 0 0 2px var(--accent-bg), 0 0 0 3px var(--accent); }
 .empty { margin: auto; text-align: center; padding: 40px; color: var(--muted); max-width: 360px; }
 .empty svg { margin: 0 auto 12px; color: var(--faint); }
 .empty b { display: block; color: var(--ink); font-weight: 500; font-size: 14px; margin-bottom: 4px; }
@@ -875,8 +900,15 @@ function renderDetail() {
   var crumb = view === 'inbox' ? 'Inbox' : view === 'done' ? 'Decided' : /^p/.test(view) ? WHEN[+view[1]] : view.slice(4)
   var html = '<div class="bar"><div class="crumb">' + esc(crumb) + '<span>/</span><b>' + esc(it.id.toUpperCase()) + '</b></div><span class="grow"></span>' +
     '<span class="c">' + (sel + 1) + ' / ' + items.length + '</span><button class="icon" id="prev" title="Previous (k)" aria-label="Previous">' + ICON.up + '</button><button class="icon" id="next" title="Next (j)" aria-label="Next">' + ICON.down + '</button></div>'
+  var ADV = { approve: ['Approve', 'var(--green)'], reject: ['Send back', 'var(--red)'], dismiss: ['Skip', 'var(--muted)'] }
+  var card = it.ask || it.advise || (it.why && it.why.length)
   html += '<div class="doc"><div class="doc-in">' +
     '<h2>' + esc(it.title) + '</h2>' +
+    (card ? '<div class="decide">' + (it.ask ? '<p class="q">' + esc(it.ask) + '</p>' : '') +
+      (it.advise ? '<div class="adv" style="--advc:' + ADV[it.advise][1] + '">Advice: <b>' + ADV[it.advise][0] + '</b></div>' : '') +
+      (it.why && it.why.length ? '<ul>' + it.why.map(function (w) { return '<li>' + esc(w) + '</li>' }).join('') + '</ul>' : '') +
+      '</div>' : '') +
+    (card && it.on_approve ? '<div class="h3" style="margin-top:0">If you approve</div><div class="next" style="margin-bottom:20px">' + esc(it.on_approve) + '</div>' : '') +
     '<dl class="props">' +
     '<dt>Status</dt><dd>' + statusIcon(it) + (open ? 'Waiting for you' : VERB[it.state] + ' ' + ago(it.decided) + ' ago') + '</dd>' +
     '<dt>Type</dt><dd><span class="label" style="--lc:' + KIND_COLOR[it.kind] + '"><i></i>' + esc(KIND[it.kind] || it.kind) + '</span></dd>' +
@@ -884,16 +916,16 @@ function renderDetail() {
     '<dt>From</dt><dd>' + esc(owner(it)) + (it.goal ? ' <span class="c">goal ' + esc(it.goal) + '</span>' : '') + '</dd>' +
     '<dt>Created</dt><dd>' + esc(new Date(it.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })) + '</dd>' +
     '</dl>' +
-    (it.summary ? '<div class="desc">' + esc(it.summary) + '</div>' : '<div class="desc" style="color:var(--muted)">No description.</div>') +
+    (it.summary ? (card ? '<details class="more"><summary>Full report</summary><div class="desc">' + esc(it.summary) + '</div></details>' : '<div class="desc">' + esc(it.summary) + '</div>') : (card ? '' : '<div class="desc" style="color:var(--muted)">No description.</div>')) +
     (it.media.length ? '<div class="h3">Screenshots</div><div class="media">' + mediaHtml(it) + '</div>' : '') +
     (it.links.length ? '<div class="h3">Links</div><div class="att">' + it.links.map(linkHtml).join('') + '</div>' : '') +
-    (it.on_approve ? '<div class="h3">On approve, the server starts</div><div class="next">' + esc(it.on_approve) + '</div>' : '') +
+    (it.on_approve && !card ? '<div class="h3">On approve, the server starts</div><div class="next">' + esc(it.on_approve) + '</div>' : '') +
     (open ? '' : '<div class="h3">Activity</div><div class="activity">' + statusIcon(it) + '<span>' + VERB[it.state] + (it.note ? ': ' + esc(it.note) : '') + (it.follow_up ? '. Started goal ' + esc(it.follow_up) + '.' : '') + '</span></div>') +
     '</div></div>'
   if (open) {
     html += '<div class="composer"><div class="composer-in"><textarea id="note" rows="1" placeholder="Leave a note for the agent. Sending back needs one."></textarea>' +
       '<div class="ctl"><button class="icon" id="mic" title="Dictate (v)" aria-label="Dictate a note">' + ICON.mic + '</button><span class="grow"></span>' +
-      '<button class="act" data-v="dismissed">Skip <kbd>D</kbd></button><button class="act danger" data-v="rejected">Send back <kbd>R</kbd></button><button class="act primary" data-v="approved">Approve <kbd>A</kbd></button></div></div></div>'
+      '<button class="act' + (it.advise === 'dismiss' ? ' advised' : '') + '" data-v="dismissed">Skip <kbd>D</kbd></button><button class="act danger' + (it.advise === 'reject' ? ' advised' : '') + '" data-v="rejected">Send back <kbd>R</kbd></button><button class="act primary' + (it.advise === 'approve' ? ' advised' : '') + '" data-v="approved">Approve <kbd>A</kbd></button></div></div></div>'
   }
   el.innerHTML = html
   var ta = $('#note'); if (ta) ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px' })
@@ -1044,7 +1076,7 @@ function parseArgs(argv, multi = []) {
 
 function main(argv) {
   const [action, ...rest] = argv
-  const args = parseArgs(rest, ['link', 'media'])
+  const args = parseArgs(rest, ['link', 'media', 'why'])
   const id = args._[0]
   switch (action) {
     case 'add': {
