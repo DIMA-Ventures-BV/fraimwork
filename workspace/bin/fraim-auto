@@ -332,8 +332,10 @@ failure_to_queue() {
   local name="$1" reason="$2" run_rel="$3" fix=()
   command -v fraim-queue >/dev/null || return 0
   case "$reason" in
-    *"not signed in"*|*"usage limit"*) ;;
-    *) fix=(--on-approve "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause, fix ~/fraim/automations/$name (use the building-automations skill), check it with fraim-auto check $name, and run it once with fraim-auto run $name --dry.") ;;
+    *"not signed in"*) fix=(--ask "Sign the server in to Claude again? Ask Claude on your laptop to do it." --advise dismiss --why "Nothing on the server can fix a sign-in.") ;;
+    *"usage limit"*) fix=(--ask "Nothing to do: it runs again when the Claude usage limit resets." --advise dismiss --why "The limit resets on its own.") ;;
+    *) fix=(--ask "Let Claude find out why $name failed and fix it?" --advise approve --why "$reason."
+      --on-approve "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause, fix ~/fraim/automations/$name (use the building-automations skill), check it with fraim-auto check $name, and run it once with fraim-auto run $name --dry.") ;;
   esac
   fraim-queue add --quiet --kind failed --priority 1 --source "automation $name" \
     --title "Automation $name failed" --summary "$reason.${run_rel:+ Details: $run_rel}" "${fix[@]}" >/dev/null 2>&1 || true
