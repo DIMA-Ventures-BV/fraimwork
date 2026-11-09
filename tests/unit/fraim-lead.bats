@@ -17,7 +17,7 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$CLAUDE_ARGS"
 [ -z "${FAKE_ACTION:-}" ] || eval "$FAKE_ACTION"
-[ -z "${FAKE_FAIL:-}" ] || { echo "usage limit reached" >&2; exit 1; }
+[ -z "${FAKE_FAIL:-}" ] || { echo "${FAKE_FAIL_TEXT:-usage limit reached}" >&2; exit 1; }
 echo "${FAKE_OUTPUT:-Checked the area.}"
 EOF
   cat > "$T/bin/fraim-notify" <<'EOF'
@@ -383,4 +383,102 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
   fraim-queue reject "$id" --note "not now"
   grep -q 'from owner: The owner rejected "Add dark mode"' "$FRAIM_LEADS_DIR/web/inbox.md"
   grep -q 'not now' "$FRAIM_LEADS_DIR/web/inbox.md"
+}
+
+@test "the engineer: one per server, its own brief, a weekly check and no goal limit" {
+  run fraim-lead new engineer --engineer
+  [ "$status" -eq 0 ]
+  grep -q '^role: engineer' "$FRAIM_LEADS_DIR/engineer/lead.md"
+  [ "$(cat "$FRAIM_LEADS_DIR/engineer/budget")" = 99 ]
+  grep -q 'description: Lead engineer: engineer: builds and fixes' "$FRAIM_AUTOMATIONS_DIR/engineer/automation.md"
+  run fraim-lead list
+  [[ "$output" == *"engineer  engineer  0 6 * * 1"* ]]
+  run fraim-lead new builder --engineer
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"engineer is already the engineer"* ]]
+  run fraim-lead new both --chief --engineer
+  [ "$status" -eq 2 ]
+}
+
+@test "new --off makes a paused lead that fraim-auto on starts" {
+  run fraim-lead new web --off
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"It is off"* ]]
+  [ -f "$FRAIM_LEADS_DIR/web/paused" ]
+  run fraim-auto list
+  [[ "$output" == *"web (lead)  [paused]"* ]]
+  FRAIM_HEADLESS=1 run fraim-auto on web
+  [ "$status" -eq 1 ]
+  [ -f "$FRAIM_LEADS_DIR/web/paused" ]
+  run fraim-auto on web
+  [ "$status" -eq 0 ]
+  [ ! -f "$FRAIM_LEADS_DIR/web/paused" ]
+  run fraim-auto list
+  [[ "$output" == *"web (lead)  [on]"* ]]
+}
+
+@test "the engineer's run gets build tools, never switch-on tools, and what it makes starts off" {
+  fraim-lead new chief --chief
+  fraim-lead new engineer --engineer
+  FAKE_ACTION='fraim-auto new ad-spend >/dev/null; fraim-lead new shop >/dev/null' run fraim-lead run engineer
+  [ "$status" -eq 0 ]
+  grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/ad-spend/automation.md"
+  [ -f "$FRAIM_LEADS_DIR/shop/paused" ]
+  ! grep -q 'ad-spend' "$FRAIM_AUTO_CRONTAB"
+  grep -q 'You are the engineer' "$CLAUDE_ARGS"
+  grep -q -- '--switch-on NAME' "$CLAUDE_ARGS"
+  grep -q 'fraim-lead tell <chief or lead> --from engineer' "$CLAUDE_ARGS"
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == *"Edit(~/fraim/automations/**)"* ]]
+  [[ "$tools" == *"Bash(fraim-auto new:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-lead new:*)"* ]]
+  [[ "$tools" == *"Skill"* ]]
+  [[ "$tools" != *"fraim-auto on"* ]]
+  [[ "$tools" != *"resume"* ]]
+  [[ "$tools" != *"Bash,"* ]]
+  # Outside the engineer's run, new makes it on as before.
+  fraim-auto new report >/dev/null
+  ! grep -q 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
+}
+
+@test "the engineer's fraimwork step is a pull request goal when the repo is on the server" {
+  fraim-lead new engineer --engineer
+  run fraim-lead run engineer
+  grep -q 'The code is not on this server' "$CLAUDE_ARGS"
+  mkdir -p "$HOME/code/fraimwork/.git"
+  run fraim-lead run engineer
+  grep -q "In $HOME/code/fraimwork: make a branch" "$CLAUDE_ARGS"
+  grep -q 'Do not merge and do not deploy' "$CLAUDE_ARGS"
+}
+
+@test "the chief and the leads hand building work to the engineer, only when there is one" {
+  fraim-lead new chief --chief
+  fraim-lead new web
+  FRAIM_LEAD_TRIGGER=manual FRAIM_LEAD_INPUT="The owner wrote: remind me every Monday" FAKE_OUTPUT=ok fraim-lead run chief
+  ! grep -q 'hand it to the engineer' "$CLAUDE_ARGS"
+  fraim-lead run web
+  grep -q 'propose an automation' "$CLAUDE_ARGS"
+  fraim-lead new engineer --engineer
+  FRAIM_LEAD_TRIGGER=manual FRAIM_LEAD_INPUT="The owner wrote: remind me every Monday" FAKE_OUTPUT=ok fraim-lead run chief
+  grep -q 'hand it to the engineer, never to a goal: fraim-lead tell engineer --from chief' "$CLAUDE_ARGS"
+  fraim-lead run web
+  grep -q 'ask the engineer, which builds it' "$CLAUDE_ARGS"
+  grep -q 'fraim-lead tell engineer --from web' "$CLAUDE_ARGS"
+}
+
+@test "a failed automation goes to the engineer at once; the engineer's own failure does not" {
+  fraim-lead new engineer --engineer
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/digest"
+  printf -- '---\ndescription: digest\noutput: none\n---\nSummarise.\n' > "$FRAIM_AUTOMATIONS_DIR/digest/automation.md"
+  FAKE_FAIL=1 FAKE_FAIL_TEXT="boom" run fraim-auto run digest
+  grep -q 'from automation digest: The automation digest failed' "$FRAIM_LEADS_DIR/engineer/inbox.md"
+  run fraim-queue list --json
+  [[ "$output" == *'"lead":"engineer"'* ]]
+  [[ "$output" == *"the engineer is already fixing it"* ]]
+  [[ "$output" != *'"on_approve":"The automation digest'* ]]
+  rm -f "$FRAIM_LEADS_DIR/engineer/inbox.md"
+  FAKE_FAIL=1 FAKE_FAIL_TEXT="boom" run fraim-auto run engineer
+  [ ! -e "$FRAIM_LEADS_DIR/engineer/inbox.md" ]
+  FAKE_FAIL=1 run fraim-auto run digest
+  [ ! -e "$FRAIM_LEADS_DIR/engineer/inbox.md" ]
 }

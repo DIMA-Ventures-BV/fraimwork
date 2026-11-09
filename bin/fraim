@@ -2242,7 +2242,7 @@ cmd_lead() {
   [ $# -gt 0 ] || set -- list
   case "$1" in
     new|list|show|run|pause|resume|tell|ask|events) ;;
-    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off] | pause NAME | resume NAME' ;;
+    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief|--engineer] [--off] | list | show NAME | run NAME | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off] | pause NAME | resume NAME' ;;
   esac
   [ "$1" != run ] || server_logged_in || need_login_step
   workspace_ssh "fraim-lead $(printf '%q ' "$@")"
@@ -2705,14 +2705,14 @@ Operate
   fraim session [list | all | new REPO ["TASK"] | send ID "MSG" | read ID | attach ID | stop ID]
                                              coding sessions on the server (s1, s2, ...) that keep
                                              working with the laptop closed; all = every session
-  fraim auto [list | show NAME | runs NAME | run NAME [--dry] | pause NAME | resume NAME | check]
+  fraim auto [list | show NAME | runs NAME | run NAME [--dry] | pause NAME | resume NAME | on NAME | check]
                                              automations in ~/fraim/automations (trigger, prompt, output)
   fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
                                              the review queue: goal results, lead ideas, decisions
   fraim queue keep [--port N] [--off]        keep the queue page open at http://localhost:3109 on this Mac
-  fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME
+  fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief|--engineer] [--off] | list | show NAME | run NAME
            | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off]
-                                             lead agents that watch an area; the chief also routes work all day
+                                             lead agents that watch an area; the chief routes work, the engineer builds
   fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | stats | distill | skills]
                                              preferences and skills learned from reviews
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
