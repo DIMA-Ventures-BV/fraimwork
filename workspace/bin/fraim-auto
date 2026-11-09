@@ -503,6 +503,11 @@ run_once() {
   if [ "$code" -eq 75 ]; then
     RUN_STATUS=skipped RUN_OUTPUT="the server had no free memory; it runs at the next trigger"
     printf 'skipped %s\n' "$RUN_OUTPUT" > "$run/status"
+    # What a trigger plugin reported is kept for the next check, so no alert or file is lost.
+    # Only for a poll run: a manual or dry run's text is not trigger input.
+    if [ -n "$input" ] && [ "$dry" != 1 ] && [ "${FRAIM_POLL_RUN:-}" = 1 ]; then
+      printf '%s\n' "$input" >> "$state_root/$name/deferred"
+    fi
     return 0
   fi
 
@@ -608,8 +613,11 @@ cmd_run() {
   lock="$(sdir "$name")/lock"
   if ! mkdir "$lock" 2>/dev/null; then
     if lock_held "$lock" "$f"; then
-      [ -z "$input" ] || printf '%s\n' "$input" >> "$state_root/$name/queued"
-      [ -f "$state_root/$name/queued" ] || : > "$state_root/$name/queued"
+      # Trigger input waits apart from manual input, so it keeps its origin (FRAIM_POLL_RUN).
+      local qfile="$state_root/$name/queued"
+      [ "${FRAIM_POLL_RUN:-}" != 1 ] || qfile="$state_root/$name/queued.poll"
+      [ -z "$input" ] || printf '%s\n' "$input" >> "$qfile"
+      [ -f "$qfile" ] || : > "$qfile"
       echo "Automation $name is running; it runs once more when this run ends."
       exit 0
     fi
@@ -621,11 +629,18 @@ cmd_run() {
 
   RUN_STATUS="" RUN_OUTPUT=""
   run_once "$name" "$trigger" "$input" "$dry"
-  # A queued run gets the input that arrived during this run (new files, a page change).
-  while [ -f "$state_root/$name/queued" ] && [ "$dry" != 1 ]; do
-    input="$(cat "$state_root/$name/queued")"
-    rm -f "$state_root/$name/queued"
-    run_once "$name" "$trigger" "$input" 0
+  # A queued run gets the input that arrived during this run (new files, a page change);
+  # trigger input runs as a poll run, so a run the server had no memory for keeps it.
+  while { [ -f "$state_root/$name/queued.poll" ] || [ -f "$state_root/$name/queued" ]; } && [ "$dry" != 1 ]; do
+    if [ -f "$state_root/$name/queued.poll" ]; then
+      input="$(cat "$state_root/$name/queued.poll")"
+      rm -f "$state_root/$name/queued.poll"
+      FRAIM_POLL_RUN=1 run_once "$name" "$trigger" "$input" 0
+    else
+      input="$(cat "$state_root/$name/queued")"
+      rm -f "$state_root/$name/queued"
+      FRAIM_POLL_RUN=0 run_once "$name" "$trigger" "$input" 0
+    fi
   done
   prune_runs "$autos/$name/runs"
 
@@ -672,9 +687,23 @@ cmd_poll() {
       rm -f "$state_root/$name/last_alert"
       sset "$name" streak 0 ;;
   esac
-  events="$(printf '%s\n' "$events" | grep -v '^[[:space:]]*$' | head -50)"
-  [ -n "$events" ] || exit 0
-  cmd_run "$name" "$t" "${events:0:8000}" 0 1
+  # Events waiting from earlier checks (a run the server had no memory for, or more than one
+  # run holds) come first. One run takes at most 50 lines and 8000 characters; the rest waits
+  # in `deferred` for the next check, so nothing a trigger reported is dropped.
+  local deferred="$state_root/$name/deferred" all batch="" rest="" n=0 size=0 line
+  all="$( { cat "$deferred" 2>/dev/null; printf '%s\n' "$events"; } | grep -v '^[[:space:]]*$')"
+  [ -n "$all" ] || exit 0
+  while IFS= read -r line; do
+    # A single line longer than a whole run is cut, not kept forever.
+    [ "${#line}" -lt 8000 ] || line="${line:0:7999}"
+    if [ "$n" -lt 50 ] && [ $(( size + ${#line} + 1 )) -le 8000 ] && [ -z "$rest" ]; then
+      batch="$batch$line"$'\n'; n=$((n + 1)); size=$(( size + ${#line} + 1 ))
+    else
+      rest="$rest$line"$'\n'
+    fi
+  done <<<"$all"
+  if [ -n "$rest" ]; then printf '%s' "$rest" > "$deferred"; else rm -f "$deferred"; fi
+  FRAIM_POLL_RUN=1 cmd_run "$name" "$t" "$batch" 0 1
 }
 
 trigger_of() {

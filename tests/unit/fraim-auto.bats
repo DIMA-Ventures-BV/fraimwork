@@ -333,6 +333,47 @@ every: 10m' 'New: {{input}}'
   [ "$(jq -r .trigger "$(last_run inbox)/trigger.json")" = files ]
 }
 
+@test "what a trigger reported is kept when the server had no memory, and comes with the next check" {
+  mkdir -p "$HOME/fraim/inbox"
+  make_auto inbox 'trigger: files: inbox
+every: 10m' 'New: {{input}}'
+  run "$AUTO" poll inbox
+  : > "$HOME/fraim/inbox/invoice.pdf"
+  FAKE_BUSY=1 run "$AUTO" poll inbox
+  [ "$status" -eq 0 ]
+  # The files trigger already moved on; the next check has nothing new of its own.
+  rm -f "$CLAUDE_ARGS"
+  run "$AUTO" poll inbox
+  [ -f "$CLAUDE_ARGS" ]
+  grep -q 'New: new file: ~/fraim/inbox/invoice.pdf' "$(last_run inbox)/prompt.md"
+}
+
+@test "a run takes at most 50 trigger lines; the rest come with the next check, none twice" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_triggers"
+  # Prints 60 lines once, then nothing.
+  printf '[ "$1" = --check ] && exit 0\n[ -f "$FRAIM_TRIGGER_STATE/done" ] && exit 0\ntouch "$FRAIM_TRIGGER_STATE/done"\nseq 1 60 | sed "s/^/line /"\n' > "$FRAIM_AUTOMATIONS_DIR/_triggers/burst"
+  make_auto burst 'trigger: burst: x' 'Got: {{input}}'
+  run "$AUTO" poll burst
+  p="$(last_run burst)/prompt.md"
+  grep -qx 'line 50' "$p"
+  ! grep -qx 'line 51' "$p"
+  sleep 1
+  run "$AUTO" poll burst
+  p="$(last_run burst)/prompt.md"
+  grep -q 'Got: line 51' "$p"
+  grep -qx 'line 60' "$p"
+  ! grep -qx 'line 50' "$p"
+  [ ! -f "$HOME/.local/state/fraim/automations/burst/deferred" ]
+}
+
+@test "a manual or dry run the server had no memory for keeps nothing for later" {
+  mkdir -p "$HOME/fraim/inbox"
+  make_auto inbox 'trigger: files: inbox
+every: 10m' 'New: {{input}}'
+  FAKE_BUSY=1 run "$AUTO" run inbox --input "typed by hand"
+  [ ! -f "$HOME/.local/state/fraim/automations/inbox/deferred" ]
+}
+
 @test "a failing trigger of the owner alerts once and says when it works again" {
   mkdir -p "$FRAIM_AUTOMATIONS_DIR/_triggers"
   printf '[ "$1" = --check ] && exit 0\n[ -f "$HOME/ok" ] && exit 0\necho "the shop API answered 503" >&2\nexit 1\n' > "$FRAIM_AUTOMATIONS_DIR/_triggers/shop"
