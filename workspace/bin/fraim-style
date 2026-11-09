@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# fraim-style: how Claude writes, per place. One setting per place, one style file per style.
+#
+#   places   whatsapp (chat replies, goal and automation results), queue (queue items and the
+#            chief's briefing on the queue page), default (any other output)
+#   styles   adhd (short, action first), detailed (full reasoning), normal (no extra rules),
+#            or any ~/fraim/styles/NAME.md the owner writes (it also overrides a built-in one)
+#
+#   fraim-style                       the style of every place
+#   fraim-style set PLACE STYLE       change one place (PLACE all changes every place)
+#   fraim-style list                  the styles there are
+#   fraim-style show STYLE            the rules of one style
+#   fraim-style prompt PLACE          the block a prompt gets for that place (empty for normal)
+#
+# Settings live in ~/fraim/styles/settings as PLACE=STYLE lines. Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+
+dir="${FRAIM_STYLE_DIR:-${FRAIM_FILES_DIR:-$HOME/fraim}/styles}"
+settings="$dir/settings"
+PLACES="whatsapp queue default"
+DEFAULT_STYLE=adhd
+
+usage() { printf 'usage: %s\n' "$1" >&2; exit 2; }
+
+builtin_style() {
+  case "$1" in
+    adhd) cat <<'EOF'
+- The first line is the answer, or the one thing the owner must do. No greeting, no intro.
+- At most 5 short lines. Cut background and reasoning the owner does not need to act.
+- One idea per line. Short sentences, plain words.
+- Steps only when the owner must do things in order: numbered, at most 5.
+- End with the one next step, or with nothing. No recap, no "let me know".
+- Details go in a file or the queue item, not in the message.
+EOF
+      ;;
+    detailed) cat <<'EOF'
+- The first line is the answer. Then explain it.
+- Give the reasoning, what you checked, the options you weighed and the risks.
+- Split long text into short labelled parts with lists. Plain words still.
+- Name the files, links and sources you used.
+EOF
+      ;;
+    normal) ;;
+    *) return 1 ;;
+  esac
+}
+
+style_text() {
+  if [ -f "$dir/$1.md" ]; then cat "$dir/$1.md"; else builtin_style "$1"; fi
+}
+
+style_exists() {
+  case "$1" in ''|*/*|.*) return 1 ;; esac
+  [ -f "$dir/$1.md" ] || builtin_style "$1" >/dev/null
+}
+
+style_of() {
+  local v=""
+  [ -f "$settings" ] && v="$(sed -n "s/^$1=//p" "$settings" | tail -1)"
+  if [ -z "$v" ] && [ "$1" != default ]; then v="$(style_of default)"; fi
+  printf '%s' "${v:-$DEFAULT_STYLE}"
+}
+
+valid_place() { case " $PLACES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+set_place() {
+  local place="$1" style="$2" tmp
+  mkdir -p "$dir"
+  tmp="$(mktemp "$dir/.settings.XXXXXX")"
+  { [ -f "$settings" ] && grep -v "^$place=" "$settings" || true; printf '%s=%s\n' "$place" "$style"; } > "$tmp"
+  mv "$tmp" "$settings"
+}
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  status)
+    for p in $PLACES; do printf '%-9s %s\n' "$p" "$(style_of "$p")"; done ;;
+  set)
+    [ $# -eq 2 ] || usage "fraim-style set whatsapp|queue|default|all STYLE"
+    style_exists "$2" || { printf 'no style "%s": run fraim-style list\n' "$2" >&2; exit 1; }
+    if [ "$1" = all ]; then
+      for p in $PLACES; do set_place "$p" "$2"; done
+    else
+      valid_place "$1" || usage "fraim-style set whatsapp|queue|default|all STYLE"
+      set_place "$1" "$2"
+    fi
+    printf '%s now writes %s\n' "$1" "$2" ;;
+  list)
+    { printf '%s\n' adhd detailed normal
+      for f in "$dir"/*.md; do [ -f "$f" ] && basename "$f" .md; done
+    } | sort -u ;;
+  show)
+    [ $# -eq 1 ] || usage "fraim-style show STYLE"
+    style_exists "$1" || { printf 'no style "%s"\n' "$1" >&2; exit 1; }
+    style_text "$1" ;;
+  prompt)
+    [ $# -eq 1 ] || usage "fraim-style prompt whatsapp|queue|default"
+    place="$1"; valid_place "$place" || place=default
+    style="$(style_of "$place")"
+    rules="$(style_text "$style" 2>/dev/null || true)"
+    [ -n "$rules" ] || exit 0
+    printf 'Writing style for %s (%s). Follow it unless the owner asks for more or less detail in this message:\n%s\n' "$place" "$style" "$rules" ;;
+  *) usage "fraim-style [set PLACE STYLE | list | show STYLE | prompt PLACE]" ;;
+esac

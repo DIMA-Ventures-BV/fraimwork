@@ -18,6 +18,7 @@
       "Bash(fraim-queue:*)",
       "Bash(fraim-lead:*)",
       "Bash(fraim-brain:*)",
+      "Bash(fraim-style:*)",
       "mcp__whatsapp__session_command"
     ]
   }

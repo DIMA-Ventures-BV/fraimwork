@@ -139,8 +139,11 @@ If this goal taught you a procedure worth reusing (a multi-step task that will c
 The owner approves it in the queue before any run uses it. Skip this when nothing is reusable.
 
 End with a short plain-text summary for WhatsApp, at most 15 lines, no Markdown headers or tables: what you did, where the results are, and what needs the owner.
+$(style_block whatsapp)
 EOF
 }
+
+style_block() { command -v fraim-style >/dev/null || return 0; fraim-style prompt "$1" 2>/dev/null || true; }
 
 # The owner's distilled preferences (fraim-brain), so a first draft needs fewer corrections.
 # A goal for a lead gets the general rules and that lead's own; other leads' rules stay out.
