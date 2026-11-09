@@ -76,7 +76,7 @@ Then edit `~/fraim/leads/web/lead.md`: where to look (repositories, issues, erro
 
 Each run, a lead reads its brief, its own notes (`state.md`), the brain rules and your past decisions on its items. Then it:
 
-1. acts first on its inbox (`~/fraim/leads/<name>/inbox.md`: notes from the owner and the chief, written with `fraim-lead tell web -- "..."`);
+1. acts first on its inbox (`~/fraim/leads/<name>/inbox.md`: notes from the owner, the chief, other leads and its goals, written with `fraim-lead tell web -- "..."`);
 2. starts goals for clear work (`fraim-goal start --lead web`), at most `budget` per day (default 3);
 3. adds ideas and decisions to the queue, at most 3 per run;
 4. rewrites its notes.
@@ -100,7 +100,21 @@ The events are new open queue items: goal results, failures, automation answers 
 Routing means one of:
 
 1. **Start it**: a goal, within its budget (default 2 per day, in `~/fraim/leads/chief/budget`). The result lands in your queue.
-2. **Hand it to a lead**: `fraim-lead tell <lead> --from chief -- "..."`. The lead acts on it at its next run.
+2. **Hand it to a lead**: `fraim-lead tell <lead> --from chief -- "..."`. The note wakes the lead within minutes, and the lead reports back to the chief the same way.
+
+### Who talks to whom
+
+Everyone can send a note to everyone, and a note wakes the receiver now:
+
+| From | To | How |
+|---|---|---|
+| Chief | a lead | `fraim-lead tell <lead> --from chief -- "..."` |
+| A lead | the chief or another lead | `fraim-lead tell <name> --from <lead> -- "..."` |
+| A goal | the lead that started it | automatic when the goal ends (done or failed) |
+| You (queue decision) | the lead or chief that added the item | automatic when you approve, reject or dismiss |
+| You (WhatsApp) | the chief or one lead | `fraim-lead ask`, or `fraim-lead tell` from the server's Claude |
+
+A lead that is running when a note arrives runs once more when it ends. `--later` leaves a note without waking. To stop two leads from waking each other forever, a chain of notes stops waking after 6 hops (`FRAIM_LEAD_MAX_DEPTH`); the note then waits for the next run.
 3. **Ask you**: a decision in the queue, with the work to start when you approve.
 
 The chief cannot send mail, post, pay, merge or deploy. `fraim lead events chief --off` stops the event runs; `--every 30m` checks less often.
