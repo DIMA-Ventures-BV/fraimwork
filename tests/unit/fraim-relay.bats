@@ -47,6 +47,7 @@ make_chief() {
   grep -q 'Klaar: het antwoord is Alpha' "$SENT"
   run grep -q 'queue.json' "$SENT"; [ "$status" -eq 1 ]
   grep -q 'Never write ids' "$CLAUDE_ARGS"
+  grep -q 'Never copy labels from the notices' "$CLAUDE_ARGS"
   grep -q 'Goal g9 done' "$CLAUDE_ARGS"
   # The log keeps the ids, so the WhatsApp Claude can route the owner's answer.
   run fraim-relay said
