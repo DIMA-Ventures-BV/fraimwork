@@ -27,7 +27,11 @@ EOF
   chmod +x "$T/bin/"*
   printf 'FRAIM_MODULES=scheduler\n' > "$T/runtime.env"
   export PATH="$T/bin:$BIN:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
+  # A note wakes its lead in the background; only the tests about waking let it.
+  export FRAIM_LEAD_NO_WAKE=1
 }
+
+wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
 
 @test "new writes the brief, the budget and an automation that runs it" {
   run fraim-lead new web --area "the mijnlevensverhalen web app" --at "0 6 * * 1-5"
@@ -317,4 +321,66 @@ EOF
   [ "$status" -eq 0 ]
   run bash "$P" --check sometimes
   [ "$status" -eq 1 ]
+}
+
+@test "a note wakes the lead now, and the woken run is about the note" {
+  fraim-lead new web
+  unset FRAIM_LEAD_NO_WAKE
+  run fraim-lead tell web --from chief -- "Customers ask for a PDF export"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"woken now"* ]]
+  wait_for 'A note from chief in your inbox: Customers ask for a PDF export' "$CLAUDE_ARGS"
+  grep -q 'started early because of this' "$CLAUDE_ARGS"
+  for _ in $(seq 50); do [ ! -e "$FRAIM_LEADS_DIR/web/inbox.md" ] && break; sleep 0.1; done
+  [ ! -e "$FRAIM_LEADS_DIR/web/inbox.md" ]
+  ls "$FRAIM_AUTOMATIONS_DIR"/web/runs/*/trigger.json >/dev/null
+}
+
+@test "--later, a long chain of notes and a paused lead leave the note without waking" {
+  fraim-lead new web
+  unset FRAIM_LEAD_NO_WAKE
+  run fraim-lead tell web --later -- "When you have time"
+  [[ "$output" == *"next run"* ]]
+  FRAIM_LEAD_DEPTH=6 run fraim-lead tell web --from chief -- "Back to you"
+  [[ "$output" == *"next run"* ]]
+  fraim-lead pause web
+  run fraim-lead tell web -- "Paused"
+  [[ "$output" == *"next run"* ]]
+  sleep 0.5
+  [ ! -e "$CLAUDE_ARGS" ]
+  [ "$(grep -c . "$FRAIM_LEADS_DIR/web/inbox.md")" -eq 3 ]
+}
+
+@test "every lead can talk to the chief and the other leads" {
+  fraim-lead new chief --chief
+  fraim-lead new web
+  fraim-lead run web
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
+  [[ "$tools" != *"Bash(fraim-queue prio:*)"* ]]
+  grep -q 'fraim-lead tell chief --from web' "$CLAUDE_ARGS"
+  ! grep -q 'started early' "$CLAUDE_ARGS"
+}
+
+@test "a note from a lead wakes the chief quietly; only the owner's message gets an answer" {
+  fraim-lead new chief --chief
+  FRAIM_LEAD_TRIGGER=manual FRAIM_LEAD_INPUT="A note from web in your inbox: export is done" FAKE_OUTPUT=SILENT run fraim-lead run chief
+  [ "$status" -eq 0 ]
+  grep -q 'only when the owner must act today' "$CLAUDE_ARGS"
+  [ ! -s "$SENT" ]
+}
+
+@test "a lead hears when its goal ends and when the owner decides on its item" {
+  fraim-lead new chief --chief
+  fraim-lead new web
+  fraim-queue add --quiet --goal g3 --lead web --title "Export built" >/dev/null
+  grep -q 'from goal g3: A task you started is done: Export built' "$FRAIM_LEADS_DIR/web/inbox.md"
+  fraim-queue add --quiet --goal g4 --lead web --kind failed --title "Failed: Export" >/dev/null
+  grep -q 'A task you started failed' "$FRAIM_LEADS_DIR/web/inbox.md"
+  fraim-queue add --quiet --goal g5 --lead chief --title "Chief work" >/dev/null
+  [ ! -e "$FRAIM_LEADS_DIR/chief/inbox.md" ]
+  id="$(fraim-queue add --quiet --lead web --kind idea --title "Add dark mode")"
+  fraim-queue reject "$id" --note "not now"
+  grep -q 'from owner: The owner rejected "Add dark mode"' "$FRAIM_LEADS_DIR/web/inbox.md"
+  grep -q 'not now' "$FRAIM_LEADS_DIR/web/inbox.md"
 }

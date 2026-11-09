@@ -194,6 +194,10 @@ export function addItem(opts) {
   }
   writeItem(item)
   if (!opts.quiet) notify(`New in your queue: ${id} ${item.title}\n${queueUrl()}`)
+  // A lead hears at once when a goal it started ends; the chief hears through its queue events.
+  if (item.goal && item.lead && !isChief(item.lead)) {
+    tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`)
+  }
   return item
 }
 
@@ -286,6 +290,9 @@ export function decide(id, verdict, note = '', via = 'cli') {
   // A change to the brain from the command line could come from an agent: tell the owner.
   if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`)
   if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
+  if (item.lead) {
+    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}`)
+  }
   return item
 }
 
@@ -303,6 +310,16 @@ export function setPriority(id, priority) {
 const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim/automations')
 const AUTO_STATE = process.env.FRAIM_AUTO_STATE_DIR || path.join(HOME, '.local/state/fraim/automations')
 const LEADS = process.env.FRAIM_LEADS_DIR || path.join(HOME, 'fraim/leads')
+
+function isChief(lead) {
+  return /^role:\s*chief/m.test(readText(path.join(LEADS, lead, 'lead.md'), 2000))
+}
+
+// A note in the lead's inbox that wakes it now (fraim-lead tell).
+function tellLead(lead, from, text) {
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(lead) || !fs.existsSync(path.join(LEADS, lead, 'lead.md'))) return
+  spawnSync('fraim-lead', ['tell', lead, '--from', from, '--', text], { stdio: 'ignore', timeout: 30000 })
+}
 
 function readText(file, max = 20000) {
   try { return fs.readFileSync(file, 'utf8').slice(0, max) } catch { return '' }
