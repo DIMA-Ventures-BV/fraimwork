@@ -300,6 +300,40 @@ EOF
   grep -q '^running' "$FRAIM_GOALS_DIR/g1/state"
 }
 
+@test "a session that died on a login screen says so, however long the screen is" {
+  cat > "$T/bin/die-now" <<'EOF'
+#!/usr/bin/env bash
+jq '.state = "finished"' "$HC_FAKE/t-g1.json" > "$HC_FAKE/t" && mv "$HC_FAKE/t" "$HC_FAKE/t-g1.json"
+EOF
+  chmod +x "$T/bin/die-now"
+  screen="$(printf 'some output line that fills the screen %.0s\n' $(seq 30))
+Not logged in · Please run /login"
+  FAKE_SEND_HOOK="$T/bin/die-now" FAKE_SCREEN="$screen" FAKE_REPLY="" "$GOAL" start -- x
+  wait_state g1 failed
+  grep -q 'not signed in to Claude' "$FRAIM_GOALS_DIR/g1/state"
+}
+
+@test "a core that stays busy after the start does not fail a goal that runs fine" {
+  mkdir -p "$HC_FAKE"
+  echo 12 > "$HC_FAKE/get-fail"
+  "$GOAL" start -- find flights
+  for _ in $(seq 250); do grep -qE '^(done|failed)' "$FRAIM_GOALS_DIR/g1/state" 2>/dev/null && break; sleep 0.1; done
+  grep -q '^done' "$FRAIM_GOALS_DIR/g1/state"
+}
+
+@test "reconcile sends a failure it could not deliver to the alerts" {
+  mkdir -p "$FRAIM_GOALS_DIR/g1"
+  echo "goal" > "$FRAIM_GOALS_DIR/g1/goal.md"
+  echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  echo "sid-g1" > "$FRAIM_GOALS_DIR/g1/session-id"
+  touch "$OFFLINE"
+  run "$GOAL" reconcile
+  [ "$status" -eq 0 ]
+  grep -q '^failed' "$FRAIM_GOALS_DIR/g1/state"
+  grep -q 'alert Not delivered earlier: Goal g1 failed' "$ALERTS"
+  [ ! -e "$FRAIM_GOALS_DIR/g1/unsent" ]
+}
+
 @test "bad input is a usage error" {
   run "$GOAL" start
   [ "$status" -eq 2 ]

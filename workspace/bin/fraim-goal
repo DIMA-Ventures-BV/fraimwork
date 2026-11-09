@@ -228,9 +228,10 @@ to_queue() {
 
 # Why a goal stopped early, from the text it ended on; empty when it looks like a result.
 # Claude's own error lines are short; a real result that discusses rate limits or OAuth
-# tokens is longer and must not count as a failure.
+# tokens is longer and must not count as a failure. A screen (second argument "screen") is
+# long by nature and is checked whole: it only shows when the session already stopped.
 fail_reason() {
-  [ "${#1}" -le "${FRAIM_GOAL_ERROR_MAX:-400}" ] || return 0
+  [ "${2:-}" = screen ] || [ "${#1}" -le "${FRAIM_GOAL_ERROR_MAX:-400}" ] || return 0
   case "$1" in
     *"Not logged in"*|*"Please run /login"*|*"Invalid API key"*|*"OAuth token"*|*"OAuth session"*|*"could not be refreshed"*|*"authentication_error"*|*"API Error: 401"*|*"401 Unauthorized"*|*"invalid_grant"*|*"ession expired"*)
       echo "the server is not signed in to Claude" ;;
@@ -275,16 +276,18 @@ launch() {
   echo 0 > "$dir/turn"
   # Ready when Claude Code first reports its status.
   hc wait "$id" --timeout "${FRAIM_GOAL_READY:-90}" --json >/dev/null 2>&1 || true
-  wait_known "$id"
+  wait_known "$id" "$dir"
 }
 
-# The terminal's state, asked again while the core does not answer (busy right after a start).
+# The terminal's state, asked again for as long as the core does not answer (busy right after
+# a start): an unknown state never fails a goal that may be running fine. The heartbeat keeps
+# the goal alive meanwhile; the goal's time limit still ends the wait.
 wait_known() {
-  local state tries=0
-  while true; do
-    state="$(term_state "$1")"
-    [ "$state" != unknown ] || [ "$tries" -ge 10 ] && break
-    tries=$((tries + 1))
+  local id="$1" dir="$2" state start
+  start="$(date +%s)"
+  while state="$(term_state "$id")"; [ "$state" = unknown ]; do
+    [ $(( $(date +%s) - start )) -lt "${FRAIM_GOAL_TIMEOUT:-14400}" ] || return 1
+    heartbeat "$dir"
     sleep 1
   done
   [ "$state" = live ]
@@ -376,7 +379,7 @@ cmd_watch() {
         exit 0
       fi
       why="terminal $tstate (get exit $rc)"
-      reason="$(fail_reason "$(screen_text "$id")")"
+      reason="$(fail_reason "$(screen_text "$id")" screen)"
       fail_goal "$id" "$dir" "$chat" "${reason:-the Claude session ended}"
       exit 1
     fi
@@ -406,7 +409,7 @@ cmd_watch() {
         sleep "${FRAIM_GOAL_POLL:-15}"
         continue ;;
       error)
-        reason="$(fail_reason "$(screen_text "$id")")"
+        reason="$(fail_reason "$(screen_text "$id")" screen)"
         fail_goal "$id" "$dir" "$chat" "${reason:-Claude reported an error}"
         exit 1 ;;
       *)
@@ -549,8 +552,13 @@ cmd_reconcile() {
         spawn_watcher "$id" follow ;;
       unknown) ;;
       *)
-        [ "$st" != running ] \
-          || fail_goal "$id" "$dir" "$(cat "$dir/chat" 2>/dev/null)" "the Claude session ended (the server restarted)" ;;
+        [ "$st" = running ] || continue
+        fail_goal "$id" "$dir" "$(cat "$dir/chat" 2>/dev/null)" "the Claude session ended (the server restarted)"
+        # No watcher runs for this goal to try again: what did not go out goes to the alerts.
+        if [ -s "$dir/unsent" ]; then
+          fraim-notify "Not delivered earlier: $(cat "$dir/unsent")" >/dev/null 2>&1
+          rm -f "$dir/unsent"
+        fi ;;
     esac
   done
 }
