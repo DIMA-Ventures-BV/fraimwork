@@ -80,7 +80,10 @@ admit() {
   # A lock directory works on every system and across both containers (one home volume); one
   # left by a killed process is taken over after a minute.
   until mkdir "$state/lock.d" 2>/dev/null; do
-    if [ $(( $(date +%s) - $(mtime "$state/lock.d") )) -ge 60 ]; then rm -rf "$state/lock.d"; continue; fi
+    local held
+    held="$(mtime "$state/lock.d")"
+    # 0: the lock just went away (stat failed); not stale, try again.
+    if [ "$held" -gt 0 ] && [ $(( $(date +%s) - held )) -ge 60 ]; then rm -rf "$state/lock.d"; continue; fi
     tries=$((tries + 1))
     [ "$tries" -lt 300 ] || return 1
     sleep 0.1
