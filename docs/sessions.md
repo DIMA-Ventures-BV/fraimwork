@@ -14,7 +14,11 @@ SSH connection drops, and the owner can look in, answer a question, correct it, 
 
 ## What the owner does
 
-| Want | Laptop | WhatsApp |
+On WhatsApp the owner uses plain words, never ids or commands. The server's Claude (main)
+decides by meaning which session a message is for (`fraim-herdr ls` shows each one with its
+status and question) and passes it on with `fraim-goal send` or `fraim-sessions send`.
+
+| Want | Laptop | WhatsApp (plain words to main) |
 | --- | --- | --- |
 | Start coding work on the server | `fraim session new vertelboek "fix the login bug"` | ask main: "work on vertelboek: fix the login bug" |
 | See all sessions and their status | `fraim session all` | ask "what is running?" |
@@ -26,9 +30,9 @@ SSH connection drops, and the owner can look in, answer a question, correct it, 
 
 The owner gets a WhatsApp message, written by the chief of staff in plain words (docs/queue.md, "One voice on WhatsApp"), when:
 
-- any session asks something or waits for a permission (`s1 needs you: <the question>`),
-- a coding session finishes a turn (`s1 is done.` with Claude's last message),
-- a goal has its result (unchanged from before), or answers a follow-up (`Goal g3 answered.`),
+- a goal or coding session asks something or waits for a permission ("The coding session in vertelboek asks you: ..."),
+- a coding session finishes a turn ("The coding session in vertelboek is done." with Claude's last message),
+- a goal has its result (unchanged from before), or answers a follow-up,
 - main stays on a question screen for more than a minute.
 
 ## How it works
