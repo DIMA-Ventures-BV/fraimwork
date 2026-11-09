@@ -130,6 +130,7 @@ Watchers feed the queue from outside. The examples `mail-requests` (Gmail) and `
 When a chief exists, it writes every message the server sends you on its own. Goals, coding sessions, leads, automations and health checks call `fraim-notify`. `fraim-notify` hands their raw notice to `fraim-relay`, and the chief turns it into one plain message. The message says what the work was about in your words, what happened, what it means and what it advises. It ends with the one question that waits for you. It has no ids (`g7`, `s2`, `q8`) and no reply syntax. You answer in your own words. The server's Claude reads `fraim-relay said`, which logs each message with the notices and ids behind it, and passes your answer to the right goal, session or queue item.
 
 - Notices that arrive within 20 seconds of each other become one message (`FRAIM_RELAY_WAIT`).
+- The owner gets at most one message per 15 minutes (`FRAIM_RELAY_GAP`, seconds). Notices that come in sooner go into the next message. The chief holds back check-ins and questions it already asked.
 - Noise, such as a test or a repeat, can stay unsent (`SILENT`). It is still logged. A question, a failure or a server problem is always sent.
 - When the chief cannot run (not signed in, usage limit, more than 180 seconds), the raw notice goes out, so nothing is lost.
 - Some messages skip the chief and go out word for word: its own digest and answers, rules the brain saved, an approval from the command line, and permission prompts.
