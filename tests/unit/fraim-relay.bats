@@ -9,7 +9,7 @@ setup() {
   export HOME="$T/home" SENT="$T/sent" CLAUDE_ARGS="$T/claude.args" CLAUDE_CALLS="$T/claude.calls"
   export FRAIM_FILES_DIR="$T/home/fraim" FRAIM_LEADS_DIR="$T/home/fraim/leads" FRAIM_GOALS_DIR="$T/home/fraim/goals"
   export FRAIM_SESSIONS_DIR="$T/home/fraim/sessions" FRAIM_RELAY_DIR="$T/home/fraim/relay"
-  export FRAIM_RELAY_SYNC=1 FRAIM_RELAY_WAIT=0 WHATSAPP_OWNER=31600000000
+  export FRAIM_RELAY_SYNC=1 FRAIM_RELAY_WAIT=0 FRAIM_RELAY_GAP=0 WHATSAPP_OWNER=31600000000
   cat > "$T/bin/fraim-claude" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$CLAUDE_ARGS"
@@ -93,6 +93,19 @@ make_chief() {
   [ "$status" -eq 0 ]
   [ ! -e "$SENT" ]
   grep -q '(held back)' "$FRAIM_RELAY_DIR/said.md"
+}
+
+@test "a message waits until the gap since the last one has passed" {
+  make_chief
+  mkdir -p "$FRAIM_RELAY_DIR"
+  date +%s > "$FRAIM_RELAY_DIR/last-sent"
+  start=$(date +%s)
+  FRAIM_RELAY_GAP=2 run fraim-notify "Goal g8 done. Alpha."
+  [ "$status" -eq 0 ]
+  [ $(( $(date +%s) - start )) -ge 1 ]
+  grep -q 'Klaar' "$SENT"
+  grep -q 'Never repeat or list questions' "$CLAUDE_ARGS"
+  [ "$(cat "$FRAIM_RELAY_DIR/last-sent")" -ge "$start" ]
 }
 
 @test "when the chief cannot run, the notice goes out as it is" {
