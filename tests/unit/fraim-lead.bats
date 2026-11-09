@@ -73,6 +73,38 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
   [[ "$output" != *"on_approve\":\"The automation"* ]]
 }
 
+@test "a run streams its steps to a live log, keeps it with the run and answers with the result" {
+  fraim-lead new web
+  cat > "$T/bin/fraim-claude" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGS"
+[ ! -f "$FRAIM_LEADS_DIR/web/.running/live.jsonl" ] || touch "$FRAIM_LEADS_DIR/saw-live"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Looking."}]}}'
+printf '%s\n' '{"type":"result","is_error":false,"result":"Found nothing new."}'
+FAKE
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Found nothing new."* ]]
+  [[ "$output" != *'"type"'* ]]
+  [ -f "$FRAIM_LEADS_DIR/saw-live" ]
+  grep -qx -- '--output-format' "$CLAUDE_ARGS"
+  [ ! -e "$FRAIM_LEADS_DIR/web/.running" ]
+  log="$(ls "$FRAIM_LEADS_DIR"/web/runs/*.md)"
+  grep -qx 'Found nothing new.' "$log"
+  grep -q '"Looking."' "$log.jsonl"
+}
+
+@test "a run whose result is an error fails" {
+  fraim-lead new web
+  cat > "$T/bin/fraim-claude" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' '{"type":"result","is_error":true,"result":"usage limit reached"}'
+FAKE
+  run fraim-lead run web
+  [ "$status" -eq 1 ]
+  grep -q "usage limit" "$FRAIM_LEADS_DIR/web/last"
+}
+
 @test "migrate moves old crontab lines of leads into automations, paused stays paused" {
   mkdir -p "$FRAIM_LEADS_DIR/web" "$FRAIM_LEADS_DIR/ops"
   printf -- '---\nrole: lead\n---\n# Lead: web\n\n## Area\nThe shop.\n' > "$FRAIM_LEADS_DIR/web/lead.md"

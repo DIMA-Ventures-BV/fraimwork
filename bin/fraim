@@ -2134,9 +2134,10 @@ cmd_queue() {
   esac
 }
 
-# fraim queue app: "Fraim Queue.app" in ~/Applications. It wakes the kept tunnel and opens the
-# page in its own window (Chrome's app mode when Chrome is there), so Spotlight and the Dock
-# open the queue like any other app.
+# fraim queue app: "Fraim Queue.app" in ~/Applications, a native Mac app (desktop/queue, built
+# here with swiftc): its own window, the inbox count on the Dock icon and a notice for each new
+# item. It wakes the kept tunnel itself. Without swiftc (no Command Line Tools) the app opens
+# the page in Chrome's app mode instead.
 queue_app() {
   [ "$(uname -s)" = Darwin ] || die "fraim queue app needs macOS"
   local app="$HOME/Applications/Fraim Queue.app" port token tmp
@@ -2144,9 +2145,22 @@ queue_app() {
   [ -f "$(queue_keep_plist)" ] || queue_keep >/dev/null
   port="$(queue_keep_port)"
   token="$(workspace_ssh 'fraim-queue token')" || die "could not read the queue of space $FRAIM_SPACE"
+  pkill -f "$app/Contents/MacOS/" 2>/dev/null || true
   rm -rf "$app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  cat > "$app/Contents/Info.plist" <<EOF
+  if command -v swiftc >/dev/null && [ -f "$REPO/desktop/queue/main.swift" ]; then
+    queue_app_native "$app" "$port" "$token"
+  else
+    queue_app_chrome "$app" "$port" "$token"
+  fi
+  queue_app_icon "$app"
+  [ ! -x /usr/bin/codesign ] || codesign --force --deep -s - "$app" >/dev/null 2>&1 || true
+  touch "$app"
+  say "Made $app. Open it from Spotlight (Cmd+Space, type Fraim Queue) or drag it to the Dock. Remove: fraim queue app --off"
+}
+
+queue_app_plist() {
+  cat > "$1/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -2157,11 +2171,35 @@ queue_app() {
   <key>CFBundleExecutable</key><string>fraim-queue</string>
   <key>CFBundleIconFile</key><string>icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Dictate a message to an agent.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Dictate a message to an agent.</string>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
 </plist>
 EOF
+}
+
+queue_app_native() {
+  local app="$1" port="$2" token="$3" log
+  queue_app_plist "$app"
+  ( umask 077; printf 'http://localhost:%s/?t=%s\n' "$port" "$token" > "$app/Contents/Resources/queue.url" )
+  printf '%s\n' "$(queue_keep_label)" > "$app/Contents/Resources/queue.label"
+  log="$(mktemp)"
+  if ! swiftc -O -o "$app/Contents/MacOS/fraim-queue" "$REPO/desktop/queue/main.swift" >"$log" 2>&1; then
+    printf 'fraim: swiftc could not build the native app (%s); making the Chrome version\n' "$(head -1 "$log")" >&2
+    rm -f "$log" "$app/Contents/Resources/queue.url" "$app/Contents/Resources/queue.label"
+    queue_app_chrome "$app" "$port" "$token"
+    return 0
+  fi
+  rm -f "$log"
+}
+
+queue_app_chrome() {
+  local app="$1" port="$2" token="$3"
+  queue_app_plist "$app"
   cat > "$app/Contents/MacOS/fraim-queue" <<EOF
 #!/bin/sh
 # Made by: fraim queue app. Wakes the tunnel, then opens the queue page in its own window.
@@ -2175,7 +2213,11 @@ fi
 exec open "\$url"
 EOF
   chmod 700 "$app/Contents/MacOS/fraim-queue"
-  # The icon: the page's own mark, drawn large and turned into an .icns with the macOS tools.
+}
+
+# The icon: the page's own mark, drawn large and turned into an .icns with the macOS tools.
+queue_app_icon() {
+  local app="$1" tmp
   tmp="$(mktemp -d)"
   printf '%s' "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'><rect x='64' y='64' width='896' height='896' rx='200' fill='#5e6ad2'/><rect x='256' y='288' width='512' height='96' rx='48' fill='#fff'/><rect x='256' y='480' width='384' height='96' rx='48' fill='#fff' opacity='.8'/><rect x='256' y='672' width='256' height='96' rx='48' fill='#fff' opacity='.55'/></svg>" > "$tmp/icon.svg"
   if qlmanage -t -s 1024 -o "$tmp" "$tmp/icon.svg" >/dev/null 2>&1 && [ -f "$tmp/icon.svg.png" ]; then
@@ -2188,8 +2230,6 @@ EOF
     iconutil -c icns "$tmp/icon.iconset" -o "$app/Contents/Resources/icon.icns" 2>/dev/null || true
   fi
   rm -rf "$tmp"
-  touch "$app"
-  say "Made $app. Open it from Spotlight (Cmd+Space, type Fraim Queue) or drag it to the Dock. Remove: fraim queue app --off"
 }
 
 # fraim queue keep: a launchd agent on the Mac keeps an SSH tunnel to the queue page open on a
