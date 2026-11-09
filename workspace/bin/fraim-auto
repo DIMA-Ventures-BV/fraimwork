@@ -498,6 +498,14 @@ run_once() {
   fi
   printf '%s\n' "$text" > "$run/output.md"
 
+  # 75: fraim-claude found no free memory and did not start Claude (fraim-capacity). Not a
+  # fault of the automation: no failure streak, no alert, no engineer; the next trigger runs it.
+  if [ "$code" -eq 75 ]; then
+    RUN_STATUS=skipped RUN_OUTPUT="the server had no free memory; it runs at the next trigger"
+    printf 'skipped %s\n' "$RUN_OUTPUT" > "$run/status"
+    return 0
+  fi
+
   if [ "$code" -ne 0 ]; then
     local reason
     reason="$(failure_reason "$code" "$text$(tail -c 2000 "$run/stderr.txt" 2>/dev/null)" "$t")"

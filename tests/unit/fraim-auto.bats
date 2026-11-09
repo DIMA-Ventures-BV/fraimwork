@@ -17,6 +17,7 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$CLAUDE_ARGS"
 [ -z "${FAKE_FAIL:-}" ] || { echo "usage limit reached" >&2; exit 1; }
+[ -z "${FAKE_BUSY:-}" ] || { echo "fraim: the server had no free memory" >&2; exit 75; }
 answer="${FAKE_ANSWER:-Two mails need an answer.}"
 echo '{"type":"system","subtype":"init"}'
 jq -cn --arg r "$answer" '{type: "result", subtype: "success", is_error: false, result: $r, total_cost_usd: 0.01, num_turns: 2, duration_ms: 900}'
@@ -135,6 +136,16 @@ model: sonnet' 'Mail since {{since}}. Extra: {{input}}'
   [[ "$output" == *"dry run, nothing delivered"* ]]
   [ ! -s "$SENT" ]
   [ ! -f "$HOME/fraim/outbox.md" ]
+}
+
+@test "a run the server had no memory for is skipped: no alert, no failure streak, no pause" {
+  make_auto busy 'schedule: "0 * * * *"' 'Try.'
+  for _ in 1 2 3 4 5 6; do FAKE_BUSY=1 run "$AUTO" fire busy; done
+  [ "$(grep -c '^alert' "$SENT" 2>/dev/null)" = 0 ] || [ ! -s "$SENT" ]
+  run "$AUTO" list
+  [[ "$output" != *"[paused]"* ]]
+  run "$AUTO" run busy
+  grep -q 'Two mails' "$HOME/fraim/outbox.md"
 }
 
 @test "failures alert once, pause after five, and resume clears it" {

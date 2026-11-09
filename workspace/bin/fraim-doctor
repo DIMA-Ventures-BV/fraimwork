@@ -25,6 +25,10 @@ check "claude-login" logged_in
 token_fresh() { local f="$HOME/.config/fraim/claude-token"; [ ! -s "$f" ] || [ -n "$(find "$f" -mtime -335)" ]; }
 check "claude-token-not-expiring" token_fresh
 check "disk-below-90-percent" sh -c "[ \$(df --output=pcent \"$HOME/fraim\" | tail -1 | tr -dc 0-9) -lt 90 ]"
+# Enough free memory for main, the browser and WhatsApp (fraim-capacity keeps it there; when
+# this fails for long, the server is too small for the work it is given).
+memory_ok() { [ "$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)" -ge "${FRAIM_MEM_RESERVE_MB:-350}" ]; }
+check "memory-headroom" memory_ok
 # The interactive session lives in the workspace container; the scheduler cannot see it.
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "claude-session-running" pgrep -x claude
 # herdr-core holds main, goals and coding sessions (docs/sessions.md).

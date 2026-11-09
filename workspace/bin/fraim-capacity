@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Keeps the server from running out of memory. Every Claude takes 300 to 500 MB; a 4 GB
+# server that starts a few at once swaps until nothing answers (2026-11-09: CPU 200%, 20,000
+# disk reads a second, WhatsApp and SSH gone). So every new Claude except main asks here
+# first, and the supervisor closes idle sessions when memory runs low.
+#
+#   fraim-capacity check          exit 0 when there is room for one more Claude
+#   fraim-capacity admit          let one Claude in when there is room (under a lock, with a
+#                                 short reservation of its memory); exit 1 when there is none
+#   fraim-capacity wait [--max S] admit, waiting (and closing idle sessions) up to S seconds
+#                                 (default 300)
+#   fraim-capacity reclaim        close idle goal and coding-session terminals, oldest kind
+#                                 first, until there is room (they reopen with their memory)
+#   fraim-capacity status [--json]
+#
+# Room means MemAvailable (the kernel's own estimate, host-wide) of at least
+# FRAIM_CLAUDE_MB (default 550) plus FRAIM_MEM_RESERVE_MB (default 350) for main, the browser
+# and WhatsApp. Exit codes: 0 ok, 1 no room, 2 usage.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+usage() { echo "fraim-capacity: $*" >&2; exit 2; }
+
+meminfo="${FRAIM_MEMINFO:-/proc/meminfo}"
+cgroup="${FRAIM_CGROUP_DIR:-/sys/fs/cgroup}"
+state="${FRAIM_CAPACITY_DIR:-$HOME/.local/state/fraim/capacity}"
+goals="${FRAIM_GOALS_DIR:-$HOME/fraim/goals}"
+sessions="${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}"
+
+# The smaller of what the server has free and what this container may still use under its
+# cap (compose mem_limit, set from the server's RAM by install.sh). File cache the kernel can
+# drop (inactive_file) does not count as used: a container full of cache still has room.
+available_mb() {
+  local host max cur inactive
+  host="$(awk '/^MemAvailable:/ { print int($2 / 1024) }' "$meminfo" 2>/dev/null)"
+  host="${host:-0}"
+  max="$(cat "$cgroup/memory.max" 2>/dev/null)"
+  cur="$(cat "$cgroup/memory.current" 2>/dev/null)"
+  if printf '%s' "$max" | grep -Eq '^[0-9]+$' && printf '%s' "$cur" | grep -Eq '^[0-9]+$'; then
+    inactive="$(awk '$1 == "inactive_file" { print $2 }' "$cgroup/memory.stat" 2>/dev/null)"
+    local left=$(( (max - cur + ${inactive:-0}) / 1048576 ))
+    [ "$left" -ge "$host" ] || host="$left"
+  fi
+  echo "$host"
+}
+# Measured on a server (2026-11-09): Claude about 250 to 300 MB, plus about 140 MB for each
+# browser MCP it starts.
+claude_mb() { echo "${FRAIM_CLAUDE_MB:-550}"; }
+need_mb() { echo $(( $(claude_mb) + ${FRAIM_MEM_RESERVE_MB:-350} )); }
+log() { mkdir -p "$HOME/.local/state/fraim" && printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$HOME/.local/state/fraim/capacity.log"; }
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+
+# A Claude that was just let in has not used its memory yet. Each admission leaves a
+# reservation for FRAIM_CAPACITY_HOLD seconds (default 90, about how long a Claude and its MCP
+# servers take to start); others count it as used. The state folder is in the home volume, so
+# the workspace and the scheduler container see the same reservations.
+pending() {
+  local now n=0 f
+  now="$(date +%s)"
+  mkdir -p "$state/held"
+  for f in "$state"/held/*; do
+    [ -e "$f" ] || continue
+    if [ $(( now - $(mtime "$f") )) -lt "${FRAIM_CAPACITY_HOLD:-90}" ]; then n=$((n + 1)); else rm -f "$f"; fi
+  done
+  echo "$n"
+}
+# No /proc/meminfo (not Linux, a laptop test): nothing to measure, so no limit.
+has_room() {
+  [ -r "$meminfo" ] || return 0
+  [ $(( $(available_mb) - $(pending) * $(claude_mb) )) -ge "$(need_mb)" ]
+}
+
+# Lets one Claude in when there is room, under a lock, and reserves its memory. Without the
+# lock, runs that wait together would all see the same free memory and all start at once.
+admit() {
+  local ok=1 tries=0
+  mkdir -p "$state/held"
+  # A lock directory works on every system and across both containers (one home volume); one
+  # left by a killed process is taken over after a minute.
+  until mkdir "$state/lock.d" 2>/dev/null; do
+    local held
+    held="$(mtime "$state/lock.d")"
+    # 0: the lock just went away (stat failed); not stale, try again.
+    if [ "$held" -gt 0 ] && [ $(( $(date +%s) - held )) -ge 60 ]; then rm -rf "$state/lock.d"; continue; fi
+    tries=$((tries + 1))
+    [ "$tries" -lt 300 ] || return 1
+    sleep 0.1
+  done
+  if has_room; then
+    : > "$state/held/$$-$RANDOM-$(date +%s)"
+    ok=0
+  fi
+  rmdir "$state/lock.d" 2>/dev/null
+  return "$ok"
+}
+
+# Recent activity of a goal or session: the newest of its sends and the owner messages about
+# it. Anything touched within FRAIM_RECLAIM_QUIET seconds (default 300) is left alone, so a
+# message just sent or a "done" just reported is never lost by closing the terminal.
+last_activity() {
+  local dir="$1" newest=0 f t
+  for f in "$dir/last-send" "$dir/notified" "$dir/state" "$dir/task"; do
+    t="$(mtime "$f")"
+    [ "$t" -le "$newest" ] || newest="$t"
+  done
+  echo "$newest"
+}
+
+# Terminals that may go: a goal whose result is already in (state done), then a coding
+# session that waits for the owner (idle or done), each quiet for a while. Never one that
+# works or asks something. A run without the owner (FRAIM_HEADLESS=1) closes only goals.
+candidates() {
+  local list name kind status dir now
+  list="$(fraim-herdr ls --json 2>/dev/null)" || return 0
+  now="$(date +%s)"
+  while IFS=$'\t' read -r name kind status; do
+    case "$kind:$status" in
+      goal:done|goal:idle)
+        dir="$goals/$name"
+        [ "$(cut -d' ' -f1 "$dir/state" 2>/dev/null)" = "done" ] || continue ;;
+      session:done|session:idle)
+        [ "${FRAIM_HEADLESS:-}" != 1 ] || continue
+        dir="$sessions/$name" ;;
+      *) continue ;;
+    esac
+    [ $(( now - $(last_activity "$dir") )) -ge "${FRAIM_RECLAIM_QUIET:-300}" ] || continue
+    printf '%s\t%s\n' "$kind" "$name"
+  done < <(jq -r '.[] | [.name, .kind, .status] | @tsv' <<<"$list")
+}
+
+# Closes one terminal only if it is still idle right now and nobody sent it anything since the
+# list was made: a send between the list and the kill would otherwise be lost.
+close_if_idle() {
+  local kind="$1" name="$2" dir st
+  case "$kind" in goal) dir="$goals/$name" ;; *) dir="$sessions/$name" ;; esac
+  st="$(fraim-herdr hc get "$name" --json 2>/dev/null | jq -r '.status.state // ""')"
+  case "$st" in done|idle) ;; *) return 1 ;; esac
+  [ $(( $(date +%s) - $(last_activity "$dir") )) -ge "${FRAIM_RECLAIM_QUIET:-300}" ] || return 1
+  fraim-herdr hc kill "$name" >/dev/null 2>&1 || return 1
+  fraim-herdr hc rm "$name" >/dev/null 2>&1 || true
+}
+
+cmd_reclaim() {
+  local kind name
+  has_room && return 0
+  while IFS=$'\t' read -r kind name; do
+    [ -n "$name" ] || continue
+    close_if_idle "$kind" "$name" || continue
+    log "closed $name to free memory ($(available_mb) MB available)"
+    sleep 2
+    has_room && break
+  done < <(candidates)
+  has_room
+}
+
+# Waits until admit lets this Claude in, closing idle terminals meanwhile.
+cmd_wait() {
+  local max="${1:-300}" waited=0 said=""
+  until admit; do
+    cmd_reclaim >/dev/null 2>&1 && admit && break
+    [ "$waited" -lt "$max" ] || { log "no room after ${max}s for a new Claude"; return 1; }
+    if [ -z "$said" ]; then
+      echo "fraim: waiting for free memory before starting Claude ($(available_mb) MB free, $(need_mb) MB needed)" >&2
+      said=1
+    fi
+    sleep "${FRAIM_CAPACITY_POLL:-10}"
+    waited=$((waited + ${FRAIM_CAPACITY_POLL:-10}))
+  done
+  return 0
+}
+
+cmd_status() {
+  local avail need ok=false count
+  avail="$(available_mb)"; need="$(need_mb)"
+  has_room && ok=true
+  count="$(pgrep -xc claude 2>/dev/null)"
+  if [ "${1:-}" = --json ]; then
+    jq -cn --argjson a "$avail" --argjson n "$need" --argjson ok "$ok" --argjson p "$(pending)" \
+      --argjson c "${count:-0}" \
+      '{available_mb: $a, needed_mb: $n, room: $ok, starting: $p, claude_processes: $c}'
+  else
+    printf 'Free memory: %s MB; one more Claude needs %s MB: %s\n' "$avail" "$need" \
+      "$([ "$ok" = true ] && echo room || echo "no room")"
+  fi
+}
+
+action="${1:-status}"
+[ $# -eq 0 ] || shift
+case "$action" in
+  check) has_room ;;
+  admit) admit ;;
+  wait)
+    max=300
+    if [ "${1:-}" = --max ]; then
+      printf '%s' "${2:-}" | grep -Eq '^[0-9]+$' || usage "--max needs seconds"
+      max="$2"
+    fi
+    cmd_wait "$max" ;;
+  reclaim) cmd_reclaim ;;
+  status) cmd_status "${1:-}" ;;
+  *) usage "check | admit | wait [--max SECONDS] | reclaim | status [--json]" ;;
+esac

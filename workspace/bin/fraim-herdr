@@ -154,6 +154,8 @@ cmd_supervise() {
     cmd_up 2>>"$HOME/.local/state/fraim/herdr.log" || true
     # A goal whose watcher process died (a container restart) gets a new one.
     fraim-goal reconcile >/dev/null 2>>"$HOME/.local/state/fraim/herdr.log" || true
+    # Memory running low: close idle goal and coding-session terminals before it runs out.
+    fraim-capacity check || fraim-capacity reclaim >/dev/null 2>&1 || true
     sleep "${FRAIM_HERDR_CHECK:-30}"
   done
 }
@@ -276,6 +278,8 @@ Answer me here in your own words."
         fi ;;
       done)
         [ "$kind" = session ] || continue
+        # First, so fraim-capacity leaves the session alone while its "done" is written and sent.
+        touch "${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}/$name/notified" 2>/dev/null || true
         # Hide first, then shorten: a cut through a token would keep part of it visible.
         text="$(cmd_last_text "$name" | redact | head -c 1200)"
         tell_owner "$(describe "$name" "$kind" "$rec") is done.
