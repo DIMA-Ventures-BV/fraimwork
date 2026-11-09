@@ -674,7 +674,7 @@ function review(opts) {
         saveRules(next, `review: ${said.length} rule(s) from chat`)
         const saved = said.map((op) => `${op.rule || op.id}: ${op.text}`)
         out.push(`Saved from chat: ${saved.join('; ')}`)
-        notifyOwner(`I saved ${said.length === 1 ? 'a rule' : `${said.length} rules`} from our chat:\n${saved.map((l) => `- ${l}`).join('\n')}\nWrong? Reply *forget ${said[0].rule || said[0].id}*.`)
+        notifyOwner(`I saved ${said.length === 1 ? 'a rule' : `${said.length} rules`} from our chat:\n${saved.map((l) => `- ${l}`).join('\n')}\nWrong? Just tell me and I drop it.`)
       } catch (err) {
         out.push(`Did not save ${said.length} rule(s): ${err.message}`)
       }

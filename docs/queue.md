@@ -53,7 +53,7 @@ The ranking is: priority, then age, so nothing waits forever. The chief of staff
 ### Where you review
 
 - **Page:** `fraim queue` on the laptop opens it. Keys: `j`/`k` move, `a` approve, `r` reject, `d` dismiss, `n` write a note, `v` dictate a note, `1` `2` `3` priority. The page is on the tailnet only and needs the link with the token once (the browser then keeps a cookie). `fraim queue keep` makes it always available on a Mac: a launchd agent keeps an SSH tunnel open on `http://localhost:3109` through restarts of the Mac and the server, so a bookmark always works; `fraim queue keep --off` removes it.
-- **WhatsApp:** `queue`, `ok q3`, `ok q3 <note>`, `no q3 <why>`, `skip q3`, `remember: <preference>`, `leads`.
+- **WhatsApp:** talk in your own words ("what's waiting for me?", "the export looks good", "no, use the brand green", "drop the blog idea"). The server's Claude finds the item and records your decision, with your words as the note. There are no keywords.
 - **Laptop:** `fraim queue list`, `fraim queue approve q3`, `fraim queue reject q3 "why"`.
 
 ## Goals feed the queue

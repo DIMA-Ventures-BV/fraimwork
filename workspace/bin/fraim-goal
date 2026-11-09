@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs a goal: a longer task that works in the background on the server while the
-# always-on session stays free. The owner starts one from WhatsApp ("goal: ..."), the
-# laptop (`fraim goal "..."`) or by asking Claude. The result goes back over WhatsApp.
+# always-on session stays free. The owner asks for it in plain words on WhatsApp (the
+# server's Claude starts it), from the laptop (`fraim goal "..."`) or by asking Claude. The result goes back over WhatsApp.
 #
 #   fraim-goal start [--chat CHAT_ID] [--lead NAME] [--queue qN] [--] TEXT
 #                                                 start in the background, print the id (g1, g2, ...)
@@ -198,7 +198,7 @@ cmd_run() {
     qid="$(to_queue "$id" "$dir" 0)"
     [ -z "$qid" ] || review="
 
-Review it: reply *ok $qid* or *no $qid <what to change>*, or open the queue: $(fraim-queue url 2>/dev/null)"
+Tell me what you think of it in your own words, or open the queue: $(fraim-queue url 2>/dev/null)"
     summary="Goal $id done.
 
 ${output:0:3500}$review"
@@ -214,7 +214,7 @@ ${output:0:3500}$review"
     printf 'failed %s %s\n' "$(date '+%Y-%m-%d %H:%M')" "$reason" > "$dir/state"
     printf 'The goal failed: %s.\n\n%s\n' "$reason" "$output" > "$dir/result.md"
     qid="$(to_queue "$id" "$dir" 1)"
-    [ -z "$qid" ] || review=" To try again with a change, reply *no $qid <what to change>*."
+    [ -z "$qid" ] || review=" To try again with a change, tell me what to change."
     summary="Goal $id failed: $reason. Details: ~/fraim/goals/$id.$review"
   fi
   tell "$chat" "$summary"

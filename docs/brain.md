@@ -4,7 +4,7 @@ The brain is what the server's agents learn about you. You stay in charge of it:
 
 ```
 your reasons in the queue ─┐                         ┌─► rules.md   (goal and lead prompts)
-"remember: ..." ───────────┼─► log.md (evidence) ────┤
+what you tell Claude ──────┼─► log.md (evidence) ────┤
 fraim-brain note ──────────┘    e1, e2, ...          └─► proposals ─► queue ─► you approve ─► applied
 
 goal finishes ─► skill folder ─► fraim-brain skill propose ─► queue ─► you approve ─► ~/.claude/skills
@@ -22,8 +22,8 @@ goal finishes ─► skill folder ─► fraim-brain skill propose ─► queue 
 
 | Who | How | Needs approval |
 |---|---|---|
-| You | `remember: ...` on WhatsApp, `fraim brain note "..."`, or the server Claude when you correct it | No. It applies at once. |
-| You | `forget r4`, `undo rules` on WhatsApp; `fraim brain forget r4`, `fraim brain undo` | No. |
+| You | a preference or correction in your own words on WhatsApp, or `fraim brain note "..."` | No. It applies at once. |
+| You | "drop that rule", "undo the last change" on WhatsApp; `fraim brain forget r4`, `fraim brain undo` | No. |
 | The chat review (every 10 minutes, once a chat pauses) | Claude rereads your new messages and finds lasting preferences by meaning, in any words or language | A preference you stated: no, it applies at once and WhatsApp tells you its id. A correction it generalized: yes, one queue item. |
 | The weekly distill (Sunday 20:00) | Claude reads new evidence and proposes add, change or remove steps | Yes. The proposal is one queue item. |
 
@@ -45,7 +45,7 @@ You never need a keyword. `fraim-brain review` runs every 10 minutes and reads t
 - On its first run it reads the last 2 days of chats, not everything.
 - Its answer is checked like a distill proposal. When the answer is broken, nothing changes and the same messages are read again next time.
 
-`remember: ...` still works as a shortcut that saves at once without waiting for the review.
+A preference you state directly ("from now on, ...") is saved at once without waiting for the review.
 
 ## Rules per lead
 
@@ -63,7 +63,7 @@ The brain only changes skills it installed itself. Your own skills and plugin sk
 
 - Only you decide. Every headless run (goal, lead, automation) is marked by `fraim-claude`, and `fraim-queue approve/reject/dismiss`, `fraim-brain note/forget/undo/apply` and skill installs refuse it. The internal commands (`apply`, `discard`, `skill install/discard`) are also denied to every Claude by the managed settings. An approval of a brain change from the command line sends you a WhatsApp message with *undo rules*. All of this runs as one Unix user, so a run that works hard to get around it could; a separate user per run would close that, and is not built.
 - The chat review uses Sonnet (`FRAIM_BRAIN_MODEL` changes it). A preference it misses still reaches the weekly distill only through the queue, so check `rules` now and then.
-- Whether it helps: `fraim brain stats` (and the end of `rules` on WhatsApp) shows how much work you sent back per week. Brain proposals and skills do not count. That share should go down as the rules grow.
+- Whether it helps: `fraim brain stats` (or ask on WhatsApp how the rules are doing) shows how much work you sent back per week. Brain proposals and skills do not count. That share should go down as the rules grow.
 
 ## Where the design comes from
 

@@ -1,4 +1,4 @@
-// The review queue: WhatsApp shortcuts (owner only) and the web page (token, decisions, media).
+// The review queue web page (token, decisions, media).
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdtemp, writeFile, chmod, mkdir } from 'node:fs/promises'
@@ -8,43 +8,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { parseQueueCommand, queueArgs } from '../../workspace/channel/queue-command.mjs'
 
-const OWNER = '31612345678'
-const msg = (text, sender = OWNER) => ({ type: 'message', sender, text })
 const here = path.dirname(fileURLToPath(import.meta.url))
 const bin = path.join(here, '../../workspace/bin/fraim-queue')
 
-test('queue shortcuts', () => {
-  assert.deepEqual(parseQueueCommand(msg('queue'), OWNER), { action: 'list' })
-  assert.deepEqual(parseQueueCommand(msg('/Leads'), OWNER), { action: 'leads' })
-  assert.deepEqual(parseQueueCommand(msg('ok q3'), OWNER), { action: 'approve', id: 'q3', note: '' })
-  assert.deepEqual(parseQueueCommand(msg('OK Q3 ship it'), OWNER), { action: 'approve', id: 'q3', note: 'ship it' })
-  assert.deepEqual(parseQueueCommand(msg('no q12 use the brand green\nnot blue'), OWNER), {
-    action: 'reject', id: 'q12', note: 'use the brand green\nnot blue',
-  })
-  assert.deepEqual(parseQueueCommand(msg('skip q4'), OWNER), { action: 'dismiss', id: 'q4' })
-  assert.deepEqual(parseQueueCommand(msg('remember: no emoji, ever'), OWNER), { action: 'remember', text: 'no emoji, ever' })
-})
-
-test('queue args', () => {
-  assert.deepEqual(queueArgs({ action: 'reject', id: 'q1', note: 'why' }), ['fraim-queue', ['reject', 'q1', '--note', 'why', '--via', 'whatsapp']])
-  assert.deepEqual(queueArgs({ action: 'approve', id: 'q1', note: '' }), ['fraim-queue', ['approve', 'q1', '--via', 'whatsapp']])
-  assert.deepEqual(queueArgs({ action: 'remember', text: 'x' }), ['fraim-brain', ['note', 'x']])
-  assert.deepEqual(queueArgs(parseQueueCommand(msg('rules'), OWNER)), ['fraim-brain', ['show']])
-  assert.deepEqual(queueArgs(parseQueueCommand(msg('Why R3'), OWNER)), ['fraim-brain', ['why', 'r3']])
-  assert.deepEqual(queueArgs(parseQueueCommand(msg('forget r12'), OWNER)), ['fraim-brain', ['forget', 'r12']])
-  assert.deepEqual(queueArgs(parseQueueCommand(msg('undo rules'), OWNER)), ['fraim-brain', ['undo']])
-  assert.equal(parseQueueCommand(msg('forget it'), OWNER), null)
-  assert.equal(parseQueueCommand(msg('rules', '31600000000'), OWNER), null)
-})
-
-test('only the owner, and normal messages pass through', () => {
-  assert.equal(parseQueueCommand(msg('ok q1', '4915112345678'), OWNER), null)
-  for (const text of ['ok', 'no', 'no abcde', 'yes abcde', 'queue up the songs', 'ok qq', 'remember:  ', 'okay q1', 'chief: customers want an export']) {
-    assert.equal(parseQueueCommand(msg(text), OWNER), null, text)
-  }
-})
 
 const freePort = () =>
   new Promise((resolve) => {

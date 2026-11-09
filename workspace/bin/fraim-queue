@@ -284,7 +284,7 @@ export function decide(id, verdict, note = '', via = 'cli') {
   item.via = via
   writeItem(item)
   // A change to the brain from the command line could come from an agent: tell the owner.
-  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Reply *undo rules*.`)
+  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`)
   if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   return item
 }
