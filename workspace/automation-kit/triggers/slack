@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# usage: slack:channel-name (or slack:C0123ABCD)
+# description: New messages in a Slack channel (for example the channel a production app posts its errors to). The new messages (at most 50, oldest first) are {{input}}.
+# Trigger plugin. $1 is the channel: its name (with or without #) or its id (C0123...). Reads through the secrets
+# proxy service "slack" (fraim secret add slack --upstream https://slack.com --header
+# Authorization --format 'Bearer %s'), a bot token with channels:history and channels:read
+# that is a member of the channel. The first check only remembers where the channel is now.
+# $FRAIM_TRIGGER_STATE is a folder that stays between checks.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  printf '%s' "${2:-}" | grep -Eq '^(#?[a-z0-9][a-z0-9_-]{0,79}|[CG][A-Z0-9]{6,})$' && exit 0
+  echo "'${2:-}' must be a channel: its name (mlv-alerts) or an id like C0123ABCD"; exit 1
+fi
+channel="${1:-}"
+state="${FRAIM_TRIGGER_STATE:?}"
+api() { fraim-api slack "$@" 2>/dev/null; }
+
+# A name (in an automation header a # starts a comment, so it may come without one) is
+# looked up once and remembered; an id (C..., G...) is used as it is.
+id="$channel"
+case "$channel" in
+  [CG][A-Z0-9]*) ;;
+  *)
+    channel="#${channel#\#}"
+    if [ -s "$state/channel-id" ]; then
+      id="$(cat "$state/channel-id")"
+    else
+      name="${channel#\#}" cursor="" id=""
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        page="$(api "/api/conversations.list?limit=200&exclude_archived=true&types=public_channel,private_channel${cursor:+&cursor=$cursor}")" \
+          || { echo "cannot reach Slack (is the slack service set up? fraim secret list)"; exit 1; }
+        [ "$(jq -r '.ok' <<<"$page")" = true ] || { echo "Slack said: $(jq -r '.error // "unknown error"' <<<"$page")"; exit 1; }
+        id="$(jq -r --arg n "$name" '.channels[] | select(.name == $n) | .id' <<<"$page" | head -1)"
+        [ -z "$id" ] || break
+        cursor="$(jq -r '.response_metadata.next_cursor // ""' <<<"$page")"
+        [ -n "$cursor" ] || break
+      done
+      [ -n "$id" ] || { echo "no channel $channel that the Slack bot can see; invite the bot to it"; exit 1; }
+      printf '%s\n' "$id" > "$state/channel-id"
+    fi ;;
+esac
+
+last="$(cat "$state/last-ts" 2>/dev/null)"
+if [ -z "$last" ]; then
+  # First check: start from now, do not replay the channel's history.
+  date +%s > "$state/last-ts"
+  exit 0
+fi
+resp="$(api "/api/conversations.history?channel=$id&oldest=$last&limit=50")" \
+  || { echo "cannot reach Slack (is the slack service set up? fraim secret list)"; exit 1; }
+[ "$(jq -r '.ok' <<<"$resp")" = true ] || { echo "Slack said: $(jq -r '.error // "unknown error"' <<<"$resp")"; exit 1; }
+[ "$(jq '.messages | length' <<<"$resp")" -gt 0 ] || exit 0
+jq -r '.messages | max_by(.ts | tonumber) | .ts' <<<"$resp" > "$state/last-ts"
+# Oldest first; each message on one block, Slack markup left as it is.
+jq -r '.messages | sort_by(.ts | tonumber) | .[] |
+  "[\(.ts | tonumber | strftime("%Y-%m-%d %H:%M"))] \(.text // "" | gsub("\n"; " / "))"' <<<"$resp"
