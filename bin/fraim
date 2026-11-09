@@ -2072,8 +2072,16 @@ cmd_queue() {
   load_config
   local action="${POSITIONAL[0]:-open}"
   case "$action" in
+    keep) queue_keep ;;
     open|url)
       local url start token
+      # A kept tunnel (fraim queue keep) answers on a fixed port; the browser has the cookie.
+      if [ -f "$(queue_keep_plist)" ] && curl -fsS -o /dev/null --max-time 3 "http://localhost:$(queue_keep_port)/health" 2>/dev/null; then
+        token="$(workspace_ssh 'fraim-queue token')" || die "could not read the queue of space $FRAIM_SPACE"
+        url="http://localhost:$(queue_keep_port)/?t=$token"
+        if [ "$action" = url ]; then say "$url"; else open_url "$url"; fi
+        return 0
+      fi
       url="$(workspace_ssh 'fraim-queue url')" || die "could not read the queue of space $FRAIM_SPACE"
       # Public mode publishes the page on the server's 127.0.0.1 only, and a tailnet policy
       # may not open the preview ports: then tunnel the page through SSH, which always works.
@@ -2091,8 +2099,53 @@ cmd_queue() {
     approve|reject)
       [ -n "${POSITIONAL[1]:-}" ] || usage "fraim queue $action ID [NOTE]"
       workspace_ssh "fraim-queue $action $(printf '%q' "${POSITIONAL[1]}") --note $(printf '%q' "${POSITIONAL[*]:2}")" ;;
-    *) usage "fraim queue [open|url|list [--all]|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]" ;;
+    *) usage "fraim queue [open|url|keep [--port N] [--off]|list [--all]|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]" ;;
   esac
+}
+
+# fraim queue keep: a launchd agent on the Mac keeps an SSH tunnel to the queue page open on a
+# fixed port, through logins, sleep and server restarts, so http://localhost:PORT always works.
+queue_keep_label() { printf 'nl.fraim.queue.%s' "$FRAIM_TARGET"; }
+queue_keep_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$(queue_keep_label)"; }
+queue_keep_port() {
+  local p
+  p="$(sed -n 's/.*127\.0\.0\.1:\([0-9]*\):127\.0\.0\.1:3109.*/\1/p' "$(queue_keep_plist)" 2>/dev/null | head -1)"
+  printf '%s' "${p:-3109}"
+}
+queue_keep() {
+  [ "$(uname -s)" = Darwin ] || die "fraim queue keep needs macOS (launchd); on other systems use: fraim queue open"
+  local plist label port token arg args=()
+  plist="$(queue_keep_plist)"; label="$(queue_keep_label)"
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  if [ -n "$(flag off)" ]; then
+    rm -f "$plist"
+    say "The queue page is no longer kept open on this Mac."
+    return 0
+  fi
+  port="$(flag port)"; port="${port:-3109}"
+  printf '%s' "$port" | grep -Eq '^[0-9]{4,5}$' || usage "--port must be a port number like 3109"
+  tunnel stop 3109 >/dev/null 2>&1 || true
+  port_free "$port" || die "port $port is in use on this Mac; pick another one: fraim queue keep --port 3209"
+  token="$(workspace_ssh 'fraim-queue token')" || die "could not read the queue of space $FRAIM_SPACE"
+  # shellcheck disable=SC2046
+  set -- ssh -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$port:127.0.0.1:3109" $(ssh_opts) "claude@$FRAIM_HOST"
+  for arg in "$@"; do args+=("    <string>$(printf '%s' "$arg" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</string>"); done
+  mkdir -p "$(dirname "$plist")" "$RUN_DIR"
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    printf '<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>%s</string>\n  <key>ProgramArguments</key>\n  <array>\n' "$label"
+    printf '%s\n' "${args[@]}"
+    printf '  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n  <key>ThrottleInterval</key>\n  <integer>10</integer>\n'
+    printf '  <key>StandardErrorPath</key>\n  <string>%s/queue-keep.log</string>\n</dict>\n</plist>\n' "$RUN_DIR"
+  } > "$plist"
+  launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchd did not take $plist"
+  local i=0
+  until curl -fsS -o /dev/null --max-time 3 "http://localhost:$port/health" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -lt 15 ] || die "the tunnel did not come up; see $RUN_DIR/queue-keep.log"
+    sleep 1
+  done
+  open_url "http://localhost:$port/?t=$token"
+  say "The queue page now stays open at http://localhost:$port, also after a restart of this Mac or the server. Bookmark it. Undo: fraim queue keep --off"
 }
 
 cmd_lead() {
@@ -2560,6 +2613,7 @@ Operate
                                              automations in ~/fraim/automations (trigger, prompt, output)
   fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
                                              the review queue: goal results, lead ideas, decisions
+  fraim queue keep [--port N] [--off]        keep the queue page open at http://localhost:3109 on this Mac
   fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME
            | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off]
                                              lead agents that watch an area; the chief also routes work all day
