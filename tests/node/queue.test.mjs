@@ -28,8 +28,8 @@ test('queue shortcuts', () => {
 })
 
 test('queue args', () => {
-  assert.deepEqual(queueArgs({ action: 'reject', id: 'q1', note: 'why' }), ['fraim-queue', ['reject', 'q1', '--note', 'why']])
-  assert.deepEqual(queueArgs({ action: 'approve', id: 'q1', note: '' }), ['fraim-queue', ['approve', 'q1']])
+  assert.deepEqual(queueArgs({ action: 'reject', id: 'q1', note: 'why' }), ['fraim-queue', ['reject', 'q1', '--note', 'why', '--via', 'whatsapp']])
+  assert.deepEqual(queueArgs({ action: 'approve', id: 'q1', note: '' }), ['fraim-queue', ['approve', 'q1', '--via', 'whatsapp']])
   assert.deepEqual(queueArgs({ action: 'remember', text: 'x' }), ['fraim-brain', ['note', 'x']])
   assert.deepEqual(queueArgs(parseQueueCommand(msg('rules'), OWNER)), ['fraim-brain', ['show']])
   assert.deepEqual(queueArgs(parseQueueCommand(msg('Why R3'), OWNER)), ['fraim-brain', ['why', 'r3']])

@@ -255,7 +255,9 @@ export function approveText(item, note) {
 }
 
 // The one place where a decision has effects, used by the CLI, the page and WhatsApp.
-export function decide(id, verdict, note = '') {
+// Only the owner decides: a headless Claude run (goal, lead, automation) cannot.
+export function decide(id, verdict, note = '', via = 'cli') {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Error('only the owner decides; a goal, lead or automation cannot approve, reject or dismiss')
   const item = readItem(id)
   if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
   note = String(note || '').trim()
@@ -279,7 +281,10 @@ export function decide(id, verdict, note = '') {
   item.decided = now()
   item.follow_up = followUp
   item.outcome = outcome
+  item.via = via
   writeItem(item)
+  // A change to the brain from the command line could come from an agent: tell the owner.
+  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Reply *undo rules*.`)
   if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   return item
 }
@@ -452,7 +457,7 @@ export function createServer(secret = token()) {
         if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
         const body = await readBody(req)
         if (action[2] === 'priority') return send(res, 200, setPriority(action[1], body.priority))
-        return send(res, 200, decide(action[1], body.verdict, body.note))
+        return send(res, 200, decide(action[1], body.verdict, body.note, 'page'))
       }
       return send(res, 404, { error: 'not found' })
     } catch (err) {
@@ -915,7 +920,7 @@ function main(argv) {
     case 'dismiss': {
       if (!id) usage(`${action} ID`)
       const verdict = { approve: 'approved', reject: 'rejected', dismiss: 'dismissed' }[action]
-      const item = decide(id, verdict, args.note || args._.slice(1).join(' '))
+      const item = decide(id, verdict, args.note || args._.slice(1).join(' '), args.via === 'whatsapp' ? 'whatsapp' : 'cli')
       return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}${item.outcome ? `. ${item.outcome}` : ''}`)
     }
     case 'prio': {

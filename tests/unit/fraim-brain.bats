@@ -302,3 +302,63 @@ EOS
   [ ! -s "$B/rules.md" ]
   [ "$(jq -r '.review.files["p/s.jsonl"] // 0' "$B/state.json")" = 0 ]
 }
+
+@test "a goal, lead or automation cannot change the brain or decide in the queue" {
+  two_events
+  FAKE_OUTPUT='{"ops":[{"op":"add","text":"Never use emoji.","evidence":["e1","e2"]}]}' fraim-brain distill
+  export FRAIM_HEADLESS=1
+  for cmd in "note x" "forget r1" "undo" "apply p1" "discard p1 --note x" "skill install s1" "skill lock x"; do
+    # shellcheck disable=SC2086
+    run fraim-brain $cmd
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"only the owner"* ]]
+  done
+  run fraim-queue approve q1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"only the owner decides"* ]]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = open ]
+  run fraim-brain show
+  [ "$status" -eq 0 ]
+  run fraim-brain skill propose "$T/nothing"
+  [[ "$output" != *"only the owner"* ]]
+}
+
+@test "approving a brain change from the command line tells the owner; WhatsApp and the page do not" {
+  export SENT="$T/sent" FRAIM_QUEUE_QUIET=0
+  printf '#!/usr/bin/env bash\nprintf "notify %%s\\n" "$*" >> "$SENT"\n' > "$T/bin/fraim-notify"
+  chmod +x "$T/bin/fraim-notify"
+  two_events
+  FAKE_OUTPUT='{"ops":[{"op":"add","text":"Never use emoji.","evidence":["e1","e2"]}]}' fraim-brain distill
+  : > "$SENT"
+  fraim-queue approve q1 --via whatsapp
+  [ ! -s "$SENT" ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = whatsapp ]
+  fraim-brain log --verdict rejected --item q9 --title t -- "and no exclamation marks"
+  FAKE_OUTPUT='{"ops":[{"op":"add","text":"No exclamation marks.","evidence":["e3"]}]}' fraim-brain distill
+  : > "$SENT"
+  fraim-queue approve q2
+  grep -q 'q2 was approved from the command line' "$SENT"
+  grep -q 'undo rules' "$SENT"
+}
+
+@test "stats show how often work is sent back per week, and rules shows the trend" {
+  mkdir -p "$FRAIM_QUEUE_DIR"
+  item() { mkdir -p "$FRAIM_QUEUE_DIR/$1"; printf '{"id":"%s","state":"%s","decided":"%s","brain":"%s","skill":""}\n' "$1" "$2" "$3" "${4:-}" > "$FRAIM_QUEUE_DIR/$1/item.json"; }
+  item q1 rejected 2026-11-03T10:00:00Z
+  item q2 approved 2026-11-04T10:00:00Z
+  item q3 rejected 2026-11-10T10:00:00Z
+  item q4 approved 2026-11-11T10:00:00Z
+  item q5 approved 2026-11-12T10:00:00Z
+  item q6 approved 2026-11-12T11:00:00Z
+  item q7 rejected 2026-11-12T12:00:00Z p1
+  item q8 dismissed 2026-11-12T12:00:00Z
+  run fraim-brain stats
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2026-11-09: 1 of 4 (25%)"* ]]
+  [[ "$output" == *"2026-11-02: 1 of 2 (50%)"* ]]
+  fraim-brain note "No emoji"
+  run fraim-brain show
+  [[ "$output" == *"Work sent back, week of 2026-11-09: 1 of 4 (25%); week of 2026-11-02: 1 of 2 (50%)."* ]]
+  run fraim-brain show --for ""
+  [[ "$output" != *"Sent back"* ]]
+}

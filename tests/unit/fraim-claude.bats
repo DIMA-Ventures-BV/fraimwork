@@ -26,3 +26,13 @@ setup() {
   [[ "$output" != *"--dangerously-skip-permissions"* ]]
   [ "${lines[0]}" = "-p" ]
 }
+
+@test "a headless run is marked, so owner-only commands refuse it; a chat session is not" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  printf '#!/usr/bin/env bash\necho "headless=${FRAIM_HEADLESS:-0}"\n' > "$T/bin/claude"
+  unset FRAIM_HEADLESS
+  run fraim-claude -p "hi"
+  [ "$output" = "headless=1" ]
+  run fraim-claude --dangerously-load-development-channels server:whatsapp
+  [ "$output" = "headless=0" ]
+}

@@ -61,9 +61,9 @@ The brain only changes skills it installed itself. Your own skills and plugin sk
 
 ## Limits
 
-- Goals run with full shell access, so a goal could call `fraim-brain apply` itself. The prompts forbid it, and leads do not have the command. The queue is the gate, not a hard boundary.
+- Only you decide. Every headless run (goal, lead, automation) is marked by `fraim-claude`, and `fraim-queue approve/reject/dismiss`, `fraim-brain note/forget/undo/apply` and skill installs refuse it. The internal commands (`apply`, `discard`, `skill install/discard`) are also denied to every Claude by the managed settings. An approval of a brain change from the command line sends you a WhatsApp message with *undo rules*. All of this runs as one Unix user, so a run that works hard to get around it could; a separate user per run would close that, and is not built.
 - The chat review uses Sonnet (`FRAIM_BRAIN_MODEL` changes it). A preference it misses still reaches the weekly distill only through the queue, so check `rules` now and then.
-- No numbers yet on whether the rules reduce rejections. Count your rejections per week in the queue to judge it.
+- Whether it helps: `fraim brain stats` (and the end of `rules` on WhatsApp) shows how much work you sent back per week. Brain proposals and skills do not count. That share should go down as the rules grow.
 
 ## Where the design comes from
 
