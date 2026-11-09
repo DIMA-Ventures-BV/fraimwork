@@ -29,7 +29,8 @@
 | `fraim init` + `fraim deploy` + `install.sh` in public mode on a fresh Ubuntu 24.04 VM (arm64) | Tested: all 5 services up, status correct |
 | Novice setup on an existing server from the skills only (public mode, VM) | Tested by 3 fresh Claude agents in a row; the last pass had no blockers and also handled "is my server ok", opening the server browser and restarting it. Login, WhatsApp and sync were skipped |
 | Browser restart | Tested on the VM: 3 restarts in a row, the browser is up and healthy each time |
-| Server reboot (public mode VM) | Tested: all 5 services and the Claude tmux session come back on their own |
+| Server reboot (public mode VM) | Tested: all 5 services and the Claude tmux session come back on their own (before herdr) |
+| Live sessions in herdr (docs/sessions.md) | Tested on fraim-michael (2026-11-09): main with WhatsApp and Remote Control, a coding session with a question answered on WhatsApp, close and reopen with its memory, a goal with result, queue item and a follow-up answer; the owner got every WhatsApp message. `fraim shell` attach over SSH and a server reboot not tested yet |
 | `fraim update` with rollback | Tested on the VM (tree of 19:29): normal update; a second concurrent update is refused; an interrupted update shows `unfinished_update` and `--recover` repairs it; a broken release is detected and rolled back; a server whose workspace is down is repaired; piped output does not hang and leaves no orphan processes; the browser tunnel picks a free port |
 | Tailscale mode (`tailscale up`, policy, `fraim lock`) | **Not tested end to end** |
 | Syncthing with a real laptop | Not tested |
