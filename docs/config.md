@@ -139,6 +139,14 @@ Limits to know:
 | `fraim config skill new <name>` | Scaffold a skill |
 | `fraim config exec -- <cmd>` | Run a command with this machine's secrets |
 
+## Permissions
+
+Nobody sits at the server to approve a tool, so every Claude there (the always-on session, goals, leads, automations, the brain) runs with `--dangerously-skip-permissions`. `fraim-claude` adds the flag; `fraim-home-setup` sets `skipDangerousModePermissionPrompt` so the session never stops at the warning screen.
+
+- **Still enforced:** the managed deny rules in `/etc/claude-code/managed-settings.json` (key files, `sudo`) and each run's `--disallowedTools`.
+- **No longer a limit:** a run's `--allowedTools` list. A goal or lead can run any command, including on hosts added with `fraim host add`.
+- **Turn it off:** `PERMISSIONS=ask` in the space's `.env`, then `fraim update`. Runs are then limited to their listed tools again, and a missing tool is refused, not asked.
+
 ## What fraimwork does not do
 
 - **Repo config:** a repo's own `.mcp.json`, `.claude/settings.json` and `.claude/skills/` stay in that repo and travel with git.

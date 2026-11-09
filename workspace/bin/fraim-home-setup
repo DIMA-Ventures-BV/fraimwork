@@ -27,6 +27,9 @@ if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 
   jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
         | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)", "mcp__whatsapp__session_command") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
+  # fraim-claude skips permission prompts (PERMISSIONS=all); without this the always-on
+  # session would stop at the "Bypass Permissions mode" warning screen at every start.
+  jq '.skipDangerousModePermissionPrompt = true' "$settings" > "$tmp" && cat "$tmp" > "$settings"
   rm -f "$tmp"
 fi
 
