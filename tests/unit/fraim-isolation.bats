@@ -38,14 +38,14 @@ EOF
     grep -qxF "DOCKER-USER -s $net -m conntrack --ctstate DNAT --ctdir ORIGINAL -j DROP" "$RULES"
   done
   [ "$(grep -c '^INPUT ' "$RULES")" -eq 6 ]
-  ! grep -qxF "$OLD" "$RULES"
+  [ "$(grep -cxF "$OLD" "$RULES")" -eq 0 ]
 }
 
 @test "the old rule that drops replies is removed, after the new one is in place" {
   printf '%s\n%s\n' "$OLD" "$OLD" > "$RULES"
   run "$ISO"
   [ "$status" -eq 0 ]
-  ! grep -qxF "$OLD" "$RULES"
+  [ "$(grep -cxF "$OLD" "$RULES")" -eq 0 ]
   grep -qxF "$NEW" "$RULES"
   # No gap in isolation: the insert of the new rule comes before the first delete.
   ins="$(grep -n "^-I DOCKER-USER -s 172.30.0.0/16" "$LOG" | head -1 | cut -d: -f1)"
@@ -67,4 +67,10 @@ EOF
   [ "$status" -eq 1 ]
   grep -qxF "$OLD" "$RULES"
   [[ "$output" == *"the old rule stays"* ]]
+}
+
+@test "an INPUT rule that cannot be added makes the script fail" {
+  FAIL_INSERT=1 run "$ISO"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not add the rule: INPUT"* ]]
 }

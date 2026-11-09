@@ -4,8 +4,14 @@
 # one space cannot reach another space's SSH, previews, browser view or Syncthing.
 # -w waits for the xtables lock: without it a busy Docker makes a check or delete fail silently.
 for _ in $(seq 60); do iptables -w -L DOCKER-USER -n >/dev/null 2>&1 && break; sleep 1; done
-rule() { iptables -w -C "$@" 2>/dev/null || iptables -w -I "$@"; }
 status=0
+rule() {
+  iptables -w -C "$@" 2>/dev/null || iptables -w -I "$@" || {
+    echo "fraim-isolation: could not add the rule: $*" >&2
+    status=1
+    return 1
+  }
+}
 for src in 172.29.0.0/16 172.30.0.0/16 172.31.0.0/16; do
   rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p tcp -m multiport --dports 22,2222:2226,3100:3149,6080:6084,8384:8388,22000:22004 -j DROP
   rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p udp -m multiport --dports 22000:22004,60000:60090 -j DROP
@@ -15,7 +21,7 @@ for src in 172.29.0.0/16 172.30.0.0/16 172.31.0.0/16; do
   if iptables -w -L DOCKER-USER -n >/dev/null 2>&1; then
     # The new rule first, then the old one out, so isolation never has a gap. When the new
     # rule is not in place, the old one stays: reachable ports matter less than isolation.
-    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT --ctdir ORIGINAL -j DROP
+    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT --ctdir ORIGINAL -j DROP || true
     if ! iptables -w -C DOCKER-USER -s "$src" -m conntrack --ctstate DNAT --ctdir ORIGINAL -j DROP 2>/dev/null; then
       echo "fraim-isolation: could not add the isolation rule for $src; the old rule stays" >&2
       status=1
