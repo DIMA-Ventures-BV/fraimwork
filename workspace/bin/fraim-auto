@@ -9,9 +9,13 @@
 #   fraim-auto run NAME [--dry] [--input T]  run now; --dry prints the answer and delivers nothing
 #   fraim-auto pause NAME | resume NAME      stop or restart its schedule
 #   fraim-auto check [NAME]                  find mistakes in automation.md files
+#   fraim-auto catalog                       every trigger, output and example there is
+#   fraim-auto new NAME [--from EXAMPLE] [--off]  start an automation, empty or from an example
 #   fraim-auto sync                          write the scheduler's crontab from all automations
 #   fraim-auto migrate                       move ~/fraim/jobs into automations (runs at start)
-#   fraim-auto fire NAME                     what the scheduler calls; respects pause and hours
+#   fraim-auto fire NAME | poll NAME         what the scheduler calls; respects pause and hours
+# Triggers and outputs are plugins: the owner's own in ~/fraim/automations/_triggers and
+# _outputs come first, then the built-in ones in /etc/fraim/automation-kit.
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
@@ -23,18 +27,21 @@ autos="${FRAIM_AUTOMATIONS_DIR:-$HOME/fraim/automations}"
 fraim_dir="${FRAIM_FILES_DIR:-$HOME/fraim}"
 state_root="${FRAIM_AUTO_STATE_DIR:-$HOME/.local/state/fraim/automations}"
 crontab_file="${FRAIM_AUTO_CRONTAB:-$HOME/.local/state/fraim/automations.crontab}"
+kit="${FRAIM_AUTO_KIT_DIR:-/etc/fraim/automation-kit}"
+export FRAIM_FILES_DIR="$fraim_dir" FRAIM_MODULES="${FRAIM_MODULES:-}"
 DEFAULT_TOOLS="Read,Glob,Grep,WebSearch"
 DEFAULT_TIMEOUT=1800
+DEFAULT_POLL=5m
 MAX_STREAK=5
+MAX_CHAIN=5
 KEEP_RUNS=100
 KEEP_DAYS=30
-KNOWN_KEYS=" description schedule every tools output timeout model enabled hours remember skill script_only "
-LATER_KEYS=" whatsapp file after webhook mail "
+KNOWN_KEYS=" description schedule every trigger tools output timeout model enabled hours remember skill script_only "
+LATER_KEYS=" whatsapp webhook mail "
 
 usage() { echo "fraim-auto: $*" >&2; exit 2; }
 die() { echo "fraim-auto: $*" >&2; exit 1; }
 now_human() { date '+%Y-%m-%d %H:%M'; }
-has_module() { case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 valid_name() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,47}$'; }
 auto_file() {
@@ -137,15 +144,52 @@ in_hours() {
   else [ "$now" -ge "$from" ] || [ "$now" -lt "$to" ]; fi
 }
 
-safe_path() {
-  case "/$1/" in */../*|*/./*) return 1 ;; esac
-  case "$1" in /*|"") return 1 ;; esac
-  return 0
+trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+
+# --- plugins: ~/fraim/automations/_KIND/TYPE (the owner's) first, then $kit/KIND/TYPE ---
+valid_type() { printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9_-]{0,31}$'; }
+plugin() {
+  valid_type "$2" || return 1
+  local p
+  for p in "$autos/_$1/$2" "$kit/$1/$2"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
 }
+plugin_types() {
+  { ls "$autos/_$1" 2>/dev/null; ls "$kit/$1" 2>/dev/null; } \
+    | while IFS= read -r t; do valid_type "$t" && printf '%s\n' "$t"; done | sort -u
+}
+plugin_meta() { sed -n "s/^# $2: //p" "$1" | head -1; }
+# plugin_exec SECONDS PLUGIN ARGS...: from ~/fraim, with a time limit. A plugin that lost its
+# execute bit in a sync still runs, with bash.
+plugin_exec() {
+  local secs="$1" p="$2" limit=()
+  shift 2
+  ! command -v timeout >/dev/null || limit=(timeout "$secs")
+  if [ -x "$p" ]; then (cd "$fraim_dir" && "${limit[@]}" "$p" "$@")
+  else (cd "$fraim_dir" && "${limit[@]}" bash "$p" "$@"); fi
+}
+# The plugin's own check of the value after the colon. Prints its complaint, if any.
+plugin_problem() {
+  local out
+  out="$(plugin_exec 10 "$1" --check "$2" 2>&1 </dev/null)" && return 0
+  out="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)"
+  [ -n "$out" ] || out="it does not accept the value $2"
+  printf '%s' "$out"
+}
+available() {
+  { [ "$1" != outputs ] || printf 'outbox\nnone\n'; [ "$1" != triggers ] || printf 'after\n'; plugin_types "$1"; } \
+    | sort -u | paste -sd, - | sed 's/,/, /g'
+}
+
+# trigger_type FILE / trigger_arg FILE: "files" and "inbox" for "trigger: files: inbox".
+trigger_type() { local v; v="$(get "$1" trigger)"; trim "${v%%:*}"; }
+trigger_arg() { local v; v="$(get "$1" trigger)"; case "$v" in *:*) trim "${v#*:}" ;; esac; }
 
 # problems NAME: one line per mistake in automation.md. No output means it is fine.
 problems() {
-  local name="$1" f="$autos/$1/automation.md" key v o
+  local name="$1" f="$autos/$1/automation.md" key v o t a p r
   [ -f "$f" ] || { echo "automation.md is missing"; return; }
   if [ "$(head -1 "$f")" = "---" ] && [ "$(awk 'NR > 1 && $0 == "---" { print "y"; exit }' "$f")" != y ]; then
     echo "the header starts with --- but has no closing --- line"
@@ -154,8 +198,13 @@ problems() {
     [ -n "$key" ] || continue
     case "$KNOWN_KEYS" in *" $key "*) continue ;; esac
     case "$LATER_KEYS" in
-      *" $key "*) echo "'$key:' triggers are not available yet; use schedule, every or a manual run" ;;
-      *) echo "unknown setting '$key:' (known: $(printf '%s' "$KNOWN_KEYS" | sed 's/ /, /g; s/^, //; s/, $//'))" ;;
+      *" $key "*) echo "'$key:' triggers are not available yet; use schedule, every, a trigger or a manual run" ;;
+      *)
+        case "$key" in
+          file|files) echo "write a file trigger as 'trigger: files: FOLDER'" ;;
+          after) echo "write it as 'trigger: after: NAME'" ;;
+          *) echo "unknown setting '$key:' (known: $(printf '%s' "$KNOWN_KEYS" | sed 's/ /, /g; s/^, //; s/, $//'))" ;;
+        esac ;;
     esac
   done < <(header "$f" | awk '/^[ \t]*#/ || !/:/ { next } { k = substr($0, 1, index($0, ":") - 1); gsub(/^[ \t]+|[ \t]+$/, "", k); print k }')
   v="$(get "$f" schedule)"
@@ -181,13 +230,38 @@ problems() {
   if ! is_true "$(get "$f" script_only)" && [ -z "$(body "$f" | tr -d '[:space:]')" ]; then
     echo "the prompt is empty: write it below the header"
   fi
+  v="$(get "$f" trigger)"
+  if [ -n "$v" ]; then
+    t="$(trigger_type "$f")" a="$(trigger_arg "$f")"
+    [ -z "$(get "$f" schedule)" ] || echo "use schedule or trigger, not both"
+    if [ "$t" = after ]; then
+      if [ -z "$a" ]; then echo "'trigger: after:' needs the name of another automation"
+      elif [ "$a" = "$name" ]; then echo "an automation cannot run after itself"
+      elif ! valid_name "$a" || [ ! -f "$autos/$a/automation.md" ]; then echo "trigger after: there is no automation '$a'"
+      fi
+      [ -z "$(get "$f" every)" ] || echo "every has no meaning with 'trigger: after:'; it runs right after $a"
+    elif p="$(plugin triggers "$t")"; then
+      r="$(plugin_problem "$p" "$a")" || true
+      [ -z "$r" ] || echo "trigger $t: $r"
+    else
+      echo "unknown trigger '$t' (available: $(available triggers); or add your own in ~/fraim/automations/_triggers)"
+    fi
+  fi
   while IFS= read -r o; do
-    case "$o" in
-      whatsapp|outbox|none) ;;
-      whatsapp:*) [ -n "${o#whatsapp:}" ] || echo "whatsapp: needs a chat id" ;;
-      file:*) safe_path "${o#file:}" || echo "file output '${o#file:}' must be a path inside ~/fraim, like reports/{date}.md" ;;
-      email:*|webhook:*|slack:*) echo "output '${o%%:*}' is not available yet; use whatsapp, file or outbox" ;;
-      *) echo "unknown output '$o' (use whatsapp, whatsapp:CHAT, file:PATH, outbox or none)" ;;
+    t="${o%%:*}" a=""
+    [ "$t" = "$o" ] || a="${o#*:}"
+    if [ "$t" != "$o" ] && [ -z "$a" ]; then echo "output '$t:' needs a value after the colon"; continue; fi
+    case "$t" in
+      outbox|none) ;;
+      *)
+        if p="$(plugin outputs "$t")"; then
+          r="$(plugin_problem "$p" "$a")" || true
+          [ -z "$r" ] || echo "output $t: $r"
+        elif [ "$t" = email ]; then
+          echo "output 'email' is not available yet; use whatsapp, file, webhook or outbox"
+        else
+          echo "unknown output '$t' (available: $(available outputs); or add your own in ~/fraim/automations/_outputs)"
+        fi ;;
     esac
   done < <(outputs "$f")
 }
@@ -199,29 +273,18 @@ sset() { printf '%s\n' "$3" > "$(sdir "$1")/$2"; }
 
 alert() { fraim-notify "$1" >/dev/null 2>&1 || true; }
 
-# Deliver the answer to one output. Prints the reason on failure.
+# Deliver the answer to one output plugin: the answer on stdin, the value after the colon as $1.
+# Prints the reason on failure.
 deliver_one() {
-  local name="$1" o="$2" text="$3" path
-  case "$o" in
-    none|outbox) return 0 ;;
-    whatsapp)
-      FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$name:
-
-$text" >/dev/null 2>&1 || { echo "WhatsApp did not take the message"; return 1; } ;;
-    whatsapp:*)
-      has_module whatsapp || { echo "WhatsApp is not set up on this server"; return 1; }
-      fraim-gateway POST /send "$(jq -cn --arg chat "${o#whatsapp:}" --arg text "$text" '{chat_id: $chat, text: $text}')" >/dev/null 2>&1 \
-        || { echo "WhatsApp did not take the message"; return 1; } ;;
-    file:*)
-      path="${o#file:}"
-      path="${path//\{date\}/$(date +%Y-%m-%d)}"
-      path="${path//\{time\}/$(date +%H%M)}"
-      path="${path//\{name\}/$name}"
-      safe_path "$path" || { echo "file path $path leaves ~/fraim"; return 1; }
-      mkdir -p "$(dirname "$fraim_dir/$path")" && printf '%s\n' "$text" > "$fraim_dir/$path" \
-        || { echo "cannot write ~/fraim/$path"; return 1; } ;;
-    *) echo "unknown output $o"; return 1 ;;
-  esac
+  local name="$1" o="$2" text="$3" run="$4" t a="" p out
+  t="${o%%:*}"
+  [ "$t" = "$o" ] || a="${o#*:}"
+  case "$t" in none|outbox) return 0 ;; esac
+  p="$(plugin outputs "$t")" || { echo "there is no output '$t'"; return 1; }
+  out="$(printf '%s\n' "$text" | FRAIM_AUTOMATION="$name" FRAIM_RUN_DIR="$run" plugin_exec 120 "$p" "$a" 2>&1)" && return 0
+  out="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)"
+  echo "${out:-the $t output stopped with an error}"
+  return 1
 }
 
 # Every answer also goes to ~/fraim/outbox.md (last 100), as scheduled jobs did, so owners
@@ -245,17 +308,19 @@ record_failure() {
   sset "$name" last_status "failed $(now_human) $reason"
   if [ "$streak" -ge "$MAX_STREAK" ] && [ ! -f "$state_root/$name/paused" ]; then
     sset "$name" paused "after $streak failures in a row ($(now_human)): $reason"
-    alert "Automation $name failed $streak times in a row and is paused: $reason. Say \"resume $name\" when it is fixed. Details: $run_rel"
+    alert "Automation $name failed $streak times in a row and is paused: $reason. Say \"resume $name\" when it is fixed.${run_rel:+ Details: $run_rel}"
     sset "$name" last_alert "$reason"
   elif [ "$(sget "$name" last_alert)" != "$reason" ]; then
-    alert "Automation $name failed: $reason. Details: $run_rel"
+    alert "Automation $name failed: $reason.${run_rel:+ Details: $run_rel}"
     sset "$name" last_alert "$reason"
   fi
 }
 
 record_ok() {
-  local name="$1" status="$2"
-  if [ -n "$(sget "$name" last_alert)" ]; then
+  local name="$1" status="$2" last
+  last="$(sget "$name" last_alert)"
+  # A delivery problem is cleared by the next good delivery, not by a good run.
+  if [ -n "$last" ] && [ "${last#delivery: }" = "$last" ]; then
     alert "Automation $name works again."
     rm -f "$state_root/$name/last_alert"
   fi
@@ -395,7 +460,7 @@ run_once() {
   local o reason failed=""
   outputs "$f" | grep -qx none || to_outbox "$name" "$text"
   while IFS= read -r o; do
-    if ! reason="$(deliver_one "$name" "$o" "${text:0:3500}")"; then
+    if ! reason="$(deliver_one "$name" "$o" "$text" "$run")"; then
       failed="$failed${failed:+; }$o: $reason"
     fi
   done < <(outputs "$f")
@@ -407,7 +472,25 @@ run_once() {
     fi
   else
     echo ok > "$run/delivery"
+    case "$(sget "$name" last_alert)" in
+      "delivery: "*) alert "Automation $name delivers its answers again."; rm -f "$state_root/$name/last_alert" ;;
+    esac
   fi
+  run_followers "$name" "$run/output.md"
+}
+
+# Runs every automation with "trigger: after: NAME", with this answer as its {{input}}.
+# A chain never runs an automation twice and stops after MAX_CHAIN links, so automations that
+# follow each other cannot loop.
+run_followers() {
+  local leader="$1" out="$2" n f chain="${FRAIM_AUTO_CHAIN:-} $1 "
+  [ "$(printf '%s' "$chain" | wc -w)" -le "$MAX_CHAIN" ] || return 0
+  while IFS= read -r n; do
+    case "$chain" in *" $n "*) continue ;; esac
+    f="$autos/$n/automation.md"
+    [ "$(trigger_type "$f")" = after ] && [ "$(trigger_arg "$f")" = "$leader" ] || continue
+    FRAIM_AUTO_CHAIN="$chain" "$0" follow "$n" "$leader" "$out" >/dev/null 2>&1 || true
+  done < <(names)
 }
 
 # The workspace and the scheduler container share the state folder but not their process
@@ -421,13 +504,13 @@ lock_held() {
   [ -z "$(find "$lock" -maxdepth 0 -mmin +$(( t / 60 + 5 )) 2>/dev/null)" ]
 }
 
-# Runs NAME with a lock, so a trigger during a run waits for one more run instead of stacking.
-cmd_run() {
-  local name="$1" trigger="$2" input="$3" dry="$4" f problems_found lock
-  f="$(auto_file "$name")" || exit $?
+# gate NAME FILE AUTO: exits when NAME must not run now. A mistake blocks every run; a run
+# that no person started (AUTO=1) also stops at enabled: false, a pause and the hours.
+gate() {
+  local name="$1" f="$2" auto="$3" problems_found
   problems_found="$(problems "$name")"
   if [ -n "$problems_found" ]; then
-    if [ "$trigger" = schedule ]; then
+    if [ "$auto" = 1 ]; then
       sset "$name" last_status "blocked $(now_human) $(printf '%s' "$problems_found" | head -1)"
       if [ "$(sget "$name" last_alert)" != "blocked: $problems_found" ]; then
         alert "Automation $name did not run, its automation.md has a mistake: $(printf '%s' "$problems_found" | paste -sd ';' - | sed 's/;/; /g')"
@@ -437,15 +520,24 @@ cmd_run() {
     printf 'Automation %s has a mistake in automation.md:\n%s\n' "$name" "$problems_found" >&2
     exit 1
   fi
-  if [ "$trigger" = schedule ]; then
+  if [ "$auto" = 1 ]; then
     is_false "$(get "$f" enabled)" && exit 0
     [ ! -f "$state_root/$name/paused" ] || exit 0
     in_hours "$(get "$f" hours)" || exit 0
   fi
+  return 0
+}
+
+# Runs NAME with a lock, so a trigger during a run waits for one more run instead of stacking.
+cmd_run() {
+  local name="$1" trigger="$2" input="$3" dry="$4" auto="${5:-0}" f lock
+  f="$(auto_file "$name")" || exit $?
+  gate "$name" "$f" "$auto"
   lock="$(sdir "$name")/lock"
   if ! mkdir "$lock" 2>/dev/null; then
     if lock_held "$lock" "$f"; then
-      : > "$state_root/$name/queued"
+      [ -z "$input" ] || printf '%s\n' "$input" >> "$state_root/$name/queued"
+      [ -f "$state_root/$name/queued" ] || : > "$state_root/$name/queued"
       echo "Automation $name is running; it runs once more when this run ends."
       exit 0
     fi
@@ -457,7 +549,9 @@ cmd_run() {
 
   RUN_STATUS="" RUN_OUTPUT=""
   run_once "$name" "$trigger" "$input" "$dry"
+  # A queued run gets the input that arrived during this run (new files, a page change).
   while [ -f "$state_root/$name/queued" ] && [ "$dry" != 1 ]; do
+    input="$(cat "$state_root/$name/queued")"
     rm -f "$state_root/$name/queued"
     run_once "$name" "$trigger" "$input" 0
   done
@@ -472,10 +566,52 @@ cmd_run() {
   esac
 }
 
+# The scheduler calls this for an automation with a trigger plugin. The plugin prints what is
+# new; when it prints something, the automation runs once with all of it as {{input}}.
+cmd_poll() {
+  local name="$1" f t a p lock state events code reason
+  f="$(auto_file "$name")" || exit $?
+  gate "$name" "$f" 1
+  t="$(trigger_type "$f")" a="$(trigger_arg "$f")"
+  [ -n "$t" ] && [ "$t" != after ] || exit 0
+  p="$(plugin triggers "$t")" || exit 1
+  lock="$(sdir "$name")/poll.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    [ -n "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || exit 0
+    rm -rf "$lock"; mkdir "$lock" 2>/dev/null || exit 0
+  fi
+  # shellcheck disable=SC2064
+  trap "rm -rf '$lock'" EXIT
+  state="$(sdir "$name")/trigger"
+  mkdir -p "$state"
+  events="$(FRAIM_AUTOMATION="$name" FRAIM_TRIGGER_STATE="$state" plugin_exec 120 "$p" "$a" 2>"$state/stderr" </dev/null)"
+  code=$?
+  rm -rf "$lock"; trap - EXIT
+  if [ "$code" -ne 0 ]; then
+    reason="$(cat "$state/stderr" 2>/dev/null; printf '%s\n' "$events")"
+    reason="$(printf '%s\n' "$reason" | grep -v '^[[:space:]]*$' | tail -1)"
+    record_failure "$name" "the $t trigger failed: ${reason:-exit code $code}" ""
+    echo "Automation $name: the $t trigger failed: ${reason:-exit code $code}" >&2
+    exit 1
+  fi
+  case "$(sget "$name" last_alert)" in
+    "the $t trigger failed"*)
+      alert "Automation $name works again."
+      rm -f "$state_root/$name/last_alert"
+      sset "$name" streak 0 ;;
+  esac
+  events="$(printf '%s\n' "$events" | grep -v '^[[:space:]]*$' | head -50)"
+  [ -n "$events" ] || exit 0
+  cmd_run "$name" "$t" "${events:0:8000}" 0 1
+}
+
 trigger_of() {
   local f="$1" c
   c="$(get "$f" schedule)"
-  if [ -n "$c" ]; then printf 'schedule %s' "$c"
+  if [ -n "$(get "$f" trigger)" ]; then
+    printf '%s: %s' "$(trigger_type "$f")" "$(trigger_arg "$f")"
+    [ "$(trigger_type "$f")" = after ] || printf ' (checked every %s)' "$(get "$f" every | grep . || echo "$DEFAULT_POLL")"
+  elif [ -n "$c" ]; then printf 'schedule %s' "$c"
   elif [ -n "$(get "$f" every)" ]; then printf 'every %s' "$(get "$f" every)"
   else printf 'manual'; fi
   [ -z "$(get "$f" hours)" ] || printf ' (%s)' "$(get "$f" hours)"
@@ -556,6 +692,14 @@ cmd_sync() {
     [ -n "$n" ] || continue
     f="$autos/$n/automation.md"
     is_false "$(get "$f" enabled)" && continue
+    if [ -n "$(get "$f" trigger)" ]; then
+      [ "$(trigger_type "$f")" != after ] || continue
+      c="$(every_cron "$(get "$f" every | grep . || echo "$DEFAULT_POLL")")"
+      [ -n "$c" ] || c="*/5 * * * *"
+      printf '%s fraim-auto poll %s\n' "$c" "$n" >> "$tmp"
+      count=$((count + 1))
+      continue
+    fi
     c="$(cron_of "$f")"
     [ -n "$c" ] || continue
     if ! valid_cron "$c"; then
@@ -575,6 +719,60 @@ cmd_sync() {
     return 0
   fi
   [ "$quiet" = --quiet ] || echo "Scheduler already up to date: $count scheduled automation(s)."
+}
+
+cmd_catalog() {
+  local t p src ex
+  printf 'Triggers (trigger: TYPE: VALUE), checked every 5m or as often as "every:" says:\n'
+  printf '  %-26s %s\n' "after:NAME" "Right after automation NAME answered; its answer is {{input}}. (built in)"
+  for t in $(plugin_types triggers); do
+    p="$(plugin triggers "$t")"; src=built-in
+    case "$p" in "$autos"/*) src=yours ;; esac
+    printf '  %-26s %s (%s)\n' "$(plugin_meta "$p" usage | grep . || echo "$t:VALUE")" "$(plugin_meta "$p" description)" "$src"
+  done
+  printf '  Without a trigger: "schedule: <cron>", "every: 30m", or only by hand.\n\nOutputs (output: a, b):\n'
+  for t in $(plugin_types outputs); do
+    p="$(plugin outputs "$t")"; src=built-in
+    case "$p" in "$autos"/*) src=yours ;; esac
+    printf '  %-26s %s (%s)\n' "$(plugin_meta "$p" usage | grep . || echo "$t:VALUE")" "$(plugin_meta "$p" description)" "$src"
+  done
+  printf '  %-26s %s\n' outbox "Only ~/fraim/outbox.md, where every answer also goes. (built in)" none "Nowhere; only the run history. (built in)"
+  printf '\nExamples (fraim-auto new NAME --from EXAMPLE):\n'
+  for ex in "$kit"/examples/*/; do
+    [ -f "$ex/automation.md" ] || continue
+    printf '  %-26s %s\n' "$(basename "$ex")" "$(get "$ex/automation.md" description)"
+  done
+}
+
+cmd_new() {
+  local name="$1" from="" off=0 dest src
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) [ $# -ge 2 ] || usage "--from needs an example name"; from="$2"; shift 2 ;;
+      --off) off=1; shift ;;
+      *) usage "unknown option $1" ;;
+    esac
+  done
+  valid_name "$name" || usage "'$name' is not an automation name (lowercase letters, digits, - and _)"
+  dest="$autos/$name"
+  [ ! -e "$dest" ] || die "automation $name already exists: $dest/automation.md"
+  if [ -n "$from" ]; then
+    src="$kit/examples/$from"
+    valid_name "$from" && [ -f "$src/automation.md" ] || die "no example $from (fraim-auto catalog lists them)"
+    mkdir -p "$dest"
+    cp "$src/automation.md" "$dest/automation.md"
+    [ ! -f "$src/check.sh" ] || cp "$src/check.sh" "$dest/check.sh"
+  else
+    mkdir -p "$dest"
+    printf -- '---\ndescription: \noutput: whatsapp\n---\nWrite the task here.\n\nIf there is nothing worth reporting, answer with exactly: SILENT\n' > "$dest/automation.md"
+  fi
+  if [ "$off" = 1 ]; then
+    { echo ---; echo 'enabled: false'; tail -n +2 "$dest/automation.md"; } > "$dest/automation.md.new" \
+      && mv "$dest/automation.md.new" "$dest/automation.md"
+  fi
+  # shellcheck disable=SC2088
+  echo "Made ~/fraim/automations/$name/automation.md. Change it, then: fraim-auto check $name; fraim-auto run $name --dry"
 }
 
 # Moves each "<cron> fraim-job <name>" line of ~/fraim/jobs/crontab into an automation, once.
@@ -627,12 +825,18 @@ case "$action" in
       esac
     done
     cmd_run "$name" manual "$input" "$dry" ;;
-  fire) [ $# -eq 1 ] || usage "fire NAME"; cmd_run "$1" schedule "" 0 ;;
+  fire) [ $# -eq 1 ] || usage "fire NAME"; cmd_run "$1" schedule "" 0 1 ;;
+  poll) [ $# -eq 1 ] || usage "poll NAME"; cmd_poll "$1" ;;
+  follow)
+    [ $# -eq 3 ] || usage "follow NAME LEADER ANSWER_FILE"
+    cmd_run "$1" "after:$2" "$(cat "$3" 2>/dev/null)" 0 1 ;;
   pause) [ $# -eq 1 ] || usage "pause NAME"; cmd_pause "$1" ;;
   resume) [ $# -eq 1 ] || usage "resume NAME"; cmd_resume "$1" ;;
   check) cmd_check "$@" ;;
+  catalog|plugins|examples) cmd_catalog ;;
+  new) [ $# -ge 1 ] || usage "new NAME [--from EXAMPLE] [--off]"; cmd_new "$@" ;;
   sync) cmd_sync "${1:-}" ;;
   migrate) cmd_migrate ;;
-  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) usage "unknown command '$action' (list, show, runs, run, pause, resume, check, sync, migrate)" ;;
+  -h|--help|help) awk 'NR > 1 && /^set /{ exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+  *) usage "unknown command '$action' (list, show, runs, run, pause, resume, check, catalog, new, sync, migrate)" ;;
 esac

@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # workspace/bin/fraim-auto with a fake fraim-claude (stream-json), fraim-notify and
-# fraim-gateway: the file format, checks, runs, outputs, failures, the crontab and migration.
+# fraim-gateway: the file format, checks, runs, outputs, failures, the crontab and migration,
+# and the plugins: the built-in ones in workspace/automation-kit and the owner's own.
 
 setup() {
   AUTO="$BATS_TEST_DIRNAME/../../workspace/bin/fraim-auto"
@@ -11,6 +12,7 @@ setup() {
   export FRAIM_AUTOMATIONS_DIR="$HOME/fraim/automations" FRAIM_FILES_DIR="$HOME/fraim"
   export FRAIM_AUTO_STATE_DIR="$HOME/.local/state/fraim/automations"
   export FRAIM_AUTO_CRONTAB="$HOME/.local/state/fraim/automations.crontab"
+  export FRAIM_AUTO_KIT_DIR="$BATS_TEST_DIRNAME/../../workspace/automation-kit"
   cat > "$T/bin/fraim-claude" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$CLAUDE_ARGS"
@@ -244,4 +246,173 @@ enabled: false' 'Off.'
   [ "$status" -eq 2 ]
   run "$AUTO" show 'a b'
   [ "$status" -eq 2 ]
+}
+
+@test "an output plugin of the owner is checked, gets the answer on stdin and shows in the catalog" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_outputs"
+  cat > "$FRAIM_AUTOMATIONS_DIR/_outputs/slack" <<'EOF'
+# usage: slack:CHANNEL
+# description: A Slack channel.
+if [ "$1" = --check ]; then case "$2" in '#'*) exit 0 ;; *) echo "a channel starts with #"; exit 1 ;; esac; fi
+printf '%s|%s|' "$FRAIM_AUTOMATION" "$1" >> "$SENT"; cat >> "$SENT"
+EOF
+  make_auto team 'output: slack: general' 'Post.'
+  run "$AUTO" check team
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"output slack: a channel starts with #"* ]]
+  make_auto team 'output: slack:#general' 'Post.'
+  run "$AUTO" run team
+  [ "$status" -eq 0 ]
+  grep -q '^team|#general|Two mails need an answer.' "$SENT"
+  [ "$(cat "$(last_run team)/delivery")" = ok ]
+  run "$AUTO" catalog
+  [[ "$output" == *"slack:CHANNEL"*"A Slack channel. (yours)"* ]]
+  [[ "$output" == *"file:PATH"*"(built-in)"* ]]
+  [[ "$output" == *"inbox-watch"* ]]
+}
+
+@test "a failing output plugin alerts once with the plugin's own reason" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_outputs"
+  printf '[ "$1" = --check ] && exit 0\necho "the Slack token expired"\nexit 1\n' > "$FRAIM_AUTOMATIONS_DIR/_outputs/slack"
+  make_auto team 'output: slack:#x' 'Post.'
+  run "$AUTO" run team
+  run "$AUTO" run team
+  [ "$(grep -c '^alert' "$SENT")" -eq 1 ]
+  grep -q 'did not arrive everywhere: slack:#x: the Slack token expired' "$SENT"
+}
+
+@test "check names a wrong trigger in plain words" {
+  make_auto a 'trigger: telepathy: x' 'A.'
+  make_auto b 'trigger: after: b' 'B.'
+  make_auto c 'trigger: after: nobody' 'C.'
+  make_auto d 'trigger: files: ../etc
+schedule: "0 8 * * *"' 'D.'
+  make_auto e 'file: inbox' 'E.'
+  run "$AUTO" check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unknown trigger 'telepathy' (available: after, files, page"* ]]
+  [[ "$output" == *"cannot run after itself"* ]]
+  [[ "$output" == *"there is no automation 'nobody'"* ]]
+  [[ "$output" == *"trigger files: '../etc' must be a folder inside ~/fraim"* ]]
+  [[ "$output" == *"use schedule or trigger, not both"* ]]
+  [[ "$output" == *"trigger: files: FOLDER"* ]]
+}
+
+@test "a files trigger is polled by the scheduler and runs once with the new files" {
+  mkdir -p "$HOME/fraim/inbox"
+  : > "$HOME/fraim/inbox/old.pdf"
+  make_auto inbox 'trigger: files: inbox
+every: 10m' 'New: {{input}}'
+  run "$AUTO" sync
+  grep -qx '\*/10 \* \* \* \* fraim-auto poll inbox' "$FRAIM_AUTO_CRONTAB"
+  run "$AUTO" list
+  [[ "$output" == *"files: inbox (checked every 10m)"* ]]
+  run "$AUTO" poll inbox
+  [ "$status" -eq 0 ]
+  [ ! -f "$CLAUDE_ARGS" ]
+  run "$AUTO" poll inbox
+  [ ! -f "$CLAUDE_ARGS" ]
+  : > "$HOME/fraim/inbox/invoice.pdf"
+  : > "$HOME/fraim/inbox/.hidden"
+  run "$AUTO" poll inbox
+  [ -f "$CLAUDE_ARGS" ]
+  p="$(last_run inbox)/prompt.md"
+  grep -q 'New: new file: ~/fraim/inbox/invoice.pdf' "$p"
+  ! grep -q 'old.pdf\|hidden' "$p"
+  [ "$(jq -r .trigger "$(last_run inbox)/trigger.json")" = files ]
+}
+
+@test "a failing trigger of the owner alerts once and says when it works again" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_triggers"
+  printf '[ "$1" = --check ] && exit 0\n[ -f "$HOME/ok" ] && exit 0\necho "the shop API answered 503" >&2\nexit 1\n' > "$FRAIM_AUTOMATIONS_DIR/_triggers/shop"
+  make_auto orders 'trigger: shop: orders' 'Orders: {{input}}'
+  run "$AUTO" poll orders
+  [ "$status" -eq 1 ]
+  run "$AUTO" poll orders
+  [ "$(grep -c '^alert' "$SENT")" -eq 1 ]
+  grep -q 'the shop trigger failed: the shop API answered 503' "$SENT"
+  : > "$HOME/ok"
+  run "$AUTO" poll orders
+  [ "$status" -eq 0 ]
+  grep -q 'orders works again' "$SENT"
+  [ ! -f "$CLAUDE_ARGS" ]
+}
+
+@test "after: runs the follower with the leader's answer, and not after SILENT" {
+  make_auto leader '' 'Lead.'
+  make_auto follower 'trigger: after: leader
+output: file: notes/{name}.md' 'Earlier answer: {{input}}'
+  run "$AUTO" sync
+  ! grep -q 'follower' "$FRAIM_AUTO_CRONTAB"
+  run "$AUTO" run leader
+  [ "$status" -eq 0 ]
+  grep -q 'Earlier answer: Two mails need an answer.' "$(last_run follower)/prompt.md"
+  [ "$(jq -r .trigger "$(last_run follower)/trigger.json")" = after:leader ]
+  [ -f "$HOME/fraim/notes/follower.md" ]
+  rm -rf "$FRAIM_AUTOMATIONS_DIR/follower/runs"
+  FAKE_ANSWER=SILENT run "$AUTO" run leader
+  [ ! -d "$FRAIM_AUTOMATIONS_DIR/follower/runs" ]
+}
+
+@test "automations that follow each other run once each, not in a loop" {
+  make_auto ping 'trigger: after: pong' 'Ping.'
+  make_auto pong 'trigger: after: ping' 'Pong.'
+  run "$AUTO" run ping
+  [ "$status" -eq 0 ]
+  [ "$(find "$FRAIM_AUTOMATIONS_DIR/ping/runs" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]
+  [ "$(find "$FRAIM_AUTOMATIONS_DIR/pong/runs" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]
+  [ ! -f "$FRAIM_AUTO_STATE_DIR/ping/queued" ]
+}
+
+@test "the webhook output posts JSON, and a missing variable is named" {
+  cat > "$T/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf 'curl %s ' "${@: -1}" >> "$SENT"; cat >> "$SENT"; echo >> "$SENT"
+EOF
+  chmod +x "$T/bin/curl"
+  make_auto hook 'output: webhook: https://hooks.example.com/x' 'Hook.'
+  run "$AUTO" run hook
+  grep -q '^curl https://hooks.example.com/x {"text":"Two mails need an answer.","automation":"hook"}' "$SENT"
+  make_auto hook2 'output: webhook: SLACK_URL' 'Hook.'
+  run "$AUTO" run hook2
+  grep -q 'the variable SLACK_URL is not set' "$SENT"
+  make_auto hook3 'output: webhook: http://plain' 'Hook.'
+  run "$AUTO" check hook3
+  [[ "$output" == *"must be an https:// URL"* ]]
+}
+
+@test "new starts an automation from every example, and each one passes check" {
+  run "$AUTO" new mine
+  [ "$status" -eq 0 ]
+  run "$AUTO" check mine
+  [ "$status" -eq 0 ]
+  run "$AUTO" new mine
+  [ "$status" -eq 1 ]
+  for ex in "$FRAIM_AUTO_KIT_DIR"/examples/*/; do
+    e="$(basename "$ex")"
+    run "$AUTO" new "my-$e" --from "$e" --off
+    [ "$status" -eq 0 ]
+    run "$AUTO" check "my-$e"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/my-$e/automation.md"
+  done
+  [ -f "$FRAIM_AUTOMATIONS_DIR/my-disk-space/check.sh" ]
+  run "$AUTO" new x --from nothing
+  [ "$status" -eq 1 ]
+}
+
+@test "the page trigger reports new lines only after it changed" {
+  printf '<html><script>var t=1;</script><p>Price 10</p></html>' > "$T/page.html"
+  printf '#!/usr/bin/env bash\ncat "%s"\n' "$T/page.html" > "$T/bin/curl"
+  chmod +x "$T/bin/curl"
+  st="$T/st"; mkdir -p "$st"
+  run env FRAIM_TRIGGER_STATE="$st" "$FRAIM_AUTO_KIT_DIR/triggers/page" https://shop.example.com
+  [ -z "$output" ]
+  printf '<html><script>var t=2;</script><p>Price 10</p></html>' > "$T/page.html"
+  run env FRAIM_TRIGGER_STATE="$st" "$FRAIM_AUTO_KIT_DIR/triggers/page" https://shop.example.com
+  [ -z "$output" ]
+  printf '<html><p>Price 12</p></html>' > "$T/page.html"
+  run env FRAIM_TRIGGER_STATE="$st" "$FRAIM_AUTO_KIT_DIR/triggers/page" https://shop.example.com
+  [[ "$output" == *"changed: https://shop.example.com"*"Price 12"* ]]
 }

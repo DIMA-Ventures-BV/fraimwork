@@ -51,6 +51,7 @@ COPY managed-CLAUDE.md /etc/claude-code/CLAUDE.md
 COPY system.crontab /etc/fraim/system.crontab
 COPY skel/ /etc/fraim/skel/
 COPY skel-jobs/ /etc/fraim/skel-jobs/
+COPY automation-kit/ /etc/fraim/automation-kit/
 COPY bin/ /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/fraim-*
 

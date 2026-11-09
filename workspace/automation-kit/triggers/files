@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# usage: files:FOLDER
+# description: New files in a folder inside ~/fraim (subfolders too), like files:inbox. The new paths are {{input}}.
+# Trigger plugin. $1 is the folder. It prints one line per new file, or nothing.
+# $FRAIM_TRIGGER_STATE is a folder that stays between checks; the first check only remembers what is there.
+set -uo pipefail
+safe() {
+  case "/$1/" in */../*|*/./*) return 1 ;; esac
+  case "$1" in /*|"") return 1 ;; esac
+}
+if [ "${1:-}" = --check ]; then
+  safe "${2:-}" || { echo "'${2:-}' must be a folder inside ~/fraim, like inbox"; exit 1; }
+  exit 0
+fi
+base="${FRAIM_FILES_DIR:-$HOME/fraim}"
+dir="${1:-}"
+safe "$dir" || { echo "folder $dir leaves ~/fraim"; exit 1; }
+state="${FRAIM_TRIGGER_STATE:?}"
+[ -d "$base/$dir" ] || { echo "the folder ~/fraim/$dir does not exist"; exit 1; }
+now="$(mktemp)"
+(cd "$base" && find "$dir" -type f ! -name '.*' ! -path '*/.*' ! -name '*.tmp' ! -name '*~' 2>/dev/null) | LC_ALL=C sort > "$now"
+if [ -f "$state/seen" ]; then
+  LC_ALL=C comm -13 "$state/seen" "$now" | sed 's/^/new file: ~\/fraim\//'
+fi
+mv "$now" "$state/seen"

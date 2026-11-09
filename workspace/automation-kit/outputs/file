@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# usage: file:PATH
+# description: A file inside ~/fraim; {date}, {time} and {name} are filled in (reports/{name}-{date}.md).
+# Output plugin. The answer is on stdin; $1 is the path. Exit 0 when written.
+set -uo pipefail
+safe() {
+  case "/$1/" in */../*|*/./*) return 1 ;; esac
+  case "$1" in /*|"") return 1 ;; esac
+}
+if [ "${1:-}" = --check ]; then
+  safe "${2:-}" || { echo "'${2:-}' must be a path inside ~/fraim, like reports/{date}.md"; exit 1; }
+  exit 0
+fi
+path="${1:-}"
+path="${path//\{date\}/$(date +%Y-%m-%d)}"
+path="${path//\{time\}/$(date +%H%M)}"
+path="${path//\{name\}/${FRAIM_AUTOMATION:-automation}}"
+safe "$path" || { echo "file path $path leaves ~/fraim"; exit 1; }
+dest="${FRAIM_FILES_DIR:-$HOME/fraim}/$path"
+if ! mkdir -p "$(dirname "$dest")" || ! cat > "$dest"; then echo "cannot write ~/fraim/$path"; exit 1; fi

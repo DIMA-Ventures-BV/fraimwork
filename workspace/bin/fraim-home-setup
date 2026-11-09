@@ -48,5 +48,7 @@ if [ "${1:-}" = scheduler ] && [ ! -f "$home/fraim/jobs/crontab" ]; then
 fi
 # One switched-off example, only in a home that has no automations yet.
 if [ "${1:-}" = scheduler ] && [ -z "$(ls -A "$home/fraim/automations")" ]; then
-  install -D -m 0644 /etc/fraim/skel-jobs/example-automation.md "$home/fraim/automations/new-files/automation.md"
+  mkdir -p "$home/fraim/automations/new-files"
+  { echo ---; echo 'enabled: false'; tail -n +2 /etc/fraim/automation-kit/examples/new-files/automation.md; } \
+    > "$home/fraim/automations/new-files/automation.md"
 fi

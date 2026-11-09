@@ -1,6 +1,6 @@
 ---
 name: running-the-fraim-server
-description: How to be the owner's fraim server - check your own health, send the owner a message or a file, add, change, pause or debug an automation (scheduled work in ~/fraim/automations, formerly jobs), find files, and handle an automation that failed. Use when the owner asks over WhatsApp, the phone app or the terminal "are you ok", "send me that file", "remind me every morning", "run this every Monday", "check every 15 minutes if...", "why didn't my automation run", "what's in my inbox", or when an automation of yours failed. Do NOT use on the owner's laptop (there, use operating-fraim).
+description: How to be the owner's fraim server - check your own health, send the owner a message or a file, list, pause or debug an automation (~/fraim/automations, formerly jobs), find files, and handle an automation that failed. Use when the owner asks over WhatsApp, the phone app or the terminal "are you ok", "send me that file", "which automations do I have", "why didn't my automation run", "what's in my inbox", or when an automation of yours failed. To make or change an automation, use building-automations. Do NOT use on the owner's laptop (there, use operating-fraim).
 ---
 
 # Running the fraim server
@@ -37,50 +37,15 @@ You cannot update or restart yourself (no Docker access). When the owner asks ab
   Load `WHATSAPP_OWNER` first: `. /etc/fraim/runtime.env`. Images arrive as photos, everything else as a document.
 - Without the WhatsApp module both commands do nothing. Then put the file in `~/fraim/outbox/` and say where it is.
 
-## Automations (scheduled work)
+## Automations
 
-An automation is one file: `~/fraim/automations/<name>/automation.md`. The scheduler picks up a new or changed file within a minute. Example:
+To make, change or extend an automation (a schedule, a trigger such as new files or a changed page, an output such as WhatsApp, a file or a webhook, or a plugin of the owner's own), read the building-automations skill first and follow it.
 
-```markdown
----
-description: Mails that need an answer, every weekday morning
-schedule: "0 8 * * 1-5"
-tools: Read, Grep, mcp__google__search_gmail_messages
-output: whatsapp
----
-Read the mail that arrived since {{since}}. List the mails that need an answer from me, one line each.
-If nothing needs an answer, answer with exactly: SILENT
-```
+Quick answers without that skill:
+- "Which automations do I have?": `fraim-auto list`, then say each one in plain words.
+- "Stop X" or "start X again": `fraim-auto pause <name>` or `fraim-auto resume <name>`.
+- "What did X say?": `fraim-auto show <name>`.
 
-| Setting | Meaning |
-|---|---|
-| `schedule: "<cron>"` | Cron line in the server time zone (weekdays 8:00: `"0 8 * * 1-5"`). Without `schedule` or `every`, it only runs by hand |
-| `every: 30m` | Fixed interval: 5m, 10m, 15m, 30m, 1h, 2h, 3h, 4h, 6h, 12h or 1d |
-| `tools: Read, Grep` | Allowed tools (default Read, Glob, Grep, WebSearch). A site needs `WebFetch(domain:<site>)`; an API needs `Bash(fraim-api NAME:*)` |
-| `output: whatsapp, file: reports/{date}.md` | Where the answer goes: `whatsapp`, `whatsapp:<chat id>`, `file:<path in ~/fraim>` (`{date}`, `{time}`, `{name}`), or `none`. Every answer also lands in `~/fraim/outbox.md` unless `none` |
-| `hours: 08:00-22:00` | Scheduled runs outside this window are skipped |
-| `remember: true` | `{{previous}}` in the prompt is the last answer, for "what changed since last time" |
-| `skill: <name>` | The run follows that skill |
-| `timeout: 15m`, `model: sonnet`, `enabled: false` | Limits, model, switched off |
-
-Prompt placeholders: `{{since}}` (last good run), `{{now}}`, `{{previous}}`, `{{input}}` (text given to a manual run), `{{check}}`.
-A `check.sh` next to `automation.md` runs first. When it prints nothing, the run is skipped and costs no tokens; what it prints is `{{check}}`. With `script_only: true` its output is the answer and Claude is not called. Use this for "every 15 minutes, check if X happened".
-
-Rules:
-- The runner sends the answer itself. Never put `fraim-notify` in a prompt: the owner would get it twice.
-- When nothing is worth telling, the prompt makes it answer exactly `SILENT`; no "nothing new" messages unless the owner asks for them.
-- "9:00" means the server's time zone (`date +%Z`). Do not ask the owner which time zone.
-- Give it only the tools it needs. Ask the owner before you add a tool that sends, buys, posts or deletes.
-- A run cannot change automations. Only you, in a session with the owner, edit them.
-
-Make one for the owner:
-1. Repeat the trigger and the output in plain words and get a yes ("every weekday at 8:00, to WhatsApp, right?").
-2. Write `automation.md`. Use a short lowercase name with dashes.
-3. Run `fraim-auto check <name>` and fix every mistake it names.
-4. Run it once: `fraim-auto run <name> --dry`. Show the owner the answer, which went nowhere yet. Adjust the prompt until the owner is happy.
-5. Run `fraim-auto sync` so the schedule is live now, and add it to `~/fraim/fraim-guide.md`.
-
-Other commands: `fraim-auto list`, `fraim-auto show <name>`, `fraim-auto runs <name>`, `fraim-auto run <name>`, `fraim-auto pause <name>`, `fraim-auto resume <name>`. To remove one, delete its folder.
 Old-style jobs (`~/fraim/jobs/<name>.md` plus a `fraim-job` crontab line) are moved into automations when the scheduler starts. `fraim-job <name>` still works.
 
 ## An automation failed

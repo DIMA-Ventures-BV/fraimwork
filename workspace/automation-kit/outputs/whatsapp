@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# usage: whatsapp | whatsapp:CHAT_ID
+# description: The owner's WhatsApp, or one chat or group by its id (like 1203630@g.us).
+# Output plugin. The answer is on stdin; $1 is the text after "whatsapp:". Exit 0 when delivered.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  [ -z "${2:-}" ] || printf '%s' "$2" | grep -Eq '^[0-9A-Za-z._-]+@[a-z.]+$' \
+    || { echo "'$2' is not a WhatsApp chat id (like 31612345678@s.whatsapp.net or 1203630@g.us)"; exit 1; }
+  exit 0
+fi
+text="$(cat)"
+text="${text:0:3500}"
+if [ -z "${1:-}" ]; then
+  FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "${FRAIM_AUTOMATION:-automation}:
+
+$text" >/dev/null 2>&1 || { echo "WhatsApp did not take the message"; exit 1; }
+  exit 0
+fi
+case ",${FRAIM_MODULES:-}," in *,whatsapp,*) ;; *) echo "WhatsApp is not set up on this server"; exit 1 ;; esac
+fraim-gateway POST /send "$(jq -cn --arg chat "$1" --arg text "$text" '{chat_id: $chat, text: $text}')" >/dev/null 2>&1 \
+  || { echo "WhatsApp did not take the message"; exit 1; }

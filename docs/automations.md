@@ -1,6 +1,6 @@
 # Automations
 
-Status: step 1 built (schedule, interval and manual triggers; whatsapp, file and outbox outputs; `fraim-auto`). Steps 2 to 6 are design. Written 2026-11-08.
+Status: steps 1 and 3 built (schedule, interval, manual, files, page and after triggers; whatsapp, file, webhook and outbox outputs; trigger and output plugins of the owner's own; `fraim-auto`). Steps 2, 4, 5 and 6 are design. Written 2026-11-08, plugins 2026-11-09.
 
 An automation is one rule: **when a trigger fires, Claude runs a prompt with a fixed set of tools, and the result goes to one or more outputs.** It replaces the scheduled jobs (`fraim-job`, `~/fraim/jobs/crontab`) and will absorb the background goals (`fraim-goal`).
 
@@ -93,25 +93,51 @@ Not built: `missed: latest` (catch up on schedule hits while the server was off)
 | `schedule: "<cron>"` | The cron time arrives | `since`, `now` | supercronic | built |
 | `every: 30m` | A fixed interval passes (5m to 12h that divide the clock, or 1d) | same | supercronic, written as cron | built |
 | (none) | `fraim-auto run <name>`, `fraim auto run <name>`, or asking Claude | `input` | the runner | built |
+| `trigger: files: inbox` | New files in a folder inside `~/fraim` (subfolders too) | `{{input}}`: one line per new file | trigger plugin `files`, polled | built |
+| `trigger: page: https://...` | The text of a public page changed | `{{input}}`: the new lines | trigger plugin `page`, polled | built |
+| `trigger: after: <other>` | Another automation delivered an answer (not SILENT, not failed) | `{{input}}`: its answer | the runner | built |
+| `trigger: <type>: <value>` | The owner's own plugin in `~/fraim/automations/_triggers/<type>` reports something | its lines | trigger plugin, polled | built |
 | `whatsapp: <regex>` | The owner sends a matching WhatsApp message | `text`, `match.1..n`, `chat` | the WhatsApp channel, same path as `goal:` | step 2 |
-| `file: inbox/*.pdf` | A file lands in a synced folder | `path`, `name` | inotify on `~/fraim` | step 3 |
-| `after: <other>` | Another automation finishes ok | its `output` | the runner | step 3 |
 | `webhook: true` | Someone POSTs to `https://<server>/hooks/<name>/<secret>` | `body`, `headers`, `query` | a small receiver behind Tailscale Funnel or Caddy | step 4 |
-| `mail: from *@mollie.com` | A matching mail arrives | `from`, `subject`, `body`, `attachments` | a Gmail history poller in the google container | step 5 |
+| `mail: from *@mollie.com` | A matching mail arrives | `from`, `subject`, `body`, `attachments` | a Gmail history poller, or a mail trigger plugin | step 5 |
 
 The keys for later triggers are reserved: `fraim-auto check` says "not available yet" instead of "unknown setting".
+
+### Plugins: the framework is shared, the automations are personal
+
+Every fraim server runs the same `fraim-auto`. What each owner automates differs, so triggers and outputs are plugins, and the owner's own plugins live next to their automations:
+
+| Where | What | Who changes it |
+|---|---|---|
+| `/etc/fraim/automation-kit/{triggers,outputs,examples}` (repo: `workspace/automation-kit`) | Built-in plugins and examples | fraimwork releases |
+| `~/fraim/automations/_triggers/<type>`, `_outputs/<type>` | The owner's own plugins; one with a built-in name replaces the built-in for this owner | the owner's Claude, with the `building-automations` skill |
+| `~/fraim/automations/<name>/` | The owner's automations | the owner's Claude, or the owner |
+
+A plugin is one script, run with bash when it has no execute bit (Syncthing does not always keep it):
+
+- Output: `<plugin> VALUE` with the answer on stdin. Exit 0 = delivered; otherwise its last output line is the reason in the alert. Env: `FRAIM_AUTOMATION`, `FRAIM_RUN_DIR`, `FRAIM_FILES_DIR`, `FRAIM_MODULES`.
+- Trigger: `<plugin> VALUE` prints one line per new event, nothing when nothing happened. It keeps its own state in `$FRAIM_TRIGGER_STATE` (outside the synced folder), and its first call only records the current state. A failure counts like a failed run: one alert, a pause after 5, "works again" when it recovers.
+- Both: `<plugin> --check VALUE` validates the value for `fraim-auto check` (10 seconds, no side effects). `# usage:` and `# description:` lines feed `fraim-auto catalog`.
+- Time limit 2 minutes; the working directory is `~/fraim`.
+
+Polling: `sync` writes `<every, default 5m> fraim-auto poll <name>` for a plugin trigger. `poll` runs the plugin under its own lock and, when it printed anything, runs the automation once with all of it (50 lines, 8000 characters at most) as `{{input}}`. Input that arrives while a run is busy is queued with the queued run, so no event is lost.
+
+Chains: after a delivered answer the runner runs each automation with `trigger: after: <this one>`, with the answer as `{{input}}`. A chain never runs an automation twice and stops after 5 links, so two automations that follow each other cannot loop.
+
+`fraim-auto new <name> [--from <example>] [--off]` starts an automation, empty or from an example.
 
 ### Outputs
 
 | `output:` entry | Goes to | Status |
 |---|---|---|
-| `whatsapp` (default) | The owner's chat, through `fraim-notify` | built |
-| `whatsapp:<chat id>` | A specific chat or group | built |
-| `file:<path>` | A file under `~/fraim`, with `{date}`, `{time}`, `{name}` filled in; Syncthing brings it to the laptop | built |
-| `outbox` | `~/fraim/outbox.md` (last 100). Always on unless `none` | built |
-| `none` | Only the run folder | built |
+| `whatsapp` (default) | The owner's chat, through `fraim-notify` | built (plugin) |
+| `whatsapp:<chat id>` | A specific chat or group | built (plugin) |
+| `file:<path>` | A file under `~/fraim`, with `{date}`, `{time}`, `{name}` filled in; Syncthing brings it to the laptop | built (plugin) |
+| `webhook:<https url or ENV_NAME>` | POST of `{"text", "automation"}`; Slack and Teams incoming webhooks accept it | built (plugin) |
+| `<type>:<value>` | The owner's own plugin in `~/fraim/automations/_outputs/<type>` | built |
+| `outbox` | `~/fraim/outbox.md` (last 100). Always on unless `none` | built (runner) |
+| `none` | Only the run folder | built (runner) |
 | `email:<address>` | Gmail through the google container, as a draft unless the automation allows sending | step 5 |
-| `webhook:<url>` | POST of `{name, status, output}` | later |
 
 The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent`. Failures always go to `fraim-notify`, never to the normal outputs, so a broken mail digest does not mail anyone.
 
@@ -125,7 +151,9 @@ The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent
 | `fraim-auto show <name>` | Settings, mistakes, last answer |
 | `fraim-auto runs <name> [N]` | The last N runs |
 | `fraim-auto run <name> [--dry] [--input text]` | Runs it now; `--dry` prints the answer and delivers nothing |
-| `fraim-auto fire <name>` | What the scheduler calls; respects `enabled`, pause and `hours` |
+| `fraim-auto fire <name>` / `poll <name>` | What the scheduler calls; respects `enabled`, pause and `hours` |
+| `fraim-auto catalog` | Every trigger, output and example on this server, the owner's own plugins included |
+| `fraim-auto new <name> [--from <example>] [--off]` | Starts an automation |
 | `fraim-auto pause / resume <name>` | Stops or restarts its schedule |
 | `fraim-auto check [name]` | Names every mistake |
 | `fraim-auto sync` | Writes `~/.local/state/fraim/automations.crontab` from every `automation.md` |
@@ -158,7 +186,7 @@ Scheduling: the scheduler container runs a third supercronic on the generated cr
 
 Three ways, all on the same file:
 
-1. **Ask Claude** (built). "Every weekday at 8, send me the mails that need an answer." The `running-the-fraim-server` and `operating-fraim` skills write the file, run `fraim-auto check`, run it once with `--dry`, show the answer, and then make the schedule live. This is the main path for non-technical owners.
+1. **Ask Claude** (built). "Every weekday at 8, send me the mails that need an answer." The `building-automations` skill (server) and `operating-fraim` (laptop) pick from `fraim-auto catalog`, write the file or a plugin when nothing fits, run `fraim-auto check`, run it once with `--dry`, show the answer, and then make the schedule live. This is the main path for non-technical owners.
 2. **WhatsApp shortcuts** (step 2), handled by the channel like `goal:`: `autos`, `auto mail-digest` (last run), `run mail-digest`, `pause mail-digest`, `resume mail-digest`.
 3. **Edit the file** on the laptop (built). Syncthing syncs it; the scheduler picks it up within a minute.
 
@@ -189,7 +217,7 @@ Each step ships on its own and is useful alone.
 |---|---|---|
 | 1 | `fraim-auto` runner: folder format, `schedule`/`every`/manual triggers, `whatsapp`/`file`/`outbox` outputs, run folders, `check.sh`, failure rules. Generated crontab. Migrate `jobs/`. Skill sections. bats tests. | **built** |
 | 2 | WhatsApp: `whatsapp:` trigger and the `autos`/`run`/`pause`/`resume` shortcuts. Fold goals into it (goals merged in #16). | 1 day |
-| 3 | `file:` trigger (inotify) and `after:` chaining | half a day |
+| 3 | Plugins for triggers and outputs (built-in and the owner's own), `files`, `page` and `after` triggers, `webhook` output, `catalog`, `new`, examples, the `building-automations` skill | **built** |
 | 4 | `webhook:` trigger: small receiver container, secret per automation, Tailscale Funnel or Caddy for public URLs | 1 day |
 | 5 | `mail:` trigger: Gmail history poller in the google container; `email:` output as draft by default | 1 day |
 | 6 | Optional: a read-only "Automations" page (list, last runs, outputs) served on the tailnet | 1 day |
