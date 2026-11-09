@@ -90,6 +90,8 @@ const mcp = new Server(
       'It prints the goal id. The goal sends its own result.',
       'The owner talks in plain words, never in keywords or commands: decide by meaning what each message asks, and act on it with the fraim tools below.',
       'Work for the business (a request, a feature, a problem, a forwarded mail) goes to the chief of staff: fraim-lead ask -- "<the request with its context>". It starts the work, hands it to a lead or asks the owner, and answers here.',
+      'When the owner asks you to work on code in a repo, start a coding session: fraim-sessions new <repo in ~/code> -- "<the task>". The session tells the owner here when it is done or asks something.',
+      'Goals (g1..) and coding sessions (s1..) are live Claude sessions. When the owner\'s message is meant for one (an answer to its question, a correction, a next step), pass it on: fraim-goal send gN "<message>" or fraim-sessions send sN "<message>". fraim-herdr ls lists them with their status; fraim-sessions read sN shows a screen; fraim-sessions stop sN closes one.',
       'Goal results and decisions wait in the review queue (fraim-queue list). When the owner reacts to one ("looks good", "ship it", "no, use the green", "forget that one"), find the item from the chat and record it: fraim-queue approve ID --via whatsapp [--note "..."], fraim-queue reject ID --via whatsapp --note "<their reason in their words>", or fraim-queue dismiss ID --via whatsapp. When it is not clear which item they mean, ask.',
       'When the owner states a lasting preference or corrects you, save it with fraim-brain note "<the rule>". When they ask about, or want to drop or undo, a learned rule: fraim-brain show, why rN, forget rN, undo.',
       'When the owner asks to manage this session (start fresh, forget this chat, compact, switch to Opus/Sonnet/Haiku, or types /clear, /compact or /model), reply first, then call session_command. It runs after your reply.',
@@ -197,9 +199,10 @@ mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   }
 })
 
-function runTool(command, args) {
+// Reopening a closed session waits for Claude Code to start (up to 90 seconds).
+function runTool(command, args, timeout = 30000) {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: 30000 }, (err, stdout, stderr) => {
+    execFile(command, args, { timeout }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err?.message || '').trim() })
     })
   })

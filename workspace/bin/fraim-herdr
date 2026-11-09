@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# herdr-core (hc) on the server: the terminals every Claude session lives in (docs/sessions.md).
+# The core runs in the workspace container only. The scheduler container shares the home
+# volume, so it reaches the same core through its socket, but it must never start a second
+# core of its own (any hc command starts one when none answers).
+#
+#   fraim-herdr supervise        workspace only: keep the core, main, the queue page and the
+#                                watcher running (started by fraim-entrypoint)
+#   fraim-herdr up               workspace only: start what is missing once
+#   fraim-herdr alive            exit 0 when the core answers (never starts one)
+#   fraim-herdr hc ARGS...       run hc; in the scheduler only when the core answers
+#   fraim-herdr ls [--json]      the fraim terminals: name, kind, status, folder
+#   fraim-herdr attach [NAME]    humans: main (default), g3, s1, or a plain shell that stays
+#   fraim-herdr watch            tell the owner when a session needs them or a session finished
+#   fraim-herdr status ADDR      the terminal's status word (working, done, blocked, idle, ...)
+#   fraim-herdr last-text ADDR   the last thing Claude said in that terminal (from its transcript)
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+usage() { echo "fraim-herdr: $*" >&2; exit 2; }
+die() { echo "fraim-herdr: $*" >&2; exit 1; }
+
+session="${HC_SESSION:-default}"
+socket_path() {
+  if [ -n "${HC_SOCKET:-}" ]; then printf '%s' "$HC_SOCKET"; return; fi
+  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then printf '%s/herdr-core/%s.sock' "$XDG_RUNTIME_DIR" "$session"; return; fi
+  if [ -d "/run/user/$(id -u)" ]; then printf '/run/user/%s/herdr-core/%s.sock' "$(id -u)" "$session"; return; fi
+  printf '%s/herdr-core/%s/%s.sock' "${XDG_STATE_HOME:-$HOME/.local/state}" "$session" "$session"
+}
+
+# Asks the core for its terminal list over the socket; hc itself would start a core.
+alive() {
+  local sock
+  sock="$(socket_path)"
+  [ -S "$sock" ] || return 1
+  python3 - "$sock" <<'EOF' 2>/dev/null
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(3)
+s.connect(sys.argv[1])
+s.sendall(b'{"jsonrpc":"2.0","id":1,"method":"terminal.list","params":{}}\n')
+buf = b""
+while b"\n" not in buf:
+    chunk = s.recv(65536)
+    if not chunk:
+        break
+    buf += chunk
+sys.exit(0 if "result" in json.loads(buf.split(b"\n")[0]) else 1)
+EOF
+}
+
+in_workspace() { [ "${FRAIM_ROLE:-workspace}" = workspace ]; }
+
+hcx() {
+  if ! in_workspace && ! alive; then
+    die "the session service (herdr) does not answer in the workspace container; run: fraim restart workspace"
+  fi
+  hc "$@"
+}
+
+live() { [ "$(hc get "$1" --json 2>/dev/null | jq -r '.state // ""')" = live ]; }
+
+status_of() { hcx get "$1" --json 2>/dev/null | jq -r '.status.state // "none"'; }
+
+# A finished terminal with this name blocks a new one with the same name: remove it first.
+start_service() {
+  local name="$1" kind="$2"; shift 2
+  live "$name" && return 0
+  hc rm "$name" >/dev/null 2>&1 || true
+  hc run --bg --name "$name" --cwd "$HOME/fraim" --label "fraim=$kind" --no-parent --no-notify -- "$@" >/dev/null
+}
+
+cmd_up() {
+  in_workspace || die "the session service runs in the workspace container only"
+  mkdir -p "$HOME/.local/state/fraim" "$HOME/fraim"
+  hc server status >/dev/null 2>&1 || die "herdr-core did not start"
+  start_service main main fraim-session
+  # The review queue page, on the last preview slot; restarts itself when it stops.
+  start_service queue-page service bash -c 'while true; do fraim-queue serve 2>>~/.local/state/fraim/queue.log; sleep 5; done'
+  start_service watch service bash -c 'while true; do fraim-herdr watch 2>>~/.local/state/fraim/watch.log; sleep 5; done'
+}
+
+cmd_supervise() {
+  in_workspace || die "the session service runs in the workspace container only"
+  while true; do
+    cmd_up 2>>"$HOME/.local/state/fraim/herdr.log" || true
+    # A goal whose watcher process died (a container restart) gets a new one.
+    fraim-goal reconcile >/dev/null 2>>"$HOME/.local/state/fraim/herdr.log" || true
+    sleep "${FRAIM_HERDR_CHECK:-30}"
+  done
+}
+
+kind_of_name() {
+  case "$1" in
+    main) echo main ;;
+    g[0-9]*) echo goal ;;
+    s[0-9]*) echo session ;;
+    *) echo service ;;
+  esac
+}
+
+# fraim shell [NAME]: main, a goal (g3), a coding session (s1), or a plain shell that stays.
+cmd_attach() {
+  local name="${1:-main}"
+  [ -t 0 ] && [ -t 1 ] || usage "attach is for a person in a terminal"
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,31}$' || usage "'$name' is not a session name"
+  case "$name" in
+    g[0-9]*) exec fraim-goal attach "$name" ;;
+    s[0-9]*) exec fraim-sessions attach "$name" ;;
+  esac
+  if ! live "$name"; then
+    [ "$name" != main ] || die "the main session is not running; run: fraim restart workspace"
+    hc rm "$name" >/dev/null 2>&1 || true
+    hc run --bg --name "$name" --cwd "$HOME" --label fraim=shell --no-parent --no-notify >/dev/null || die "could not open $name"
+  fi
+  echo "Leave with Ctrl+\\ ($name keeps running)."
+  exec hc attach "$name"
+}
+
+cmd_ls() {
+  local json
+  json="$(hcx ls --json 2>/dev/null)" || die "could not list the sessions"
+  json="$(jq '[.terminals[] | select(.labels.fraim != null) | {name: (.name // .address), kind: .labels.fraim, status: (.status.state // "none"), question: (.status.msg // ""), cwd: (.foreground.cwd // .cwd), turn}]' <<<"$json")"
+  if [ "${1:-}" = --json ]; then printf '%s\n' "$json"; return 0; fi
+  [ "$(jq length <<<"$json")" -gt 0 ] || { echo "No sessions."; return 0; }
+  jq -r --arg h "$HOME/" '.[] | select(.kind != "service") | "\(.name)\t\(.kind)\t\(.status)\t\(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "\t" + .question else "" end)"' <<<"$json"
+}
+
+# Claude Code's transcript for a session id: the last text it wrote (empty when none yet).
+transcript_text() {
+  local sid="$1" file
+  [ -n "$sid" ] || return 0
+  file="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+  [ -n "$file" ] || return 0
+  jq -rs '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' "$file" 2>/dev/null
+}
+
+cmd_last_text() {
+  local name="$1" sid=""
+  case "$(kind_of_name "$name")" in
+    goal) sid="$(cat "${FRAIM_GOALS_DIR:-$HOME/fraim/goals}/$name/session-id" 2>/dev/null)" ;;
+    session) sid="$(cat "${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}/$name/session-id" 2>/dev/null)" ;;
+  esac
+  transcript_text "$sid"
+}
+
+tell_owner() { FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$1" >/dev/null 2>&1 || true; }
+
+# Follows status changes. Blocked (a question or a permission) reaches the owner for every
+# kind; a coding session that finished a turn reaches the owner too. Goals send their own
+# result (fraim-goal), main answers on WhatsApp itself.
+cmd_watch() {
+  in_workspace || die "the watcher runs in the workspace container only"
+  declare -A last=()
+  local line type addr state name kind msg text
+  while IFS= read -r line; do
+    type="$(jq -r '.params.type // empty' <<<"$line" 2>/dev/null)"
+    [ "$type" = status ] || continue
+    addr="$(jq -r '.params.terminal // empty' <<<"$line")"
+    state="$(jq -r '.params.data.status.state // "none"' <<<"$line")"
+    [ -n "$addr" ] || continue
+    [ "${last[$addr]:-}" != "$state" ] || continue
+    last[$addr]="$state"
+    name="$(hc get "$addr" --json 2>/dev/null | jq -r '.name // .address')"
+    kind="$(hc get "$addr" --json 2>/dev/null | jq -r '.labels.fraim // ""')"
+    [ -n "$kind" ] && [ "$kind" != service ] || continue
+    case "$state" in
+      blocked)
+        msg="$(jq -r '.params.data.status.msg // ""' <<<"$line")"
+        if [ "$kind" = main ]; then
+          # fraim-session confirms the WhatsApp channel prompt at every start; only a
+          # screen that stays blocked for a minute needs the owner.
+          (
+            sleep "${FRAIM_MAIN_BLOCKED_GRACE:-60}"
+            [ "$(status_of "$addr")" = blocked ] \
+              && tell_owner "The main session waits for an answer on its screen: ${msg:-open it with fraim shell}."
+          ) &
+        else
+          tell_owner "$name needs you: ${msg:-it waits for an answer}."
+        fi ;;
+      done)
+        [ "$kind" = session ] || continue
+        text="$(cmd_last_text "$name" | head -c 1200)"
+        tell_owner "$name is done.
+${text:-(no text)}" ;;
+    esac
+  done < <(hc events --json 2>/dev/null)
+}
+
+action="${1:-}"
+[ $# -eq 0 ] || shift
+case "$action" in
+  supervise) cmd_supervise ;;
+  up) cmd_up ;;
+  alive) alive ;;
+  hc) hcx "$@" ;;
+  ls) cmd_ls "${1:-}" ;;
+  attach) cmd_attach "${1:-main}" ;;
+  watch) cmd_watch ;;
+  status) [ $# -eq 1 ] || usage "status NAME"; status_of "$1" ;;
+  last-text) [ $# -eq 1 ] || usage "last-text NAME"; cmd_last_text "$1" ;;
+  *) usage "supervise | up | alive | hc ARGS | ls [--json] | attach [NAME] | watch | status NAME | last-text NAME" ;;
+esac

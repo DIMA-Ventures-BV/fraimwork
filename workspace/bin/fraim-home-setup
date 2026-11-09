@@ -25,7 +25,7 @@ if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 
   tmp="$(mktemp)"
   # Goals, automations, the queue, leads, the brain and session commands run without a prompt, also in older homes.
   jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
-        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)", "Bash(fraim-style:*)", "mcp__whatsapp__session_command") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
+        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)", "Bash(fraim-style:*)", "Bash(fraim-sessions:*)", "Bash(fraim-herdr ls:*)", "mcp__whatsapp__session_command") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
   # fraim-claude skips permission prompts (PERMISSIONS=all); without this the always-on
   # session would stop at the "Bypass Permissions mode" warning screen at every start.

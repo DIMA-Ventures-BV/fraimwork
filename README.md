@@ -41,6 +41,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 - **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
 - **Connect things:** ask Claude to "connect Linear / PostHog / my GitHub repo / my dev box to fraim". Keys go into the secrets container through your own Terminal, never through the chat.
 - **Bigger tasks:** ask for it on WhatsApp in your own words. The server works on it in the background, while you can keep chatting, and sends the result when it is done. Ask what is running, or to stop one. Say "start fresh", "compact" or "switch to Opus" and your agent runs /clear, /compact or /model on itself. From the laptop: ask Claude to "start a goal on my server".
+- **Live sessions:** every Claude on the server runs in a terminal that keeps going with the laptop closed (herdr, see `docs/sessions.md`). Start coding work with `fraim session new vertelboek "fix the login bug"` or by asking on WhatsApp. When a session asks something or finishes, you get a WhatsApp message; answer in your own words, or take it over with `fraim shell s1`.
 - **One review queue:** goal results, with screenshots, wait for you on one page (`fraim queue` on the laptop) and on WhatsApp, where you answer in your own words. A rejection sends the work back with your reason, and your reasons become rules the agents follow (see `docs/queue.md`).
 - **Lead agents:** ask Claude to "add a lead for my web app". A lead checks its area every morning, starts small fixes and proposes ideas in your queue. A chief of staff ranks the queue, sends one daily digest, and during the day routes new work (a finished goal, a failure, a request from mail or Linear, or anything you ask for on WhatsApp) to a goal, a lead or you.
 - **While you sleep:** ask Claude to schedule a job, for example "every morning at 8, summarize my inbox and WhatsApp me".
@@ -69,7 +70,7 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 | `bin/fraim` | The CLI Claude uses. |
 | `bin/fraim-config` | Claude configuration shared between laptop and server (see `docs/config.md`). |
 | `skills/` | The Claude Code skills that set up and operate fraim. |
-| `workspace/` | The server's Claude Code container: SSH, tmux session, scheduler, helper scripts. |
+| `workspace/` | The server's Claude Code container: SSH, herdr sessions, scheduler, helper scripts. |
 | `workspace/channel/` | The WhatsApp channel for Claude Code, with approvals over WhatsApp. |
 | `whatsapp/` | WhatsApp gateway: linked device, allowlist, internal API. |
 | `browser/` | The server's Chrome with a persistent profile and a screen viewer (noVNC). |

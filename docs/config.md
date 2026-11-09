@@ -102,7 +102,7 @@ Each machine installs new entries at its next session start (the SessionStart ho
 A value can be a 1Password reference (`op://vault/item/field`). Then `op run` resolves the whole file at launch.
 On the server, use a 1Password service account scoped to one vault that holds only the server's keys.
 
-Every server entry point (tmux session, scheduled job, WhatsApp channel) starts Claude through
+Every server entry point (herdr session, scheduled job, WhatsApp channel) starts Claude through
 `fraim-config exec -- claude ...`. A process started another way gets no secrets.
 
 ## Security model

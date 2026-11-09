@@ -114,9 +114,9 @@ case "$role" in
       register_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
     fi
 
-    as_claude "tmux has-session -t main 2>/dev/null || tmux new-session -d -s main fraim-session"
-    # The review queue page, on the last preview slot; restarts itself when it stops.
-    as_claude "mkdir -p ~/.local/state/fraim && tmux has-session -t queue 2>/dev/null || tmux new-session -d -s queue 'while true; do fraim-queue serve 2>>~/.local/state/fraim/queue.log; sleep 5; done'"
+    # herdr-core holds every Claude session (main, goals, coding sessions), the queue page
+    # and the watcher; the supervisor starts them and restarts what stops (docs/sessions.md).
+    as_claude "mkdir -p ~/.local/state/fraim && setsid fraim-herdr supervise </dev/null >>~/.local/state/fraim/herdr.log 2>&1 &"
 
     # The Claude config layer can need the network (plugin marketplaces on GitHub). Never let
     # SSH access wait on it: run it in the background with a time limit, record the result
