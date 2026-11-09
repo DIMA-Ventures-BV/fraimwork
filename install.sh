@@ -98,8 +98,11 @@ for src in 172.29.0.0/16 172.30.0.0/16 172.31.0.0/16; do
   rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p tcp -m multiport --dports 22,2222:2226,3100:3149,6080:6084,8384:8388,22000:22004 -j DROP
   rule INPUT -s "$src" -m addrtype --dst-type LOCAL -p udp -m multiport --dports 22000:22004,60000:60090 -j DROP
   # Published ports reached by DNAT pass FORWARD, where Docker lets DOCKER-USER decide first.
+  # Only new connections a container starts (ctdir ORIGINAL): a container's replies to a
+  # published port also carry the DNAT state, and dropping them cuts off SSH and previews.
   if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
-    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT -j DROP
+    while iptables -D DOCKER-USER -s "$src" -m conntrack --ctstate DNAT -j DROP 2>/dev/null; do :; done
+    rule DOCKER-USER -s "$src" -m conntrack --ctstate DNAT --ctdir ORIGINAL -j DROP
   fi
 done
 EOF
