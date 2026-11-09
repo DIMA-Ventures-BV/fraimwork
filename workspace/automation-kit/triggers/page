@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# usage: page:https://...
+# description: A public web page whose text changed. The new lines (at most 40) are {{input}}.
+# Trigger plugin. $1 is the URL. It prints the change, or nothing.
+# $FRAIM_TRIGGER_STATE is a folder that stays between checks; the first check only remembers the page.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  case "${2:-}" in https://*|http://*) exit 0 ;; esac
+  echo "'${2:-}' must be a web address that starts with https://"; exit 1
+fi
+url="${1:-}"
+state="${FRAIM_TRIGGER_STATE:?}"
+html="$(curl -fsSL --max-time 30 -A 'fraim-automation' "$url" 2>/dev/null)" || { echo "cannot load $url"; exit 1; }
+new="$(mktemp)"
+printf '%s\n' "$html" \
+  | awk 'BEGIN { RS = "\001" } {
+      while (match($0, /<(script|style)[^>]*>/)) {
+        head = substr($0, 1, RSTART - 1); rest = substr($0, RSTART)
+        if (match(rest, /<\/(script|style)>/)) $0 = head substr(rest, RSTART + RLENGTH); else $0 = head
+      }
+      gsub(/<[^>]*>/, "\n"); print }' \
+  | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' > "$new"
+if [ -f "$state/page.txt" ] && ! cmp -s "$state/page.txt" "$new"; then
+  echo "changed: $url"
+  diff "$state/page.txt" "$new" | sed -n 's/^> //p' | head -40
+fi
+mv "$new" "$state/page.txt"

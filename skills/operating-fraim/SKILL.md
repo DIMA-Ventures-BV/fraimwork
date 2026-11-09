@@ -76,10 +76,10 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 
 ## Make an automation
 
-An automation runs on the server when its trigger fires (a schedule or a fixed interval for now), also while the laptop is off. It is one file: `~/fraim/automations/<name>/automation.md`. The running-the-fraim-server skill (on the server) has every setting; the common ones are below. Steps, each its own command:
+An automation runs on the server when its trigger fires (a schedule, an interval, new files in a folder, a changed web page, or right after another automation), also while the laptop is off. It is one file: `~/fraim/automations/<name>/automation.md`. The building-automations skill (on the server) has every setting and explains plugins: the owner's own triggers and outputs in `~/fraim/automations/_triggers` and `_outputs`. For anything beyond a plain schedule, hand the whole request to the server: `$F ask "<the request>"`, so the server Claude follows that skill. Steps for a plain schedule, each its own command:
 
-1. Confirm in words: when it runs ("every weekday at 8:00, server time zone `health.timezone`"), what the answer should contain, and where it goes (WhatsApp, a file in `~/fraim`). Pick a short name in lowercase letters and dashes.
-2. Write the file:
+1. `$F auto catalog` lists the triggers, outputs and examples on this server. Confirm in words: when it runs ("every weekday at 8:00, server time zone `health.timezone`"), what the answer should contain, and where it goes. Pick a short name in lowercase letters and dashes.
+2. Write the file (or start from an example: `$F auto new <name> --from <example>`):
    ```
    $F exec -- sh -c 'mkdir -p fraim/automations/<name> && cat > fraim/automations/<name>/automation.md' <<'EOF'
    ---

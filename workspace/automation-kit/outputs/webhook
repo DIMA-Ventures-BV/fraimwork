@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# usage: webhook:https://... | webhook:ENV_NAME
+# description: POST {"text", "automation"} as JSON to a URL; a Slack or Teams incoming webhook works as is. Keep a secret URL out of the file: name an environment variable instead.
+# Output plugin. The answer is on stdin; $1 is the URL, or the name of the variable that holds it.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  case "${2:-}" in
+    https://*) exit 0 ;;
+    *) printf '%s' "${2:-}" | grep -Eq '^[A-Z][A-Z0-9_]*$' && exit 0
+       echo "'${2:-}' must be an https:// URL or the name of an environment variable (like SLACK_WEBHOOK_URL)"; exit 1 ;;
+  esac
+fi
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+url="${1:-}"
+case "$url" in
+  https://*) ;;
+  *) url="${!url:-}"; [ -n "$url" ] || { echo "the variable ${1:-} is not set on this server"; exit 1; } ;;
+esac
+jq -Rsc --arg name "${FRAIM_AUTOMATION:-automation}" '{text: (rtrimstr("\n")), automation: $name}' \
+  | curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @- "$url" >/dev/null 2>&1 \
+  || { echo "the webhook did not accept the message"; exit 1; }
