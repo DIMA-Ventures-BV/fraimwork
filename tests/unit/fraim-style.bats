@@ -33,11 +33,22 @@ setup() {
   [[ "$output" == *"(detailed)"* ]]
 }
 
-@test "normal gives an empty prompt block" {
+@test "normal gives only the plain-words rules" {
   fraim-style set whatsapp normal
   run fraim-style prompt whatsapp
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [[ "$output" == "Plain words, always"* ]]
+  [[ "$output" != *"Writing style"* ]]
+}
+
+@test "every style gets the plain-words rules: no ids, real cause, a question that names the action" {
+  for s in adhd detailed; do
+    fraim-style set whatsapp "$s"
+    run fraim-style prompt whatsapp
+    [[ "$output" == *"Never show ids"* ]]
+    [[ "$output" == *"real cause"* ]]
+    [[ "$output" == *'not "Retry g5?"'* ]]
+  done
 }
 
 @test "an owner-written style is listed, usable, and overrides a built-in one" {

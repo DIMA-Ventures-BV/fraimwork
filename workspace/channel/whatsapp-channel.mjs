@@ -82,6 +82,7 @@ const mcp = new Server(
       'WhatsApp messages arrive as <channel source="whatsapp" chat_id="..." sender="..." name="...">.',
       'Senders are on the fraim allowlist. Answer with the reply tool and pass the chat_id from the tag.',
       'Keep replies short plain text; WhatsApp only renders *bold* and _italic_.',
+      'Every reply follows the plain-words rules at the end, also a status answer ("what is running?"): the ids below (g.., s.., q.., r..) are for the commands only, never for the owner.',
       'To send a file, use send_file with a path under ~/fraim or ~/pc.',
       'Files the sender attaches are saved under ~/fraim/inbox; the message text names the path.',
       `If a website needs a login, ask the sender to log in at ${VIEW_URL} and wait. Never ask for passwords or codes.`,
