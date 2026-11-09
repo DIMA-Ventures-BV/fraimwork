@@ -251,6 +251,18 @@ fi
 # Swap only as a last resort, and earlyoom stops one Claude before that point; never sshd,
 # Tailscale or Docker. fraim-capacity (in the containers) normally keeps it from coming to this.
 say "Protecting the server from running out of memory"
+# Caps from this server's own RAM, recomputed on every run, so a bigger (or smaller) server
+# gets its own numbers: the workspace (main, goals, sessions) 75%, the scheduler (leads,
+# automations) 40%. They may add up to more than 100%: earlyoom guards the total.
+total_mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)"
+if [ -n "$total_mb" ] && [ "$total_mb" -gt 0 ]; then
+  for env_file in .env .env.space-*; do
+    [ -f "$env_file" ] || continue
+    case "$env_file" in *.bak*|*.example) continue ;; esac
+    ENV_FILE="$env_file" set_env FRAIM_WORKSPACE_MEM "$(( total_mb * 75 / 100 ))m"
+    ENV_FILE="$env_file" set_env FRAIM_SCHEDULER_MEM "$(( total_mb * 40 / 100 ))m"
+  done
+fi
 echo 'vm.swappiness=10' > /etc/sysctl.d/90-fraim.conf
 sysctl -q -p /etc/sysctl.d/90-fraim.conf || warn "could not set vm.swappiness"
 if command -v earlyoom >/dev/null || apt_wait install -y -q earlyoom >/dev/null; then

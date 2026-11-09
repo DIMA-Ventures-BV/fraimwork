@@ -21,7 +21,21 @@ set -uo pipefail
 usage() { echo "fraim-capacity: $*" >&2; exit 2; }
 
 meminfo="${FRAIM_MEMINFO:-/proc/meminfo}"
-available_mb() { awk '/^MemAvailable:/ { print int($2 / 1024) }' "$meminfo" 2>/dev/null || echo 0; }
+cgroup="${FRAIM_CGROUP_DIR:-/sys/fs/cgroup}"
+# The smaller of what the server has free and what this container may still use under its
+# cap (compose mem_limit, set from the server's RAM by install.sh).
+available_mb() {
+  local host max cur
+  host="$(awk '/^MemAvailable:/ { print int($2 / 1024) }' "$meminfo" 2>/dev/null)"
+  host="${host:-0}"
+  max="$(cat "$cgroup/memory.max" 2>/dev/null)"
+  cur="$(cat "$cgroup/memory.current" 2>/dev/null)"
+  if printf '%s' "$max" | grep -Eq '^[0-9]+$' && printf '%s' "$cur" | grep -Eq '^[0-9]+$'; then
+    local left=$(( (max - cur) / 1048576 ))
+    [ "$left" -ge "$host" ] || host="$left"
+  fi
+  echo "$host"
+}
 need_mb() { echo $(( ${FRAIM_CLAUDE_MB:-450} + ${FRAIM_MEM_RESERVE_MB:-350} )); }
 # No /proc/meminfo (not Linux, a laptop test): nothing to measure, so no limit.
 has_room() { [ ! -r "$meminfo" ] || [ "$(available_mb)" -ge "$(need_mb)" ]; }

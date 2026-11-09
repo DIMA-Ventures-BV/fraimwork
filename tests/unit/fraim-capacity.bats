@@ -6,7 +6,7 @@ setup() {
   CAP="$BATS_TEST_DIRNAME/../../workspace/bin/fraim-capacity"
   T="$BATS_TEST_TMPDIR"
   mkdir -p "$T/bin" "$T/home/fraim/goals/g1" "$T/home/fraim/goals/g2"
-  export HOME="$T/home" FRAIM_MEMINFO="$T/meminfo" KILLS="$T/kills" FRAIM_RUNTIME_ENV=/dev/null FRAIM_CAPACITY_POLL=1
+  export FRAIM_CGROUP_DIR="$T/none" HOME="$T/home" FRAIM_MEMINFO="$T/meminfo" KILLS="$T/kills" FRAIM_RUNTIME_ENV=/dev/null FRAIM_CAPACITY_POLL=1
   echo "done 2026-11-09 10:00" > "$HOME/fraim/goals/g1/state"
   echo "running 2026-11-09 10:00" > "$HOME/fraim/goals/g2/state"
   # Each kill frees 500 MB, so a test can watch reclaim stop once there is room.
@@ -46,6 +46,18 @@ mem() { printf 'MemAvailable: %s kB\n' "$(( $1 * 1024 ))" > "$FRAIM_MEMINFO"; }
   run "$CAP" status --json
   [ "$(jq -r .needed_mb <<<"$output")" = 800 ]
   [ "$(jq -r .room <<<"$output")" = false ]
+}
+
+@test "the container's own cap counts too" {
+  mem 4000
+  mkdir -p "$T/cg"
+  echo $(( 2000 * 1048576 )) > "$T/cg/memory.max"
+  echo $(( 1500 * 1048576 )) > "$T/cg/memory.current"
+  FRAIM_CGROUP_DIR="$T/cg" run "$CAP" status --json
+  [ "$(jq -r .available_mb <<<"$output")" = 500 ]
+  echo max > "$T/cg/memory.max"
+  FRAIM_CGROUP_DIR="$T/cg" run "$CAP" status --json
+  [ "$(jq -r .available_mb <<<"$output")" = 4000 ]
 }
 
 @test "reclaim closes a finished goal first, then an idle session, and stops when there is room" {

@@ -83,6 +83,17 @@ register_mcp() {
   fi
 }
 
+# An MCP server for main only: registered for ~/fraim (local scope), and removed from the user
+# scope where older versions put it, so other Claudes stop starting their own copy.
+register_main_mcp() {
+  local name="$1" command="$2"
+  as_claude "claude mcp remove --scope user $name >/dev/null 2>&1 || true"
+  if ! as_claude "cd ~/fraim && claude mcp get $name >/dev/null 2>&1"; then
+    as_claude "cd ~/fraim && claude mcp add --scope local $name -- $command" >/dev/null \
+      || echo "fraim: could not register MCP server '$name'" >&2
+  fi
+}
+
 case "$role" in
   workspace)
     write_runtime_env
@@ -106,12 +117,16 @@ case "$role" in
       as_claude "mkdir -p ~/.claude/skills && ln -sfn /opt/fraim/server-plugin ~/.claude/skills/fraim-system"
     fi
 
-    register_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"
     if has_module browser; then
       register_mcp browser "chrome-devtools-mcp --browser-url ${BROWSER_CDP_URL}"
     fi
+    # Every MCP server starts once per Claude. WhatsApp and the lent laptop Chrome are for
+    # main only, so they belong to main's folder (~/fraim, local scope): goals and coding
+    # sessions run in their own folders and do not start them (each copy took 60 to 160 MB;
+    # ten Claudes froze a 4 GB server on 2026-11-09).
+    register_main_mcp my-chrome "chrome-devtools-mcp --browser-url http://127.0.0.1:9222"
     if has_module whatsapp; then
-      register_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
+      register_main_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
     fi
 
     # herdr-core holds every Claude session (main, goals, coding sessions), the queue page

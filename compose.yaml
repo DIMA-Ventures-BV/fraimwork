@@ -64,6 +64,10 @@ services:
     image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     hostname: fraim
     environment: *workspace-env
+    # A cap from this server's own RAM (install.sh sets it): a runaway Claude is stopped
+    # inside the container instead of swapping the whole server until SSH stops answering.
+    mem_limit: ${FRAIM_WORKSPACE_MEM:-64g}
+    memswap_limit: ${FRAIM_WORKSPACE_MEM:-64g}
     ports:
       - "${BIND_IP:?run install.sh first}:${SSH_PORT:-2222}:22"
       # Same range on both sides: mosh-server binds the port the client asks for.
@@ -88,6 +92,8 @@ services:
     image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     profiles: [scheduler]
     command: ["scheduler"]
+    mem_limit: ${FRAIM_SCHEDULER_MEM:-64g}
+    memswap_limit: ${FRAIM_SCHEDULER_MEM:-64g}
     healthcheck:
       test: ["CMD", "pgrep", "-x", "supercronic"]
       interval: 30s
