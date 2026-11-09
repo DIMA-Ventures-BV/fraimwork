@@ -160,6 +160,10 @@ $(brain_rules "$(cat "$goals/$id/lead" 2>/dev/null)")
 The owner reviews your result in a queue, so make it easy to judge:
 - If you changed something a person can see (a page, an app, a document), save screenshots as PNG in ~/fraim/goals/$id/media/, before and after when that helps. Use the browser tools (mcp__browser) for web pages. A short screen recording (.webm or .mp4) in the same folder helps when a flow matters more than one screen.
 - Write ~/fraim/goals/$id/queue.json: {"title": "<the topic, at most 60 characters>", "ask": "<one question the owner answers with yes or no, in plain words, e.g. \"Merge the new checkout text?\">", "advise": "approve", "reject" or "dismiss" (your advice), "why": ["<at most 3 reasons, one short sentence each>"], "priority": 1, 2 or 3 (1 = the owner should look today), "kind": "review" or "decision", "links": ["<PR or preview URLs>"], "on_approve": "<the one next step to take when the owner approves, in plain words, for example: merge PR #12; empty when there is none>"}. The owner reads the question, the advice and the reasons first; your final answer below is the full report behind them.
+  - One decision per item: "ask" is the only thing Approve decides, and "on_approve" does exactly that. Put any other question for the owner in queue.json as "more": ["<question in plain words, with your advice>", ...]; the server makes each its own queue item.
+  - Write "ask" and "why" for someone who did not follow this goal: name the product or site, no internal names (no event, table, log or API names: write "the Meta pixel" or "the order page", not InitiateCheckout or CAPI), and say any number in words.
+  - If you could not reach something (a database, logs, an account), name it in "why" and say what access would fix it. Never write "let someone with access look".
+$(style_block queue)
 
 If this goal taught you a procedure worth reusing (a multi-step task that will come back, a dead end you got past, or the owner's correction of how to do something), save it as a skill, at most one per goal:
 - Write ~/fraim/goals/$id/skill/<name>/SKILL.md: a --- block with name (lowercase, dashes) and description (when to use it), then sections When to use, Steps (exact commands), Pitfalls, Verify. Short; no keys, tokens or personal data.
@@ -219,6 +223,15 @@ to_queue() {
     [ -f "$file" ] && args+=(--media "$file")
   done
   fraim-queue "${args[@]}" 2>>"$dir/log.txt" || true
+  [ "$failed" = 1 ] && return 0
+  local question extra=(--quiet --goal "$id" --kind decision --priority "$priority")
+  [ ! -s "$dir/lead" ] || extra+=(--lead "$(cat "$dir/lead")")
+  while IFS= read -r question; do
+    [ -n "$question" ] || continue
+    fraim-queue add "${extra[@]}" --title "$(cut -c1-120 <<<"$question")" --ask "$(cut -c1-300 <<<"$question")" \
+      --summary "From goal $id. The full report is on the goal's main item." \
+      --on-approve "The owner approved this, from goal $id: $question" >/dev/null 2>>"$dir/log.txt" || true
+  done < <(jq -r '.more // [] | if type == "array" then .[] else empty end | tostring' <<<"$meta" 2>/dev/null | head -3)
 }
 
 
