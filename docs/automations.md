@@ -214,7 +214,7 @@ Three ways, all on the same file:
 - The same step moves `<cron> fraim-lead run <name>` lines into an automation with `lead: <name>`; a paused lead stays paused.
 - `fraim-job <name>` is an alias for `fraim-auto run <name>`.
 - New homes get one switched-off example, `new-files`, instead of `jobs/example.md`.
-- Step 2: a goal (`goal: ...`) becomes a one-off manual run; `goals` lists those runs.
+- Step 2: a goal becomes a one-off manual run, listed with the other runs.
 
 ## Build order
 

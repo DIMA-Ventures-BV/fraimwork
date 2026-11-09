@@ -262,7 +262,7 @@ EOS
   grep -q 'owner said in chat: "always answer me in Dutch"' "$B/log.md"
   grep -q 'owner said in chat (a correction): "the PR title must be in English"' "$B/log.md"
   grep -q 'r1: Answer the owner in Dutch.' "$SENT"
-  grep -q 'forget r1' "$SENT"
+  grep -q 'Just tell me and I drop it' "$SENT"
   item="$FRAIM_QUEUE_DIR/q1/item.json"
   [ "$(jq -r .brain "$item")" = p1 ]
   jq -r .summary "$item" | grep -q '+ r2 (Code) Write PR titles in English.'
@@ -338,7 +338,7 @@ EOS
   : > "$SENT"
   fraim-queue approve q2
   grep -q 'q2 was approved from the command line' "$SENT"
-  grep -q 'undo rules' "$SENT"
+  grep -q 'Tell me and I undo it' "$SENT"
 }
 
 @test "stats show how often work is sent back per week, and rules shows the trend" {

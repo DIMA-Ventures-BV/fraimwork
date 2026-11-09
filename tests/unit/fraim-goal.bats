@@ -98,7 +98,7 @@ EOF
   [ "$(jq -c .media "$item")" = '["after.png"]' ]
   [ "$(jq -c .links "$item")" = '["https://example.com/pr/1"]' ]
   for _ in $(seq 20); do [ -s "$SENT" ] && break; sleep 0.1; done
-  grep -q 'ok q1' "$SENT"
+  grep -q 'Tell me what you think of it in your own words' "$SENT"
 }
 
 @test "a failed goal becomes a priority 1 item" {
