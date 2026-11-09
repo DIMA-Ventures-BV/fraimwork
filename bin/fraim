@@ -2109,10 +2109,11 @@ cmd_lead() {
 cmd_brain() {
   load_config
   case "${1:-show}" in
-    show) workspace_ssh "fraim-brain show" ;;
+    show|history|undo|distill) workspace_ssh "fraim-brain $1" ;;
     note) shift; [ $# -gt 0 ] || usage 'fraim brain note "TEXT"'; workspace_ssh "fraim-brain note $(printf '%q' "$*")" ;;
-    distill) workspace_ssh "fraim-brain distill" ;;
-    *) usage 'fraim brain [show | note "TEXT" | distill]' ;;
+    why|forget) [ $# -eq 2 ] || usage "fraim brain $1 rN"; workspace_ssh "fraim-brain $1 $(printf '%q' "$2")" ;;
+    skills) workspace_ssh "fraim-brain skill list" ;;
+    *) usage 'fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | distill | skills]' ;;
   esac
 }
 
@@ -2561,7 +2562,8 @@ Operate
                                              the review queue: goal results, lead ideas, decisions
   fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME
                                              lead agents that watch an area on a schedule
-  fraim brain [show | note "TEXT" | distill]  preferences learned from reviews
+  fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | distill | skills]
+                                             preferences and skills learned from reviews
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
   fraim whatsapp status|link [--number N]|relink|test
   fraim browser [--print-url] | stop         server browser view URL and VNC password

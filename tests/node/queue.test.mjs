@@ -31,6 +31,12 @@ test('queue args', () => {
   assert.deepEqual(queueArgs({ action: 'reject', id: 'q1', note: 'why' }), ['fraim-queue', ['reject', 'q1', '--note', 'why']])
   assert.deepEqual(queueArgs({ action: 'approve', id: 'q1', note: '' }), ['fraim-queue', ['approve', 'q1']])
   assert.deepEqual(queueArgs({ action: 'remember', text: 'x' }), ['fraim-brain', ['note', 'x']])
+  assert.deepEqual(queueArgs(parseQueueCommand(msg('rules'), OWNER)), ['fraim-brain', ['show']])
+  assert.deepEqual(queueArgs(parseQueueCommand(msg('Why R3'), OWNER)), ['fraim-brain', ['why', 'r3']])
+  assert.deepEqual(queueArgs(parseQueueCommand(msg('forget r12'), OWNER)), ['fraim-brain', ['forget', 'r12']])
+  assert.deepEqual(queueArgs(parseQueueCommand(msg('undo rules'), OWNER)), ['fraim-brain', ['undo']])
+  assert.equal(parseQueueCommand(msg('forget it'), OWNER), null)
+  assert.equal(parseQueueCommand(msg('rules', '31600000000'), OWNER), null)
 })
 
 test('only the owner, and normal messages pass through', () => {

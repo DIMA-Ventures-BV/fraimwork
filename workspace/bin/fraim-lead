@@ -163,7 +163,8 @@ prompt_for() {
   while IFS= read -r g; do
     case "$g" in *" $(date '+%Y-%m-%d') "*) used=$((used + 1)) ;; esac
   done < <(lead_goals "$name")
-  rules="${FRAIM_BRAIN_DIR:-$HOME/fraim/brain}/rules.md"
+  # The chief sees every lead's rules; a lead sees the general ones and its own.
+  if [ "$chief" = 1 ]; then rules="$(fraim-brain show --for "$name" --all 2>/dev/null)"; else rules="$(fraim-brain show --for "$name" 2>/dev/null)"; fi
   cat <<EOF
 You are "$name", a lead agent on the owner's fraim server. A scheduler started this run; nobody watches it, so do not ask questions. Today is $(date '+%A %Y-%m-%d %H:%M').
 
@@ -175,8 +176,8 @@ Your notes from earlier runs (~/fraim/leads/$name/state.md):
 
 $(head -c 8000 "$dir/state.md" 2>/dev/null)
 EOF
-  if [ -s "$rules" ]; then
-    printf "\nThe owner's preferences, learned from reviews (follow them):\n\n%s\n" "$(head -c 6000 "$rules")"
+  if [ -n "$rules" ]; then
+    printf "\nThe owner's preferences, learned from reviews (follow them):\n\n%s\n" "$rules"
   fi
   printf '\nYour queue items and what the owner decided (newest first):\n%s\n' "$(queue_view "$name" "$chief" || true)"
   if [ "$chief" = 1 ]; then
