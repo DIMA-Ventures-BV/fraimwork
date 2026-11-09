@@ -24,6 +24,7 @@ goal finishes ─► skill folder ─► fraim-brain skill propose ─► queue 
 |---|---|---|
 | You | `remember: ...` on WhatsApp, `fraim brain note "..."`, or the server Claude when you correct it | No. It applies at once. |
 | You | `forget r4`, `undo rules` on WhatsApp; `fraim brain forget r4`, `fraim brain undo` | No. |
+| The chat review (every 10 minutes, once a chat pauses) | Claude rereads your new messages and finds lasting preferences by meaning, in any words or language | A preference you stated: no, it applies at once and WhatsApp tells you its id. A correction it generalized: yes, one queue item. |
 | The weekly distill (Sunday 20:00) | Claude reads new evidence and proposes add, change or remove steps | Yes. The proposal is one queue item. |
 
 A proposal is checked before it reaches you: every step must cite events that exist, a change or removal must name a rule that exists, a rule is one line of at most 300 characters, and the file holds at most 60 rules. A proposal that fails a check is dropped and the rules stay the same.
@@ -33,6 +34,18 @@ The distill only adds a rule when you stated it as a general preference, or when
 When you reject a proposal, give a reason: the brain proposes again with it. While a proposal waits, no new one is made.
 
 Every change keeps the previous file in `~/fraim/brain/history/`, so `undo` always works. `fraim brain history` lists the changes and `fraim brain why r4` shows the events behind a rule.
+
+## The chat review
+
+You never need a keyword. `fraim-brain review` runs every 10 minutes and reads the server's Claude sessions: WhatsApp, the laptop and the phone app. It waits until a chat has been quiet for 5 minutes, or until 10 new messages pile up, the same as the background review in Hermes. Without new messages it does not call Claude.
+
+- It reads only your messages. Messages from other WhatsApp numbers, tool output, web pages and mails never count. Claude's answers are context only.
+- Every item must quote your own words exactly, or it is dropped. So a page that says "always do X" can never become a rule.
+- Goals, leads and automations run headless and are skipped.
+- On its first run it reads the last 2 days of chats, not everything.
+- Its answer is checked like a distill proposal. When the answer is broken, nothing changes and the same messages are read again next time.
+
+`remember: ...` still works as a shortcut that saves at once without waiting for the review.
 
 ## Rules per lead
 
@@ -49,7 +62,7 @@ The brain only changes skills it installed itself. Your own skills and plugin sk
 ## Limits
 
 - Goals run with full shell access, so a goal could call `fraim-brain apply` itself. The prompts forbid it, and leads do not have the command. The queue is the gate, not a hard boundary.
-- The brain learns from the queue, from `remember:` and from what the server Claude notes when you correct it. It does not read old chats on its own.
+- The chat review uses Sonnet (`FRAIM_BRAIN_MODEL` changes it). A preference it misses still reaches the weekly distill only through the queue, so check `rules` now and then.
 - No numbers yet on whether the rules reduce rejections. Count your rejections per week in the queue to judge it.
 
 ## Where the design comes from

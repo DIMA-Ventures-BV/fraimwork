@@ -7,6 +7,10 @@
 # Health check every hour; WhatsApp only when something breaks or recovers.
 0 * * * * fraim-doctor --notify
 
+# Every 10 minutes: learn from the owner's chats once they pause (stated preferences become
+# rules at once, corrections wait in the queue). Does nothing, and costs nothing, without new messages.
+*/10 * * * * fraim-brain review --quiet
+
 # Every Sunday evening: propose rule changes from new review feedback; the owner approves them in the queue.
 0 20 * * 0 fraim-brain distill --if-new
 
