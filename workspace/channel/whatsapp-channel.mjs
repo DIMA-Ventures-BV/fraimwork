@@ -10,6 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { sessionCommandArgs } from './goal-command.mjs'
+import { Unanswered } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
 
 function loadEnvFile(file) {
@@ -36,6 +37,8 @@ const SHARED_ROOTS = { [path.join(HOME, 'fraim')]: 'fraim', [path.join(HOME, 'pc
 
 // Chats the owner wrote from; only these may run session_command.
 const ownerChats = new Set()
+// Messages without an answer on WhatsApp yet; they get a reminder into the session.
+const unanswered = new Unanswered({ after: Number(env.FRAIM_REPLY_REMIND_MS) || 180000 })
 
 const log = (...parts) => process.stderr.write(`[whatsapp-channel] ${parts.join(' ')}\n`)
 
@@ -155,11 +158,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     if (req.params.name === 'reply') {
       await gateway('/send', { chat_id: String(args.chat_id), text: String(args.text) })
+      unanswered.answered(args.chat_id)
       return { content: [{ type: 'text', text: 'sent' }] }
     }
     if (req.params.name === 'send_file') {
       const shared = toSharedPath(String(args.path))
       await gateway('/send-file', { chat_id: String(args.chat_id), path: shared, caption: args.caption ?? '' })
+      unanswered.answered(args.chat_id)
       return { content: [{ type: 'text', text: `sent ${shared}` }] }
     }
     if (req.params.name === 'session_command') {
@@ -240,7 +245,22 @@ async function handleEvent(event) {
       },
     },
   })
+  unanswered.received(event.chat_id, event.text, event.name)
 }
+
+setInterval(async () => {
+  for (const r of unanswered.due()) {
+    log(`no answer yet for a message in ${r.chatId}; reminder ${r.reminded}`)
+    try {
+      await mcp.notification({
+        method: 'notifications/claude/channel',
+        params: { content: r.content, meta: { chat_id: r.chatId, sender: 'fraim', name: 'reminder', message_id: '', owner: 'no' } },
+      })
+    } catch (err) {
+      log('could not send the reminder:', err.message)
+    }
+  }
+}, 15000).unref()
 
 async function listen() {
   let delay = 1000
