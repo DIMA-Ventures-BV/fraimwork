@@ -2099,8 +2099,8 @@ cmd_lead() {
   load_config
   [ $# -gt 0 ] || set -- list
   case "$1" in
-    new|list|show|run|pause|resume) ;;
-    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | pause NAME | resume NAME' ;;
+    new|list|show|run|pause|resume|tell|ask|events) ;;
+    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off] | pause NAME | resume NAME' ;;
   esac
   [ "$1" != run ] || server_logged_in || need_login_step
   workspace_ssh "fraim-lead $(printf '%q ' "$@")"
@@ -2561,7 +2561,8 @@ Operate
   fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
                                              the review queue: goal results, lead ideas, decisions
   fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME
-                                             lead agents that watch an area on a schedule
+           | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off]
+                                             lead agents that watch an area; the chief also routes work all day
   fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | stats | distill | skills]
                                              preferences and skills learned from reviews
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude

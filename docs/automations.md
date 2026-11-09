@@ -96,6 +96,7 @@ Not built: `missed: latest` (catch up on schedule hits while the server was off)
 | `trigger: files: inbox` | New files in a folder inside `~/fraim` (subfolders too) | `{{input}}`: one line per new file | trigger plugin `files`, polled | built |
 | `trigger: page: https://...` | The text of a public page changed | `{{input}}`: the new lines | trigger plugin `page`, polled | built |
 | `trigger: after: <other>` | Another automation delivered an answer (not SILENT, not failed) | `{{input}}`: its answer | the runner | built |
+| `trigger: queue: events` | New items in the review queue: `events` (goal results, failures, automation answers, priority 1), `urgent` (priority 1) or `all`. Items of the chief of staff never count | `{{input}}`: one line per item | trigger plugin `queue`, polled | built |
 | `trigger: <type>: <value>` | The owner's own plugin in `~/fraim/automations/_triggers/<type>` reports something | its lines | trigger plugin, polled | built |
 | `whatsapp: <regex>` | The owner sends a matching WhatsApp message | `text`, `match.1..n`, `chat` | the WhatsApp channel, same path as `goal:` | step 2 |
 | `webhook: true` | Someone POSTs to `https://<server>/hooks/<name>/<secret>` | `body`, `headers`, `query` | a small receiver behind Tailscale Funnel or Caddy | step 4 |
@@ -144,7 +145,7 @@ The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent
 
 ### Leads are automations
 
-An automation with `lead: <name>` runs the lead `~/fraim/leads/<name>` instead of a prompt: the lead builds its own prompt and tools, and the runner adds the schedule, the run history, pause, the failure rules and `after:` chaining. `fraim-lead new` writes it (`output: none`, because a lead sends its own message when it added something). A lead has no `--dry` run. Every prompt also gets the owner's general rules from the brain (`fraim-brain show --plain`).
+An automation with `lead: <name>` runs the lead `~/fraim/leads/<name>` instead of a prompt: the lead builds its own prompt and tools, and the runner adds the schedule, the run history, pause, the failure rules and `after:` chaining. The trigger and its `{{input}}` reach the lead as `FRAIM_LEAD_TRIGGER` and `FRAIM_LEAD_INPUT`, so one lead can have more than one automation: the chief has `chief` (the morning digest) and `chief-events` (`trigger: queue: events`). `fraim-lead new` writes it (`output: none`, because a lead sends its own message when it added something). A lead has no `--dry` run. Every prompt also gets the owner's general rules from the brain (`fraim-brain show --plain`).
 
 ### The runner: `fraim-auto`
 
