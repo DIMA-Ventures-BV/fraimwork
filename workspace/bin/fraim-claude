@@ -19,6 +19,11 @@ if [ -r /etc/fraim/runtime.env ]; then
 fi
 # PERMISSIONS=all in .env (the default): nobody is there to approve a tool, so skip the
 # prompts. Managed deny rules and --disallowedTools still apply; --allowedTools no longer limits.
+# A headless run (-p: goals, leads, automations, the brain) has no owner watching. Commands
+# that only the owner may run (queue decisions, brain changes) check this and refuse.
+for arg in "$@"; do
+  case "$arg" in -p|--print) export FRAIM_HEADLESS=1; break ;; esac
+done
 if [ "${FRAIM_PERMISSIONS:-all}" = all ]; then
   set -- --dangerously-skip-permissions "$@"
 fi

@@ -51,10 +51,11 @@ export function queueArgs(command) {
     case 'why': return ['fraim-brain', ['why', command.id]]
     case 'forget': return ['fraim-brain', ['forget', command.id]]
     case 'undo-rules': return ['fraim-brain', ['undo']]
-    case 'dismiss': return ['fraim-queue', ['dismiss', command.id]]
+    case 'dismiss': return ['fraim-queue', ['dismiss', command.id, '--via', 'whatsapp']]
     default: {
       const args = [command.action, command.id]
       if (command.note) args.push('--note', command.note)
+      args.push('--via', 'whatsapp')
       return ['fraim-queue', args]
     }
   }

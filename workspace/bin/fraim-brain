@@ -16,6 +16,7 @@
 //   fraim-brain forget rN                             remove a rule now
 //   fraim-brain undo                                  put the rules back as they were before the last change
 //   fraim-brain history                               the last changes
+//   fraim-brain stats                                 how often the owner sends work back, per week
 //   fraim-brain review [--quiet]                      learn from the owner's chats (every 10 minutes, cron)
 //   fraim-brain distill [--if-new]                    propose rule changes from new evidence (weekly, cron)
 //   fraim-brain skill propose DIR [--goal gN] [--lead NAME]   offer a new or changed skill for review
@@ -407,7 +408,7 @@ function distill(opts) {
     }
     state.distilledUpTo = Math.max(state.distilledUpTo, newest)
     if (!ops.length) { saveState(state); return 'The rules already match the feedback; nothing to change.' }
-    return propose(state, ops, result.lines, { feedback: opts.feedback, intro: 'The brain wants to change the rules that every goal and lead follows.' })
+    return propose(state, ops, result.lines, { feedback: opts.feedback, intro: ['The brain wants to change the rules that every goal and lead follows.', trendLine()].filter(Boolean).join(' ') })
   })
 }
 
@@ -950,7 +951,61 @@ function show(opts) {
   const model = parseRules(read(RULES))
   if (!allRules(model).length) return opts.plain ? '' : 'No rules yet. They grow from your reviews in the queue and from "remember:".'
   if (opts.plain || opts.for !== undefined) return promptRules(model, opts.for || '', !!opts.all)
-  return renderRules(model).trim()
+  const trend = trendLine()
+  return renderRules(model).trim() + (trend ? `\n\n${trend}` : '')
+}
+
+// --- guard and numbers -----------------------------------------------------------------
+
+// Rule and skill changes belong to the owner. fraim-claude marks a headless run (a goal, a
+// lead, an automation), and such a run cannot make them, even with every tool allowed.
+function ownerOnly(what) {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Error(`only the owner can ${what}; a goal, lead or automation cannot`)
+}
+
+const weekOf = (iso) => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7))
+  return d.toISOString().slice(0, 10)
+}
+
+// How often the owner sends work back, per week: the number the brain should lower.
+export function weeklyStats(items) {
+  const weeks = new Map()
+  for (const it of items) {
+    if (!['approved', 'rejected'].includes(it.state) || it.brain || it.skill || !it.decided) continue
+    const w = weekOf(it.decided)
+    if (!w) continue
+    const row = weeks.get(w) || { week: w, decided: 0, rejected: 0 }
+    row.decided++
+    if (it.state === 'rejected') row.rejected++
+    weeks.set(w, row)
+  }
+  return [...weeks.values()].sort((a, b) => b.week.localeCompare(a.week))
+}
+
+function queueItems() {
+  let names = []
+  try { names = fs.readdirSync(QUEUE) } catch { return [] }
+  return names.filter((n) => /^q\d+$/.test(n)).map((n) => { try { return JSON.parse(read(path.join(QUEUE, n, 'item.json'))) } catch { return null } }).filter(Boolean)
+}
+
+const pct = (r) => `${Math.round((100 * r.rejected) / r.decided)}%`
+
+function stats() {
+  const rows = weeklyStats(queueItems()).slice(0, 8)
+  const rules = allRules(parseRules(read(RULES))).length
+  const head = `${rules} rules, ${events().length} things you said.`
+  if (!rows.length) return `${head}\nNo decided work yet, so no trend.`
+  return [head, 'Work you sent back, per week (lower is better):', ...rows.map((r) => `${r.week}: ${r.rejected} of ${r.decided} (${pct(r)})`)].join('\n')
+}
+
+function trendLine() {
+  const [now, before] = weeklyStats(queueItems())
+  if (!now) return ''
+  const row = (r) => `week of ${r.week}: ${r.rejected} of ${r.decided} (${pct(r)})`
+  return `Work sent back, ${row(now)}${before ? `; ${row(before)}` : ''}.`
 }
 
 // --- CLI -------------------------------------------------------------------------------
@@ -976,26 +1031,27 @@ function main(argv) {
     const args = parseArgs(more)
     switch (sub) {
       case 'propose': if (!args._[0]) usage('skill propose DIR [--goal gN] [--lead NAME]'); return skillPropose(args._[0], args)
-      case 'install': return skillInstall(args._[0])
-      case 'discard': return skillDiscard(args._[0], args.note || '')
+      case 'install': ownerOnly('install a skill'); return skillInstall(args._[0])
+      case 'discard': ownerOnly('reject a skill'); return skillDiscard(args._[0], args.note || '')
       case 'list': return skillList()
-      case 'lock': return skillLock(args._[0], true)
-      case 'unlock': return skillLock(args._[0], false)
+      case 'lock': ownerOnly('lock a skill'); return skillLock(args._[0], true)
+      case 'unlock': ownerOnly('unlock a skill'); return skillLock(args._[0], false)
       default: usage('skill propose DIR | list | lock NAME | unlock NAME')
     }
   }
   const args = parseArgs(rest)
   switch (action) {
     case 'show': return show(args)
-    case 'note': return note(args._.join(' '), args.lead)
+    case 'note': ownerOnly('add a rule'); return note(args._.join(' '), args.lead)
     case 'why': return why(args._[0])
-    case 'forget': return forget(args._[0])
-    case 'undo': return undo()
+    case 'forget': ownerOnly('remove a rule'); return forget(args._[0])
+    case 'undo': ownerOnly('undo a rule change'); return undo()
     case 'history': return history()
+    case 'stats': return stats()
     case 'review': return review({ quiet: !!args.quiet })
     case 'distill': return distill({ ifNew: !!args.ifNew, feedback: oneLine(args.feedback || '') })
-    case 'apply': return apply(args._[0])
-    case 'discard': return discard(args._[0], args.note || '')
+    case 'apply': ownerOnly('apply rule changes'); return apply(args._[0])
+    case 'discard': ownerOnly('reject rule changes'); return discard(args._[0], args.note || '')
     case 'log': return log(args, args._.join(' '))
     default: usage('show | note TEXT | why rN | forget rN | undo | history | distill [--if-new] | skill propose DIR | skill list')
   }

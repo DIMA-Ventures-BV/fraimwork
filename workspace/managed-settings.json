@@ -11,7 +11,11 @@
       "Edit(//home/claude/.config/fraim/**)",
       "Edit(//home/claude/.ssh/**)",
       "Edit(//home/claude/.claude/settings.json)",
-      "Bash(sudo:*)"
+      "Bash(sudo:*)",
+      "Bash(fraim-brain apply:*)",
+      "Bash(fraim-brain discard:*)",
+      "Bash(fraim-brain skill install:*)",
+      "Bash(fraim-brain skill discard:*)"
     ]
   },
   "hooks": {
