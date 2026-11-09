@@ -364,6 +364,8 @@ Not logged in · Please run /login"
   echo "goal" > "$FRAIM_GOALS_DIR/g1/goal.md"
   echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
   echo "sid-g1" > "$FRAIM_GOALS_DIR/g1/session-id"
+  # Both restarts used up: this time reconcile fails the goal.
+  echo 2 > "$FRAIM_GOALS_DIR/g1/restarts"
   touch "$OFFLINE"
   run "$GOAL" reconcile
   [ "$status" -eq 0 ]

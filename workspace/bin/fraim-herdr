@@ -225,13 +225,27 @@ cmd_last_text() {
 
 tell_owner() { FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$1" >/dev/null 2>&1 || true; }
 
+# What the owner calls it: the goal's task or the session's repo, never an id. The owner
+# answers in plain words; the server's Claude finds the session with fraim-herdr ls.
+describe() {
+  local name="$1" kind="$2" rec="$3" what
+  case "$kind" in
+    goal)
+      what="$(head -1 "${FRAIM_GOALS_DIR:-$HOME/fraim/goals}/$name/goal.md" 2>/dev/null | cut -c1-80)"
+      printf 'The task "%s"' "${what:-a background task}" ;;
+    session)
+      printf 'The coding session in %s' "$(jq -r '.labels.repo // "a repo"' <<<"$rec")" ;;
+    *) printf 'A session on the server' ;;
+  esac
+}
+
 # Follows status changes. Blocked (a question or a permission) reaches the owner for every
 # kind; a coding session that finished a turn reaches the owner too. Goals send their own
 # result (fraim-goal), main answers on WhatsApp itself.
 cmd_watch() {
   in_workspace || die "the watcher runs in the workspace container only"
   declare -A last=()
-  local line type addr state name kind msg text
+  local line type addr state rec name kind msg text
   while IFS= read -r line; do
     type="$(jq -r '.params.type // empty' <<<"$line" 2>/dev/null)"
     [ "$type" = status ] || continue
@@ -240,8 +254,9 @@ cmd_watch() {
     [ -n "$addr" ] || continue
     [ "${last[$addr]:-}" != "$state" ] || continue
     last[$addr]="$state"
-    name="$(hc get "$addr" --json 2>/dev/null | jq -r '.name // .address')"
-    kind="$(hc get "$addr" --json 2>/dev/null | jq -r '.labels.fraim // ""')"
+    rec="$(hc get "$addr" --json 2>/dev/null)" || continue
+    name="$(jq -r '.name // .address' <<<"$rec")"
+    kind="$(jq -r '.labels.fraim // ""' <<<"$rec")"
     [ -n "$kind" ] && [ "$kind" != service ] || continue
     case "$state" in
       blocked)
