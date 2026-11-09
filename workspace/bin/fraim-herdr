@@ -13,6 +13,9 @@
 #   fraim-herdr attach [NAME]    humans: main (default), g3, s1, or a plain shell that stays
 #   fraim-herdr watch            tell the owner when a session needs them or a session finished
 #   fraim-herdr status ADDR      the terminal's status word (working, done, blocked, idle, ...)
+#   fraim-herdr state NAME       live, finished, gone or unknown (the core did not answer)
+#   fraim-herdr trust DIR        mark a folder trusted for Claude Code (atomic ~/.claude.json write)
+#   fraim-herdr redact           hide tokens and keys in stdin
 #   fraim-herdr last-text ADDR   the last thing Claude said in that terminal (from its transcript)
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
@@ -54,21 +57,81 @@ EOF
 
 in_workspace() { [ "${FRAIM_ROLE:-workspace}" = workspace ]; }
 
+# A run without the owner (goals, leads, automations: FRAIM_HEADLESS=1) may drive goals,
+# which run headless too, but never type into main or a coding session: those act as the
+# owner, so a goal that read a hostile page could use them to approve its own work.
+# Reading (ls, get, read, wait, events) stays open.
+headless_allows() {
+  [ "${FRAIM_HEADLESS:-}" = 1 ] || return 0
+  local sub="$1" target=""; shift
+  case "$sub" in
+    ls|get|read|wait|events|schema|templates|--version|-V) return 0 ;;
+    run)
+      while [ $# -gt 0 ]; do
+        case "$1" in --name) target="${2:-}"; break ;; --) break ;; esac
+        shift
+      done ;;
+    send|keys|kill|rm|interrupt|put|label|keep|attach)
+      for a in "$@"; do case "$a" in -*) ;; *) target="$a"; break ;; esac; done ;;
+  esac
+  printf '%s' "$target" | grep -Eq '^g[0-9]{1,6}$'
+}
+
 hcx() {
+  headless_allows "$@" \
+    || die "a run without the owner may only drive goals, not main or a coding session"
   if ! in_workspace && ! alive; then
     die "the session service (herdr) does not answer in the workspace container; run: fraim restart workspace"
   fi
   hc "$@"
 }
 
-live() { [ "$(hc get "$1" --json 2>/dev/null | jq -r '.state // ""')" = live ]; }
+# live, finished, gone (no such terminal: hc exit 3) or unknown (the core did not answer).
+# Only gone or finished may be replaced: a busy core must never cost a running Claude.
+term_state() {
+  local rec rc
+  rec="$(hc get "$1" --json 2>/dev/null)"
+  rc=$?
+  if [ "$rc" -eq 3 ]; then echo gone; return; fi
+  if [ "$rc" -ne 0 ]; then echo unknown; return; fi
+  jq -r '.state // "unknown"' <<<"$rec" 2>/dev/null || echo unknown
+}
+live() { [ "$(term_state "$1")" = live ]; }
 
 status_of() { hcx get "$1" --json 2>/dev/null | jq -r '.status.state // "none"'; }
 
+# Claude Code asks once per folder whether to trust it, and a session nobody watches would
+# wait there. Running Claudes rewrite ~/.claude.json too: write a copy next to it and rename
+# it into place, so no reader ever sees a half-written file.
+cmd_trust() {
+  local dir="$1" state="$HOME/.claude.json" tmp
+  [ -s "$state" ] || echo '{}' > "$state"
+  jq -e --arg d "$dir" '.projects[$d].hasTrustDialogAccepted == true' "$state" >/dev/null 2>&1 && return 0
+  tmp="$(mktemp "$state.XXXXXX")" || return 1
+  if jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$state" > "$tmp" 2>/dev/null; then
+    chmod 0600 "$tmp"
+    mv -f "$tmp" "$state"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# Tokens and keys a session may have printed never go out in a WhatsApp message.
+redact() {
+  sed -E \
+    -e 's/(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/[hidden]/g' \
+    -e 's/(([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY))["'"'"']?[[:space:]]*[:=][[:space:]]*)["'"'"']?[^[:space:]"'"'"']{6,}/\1[hidden]/gI'
+}
+
 # A finished terminal with this name blocks a new one with the same name: remove it first.
 start_service() {
-  local name="$1" kind="$2"; shift 2
-  live "$name" && return 0
+  local name="$1" kind="$2" state; shift 2
+  state="$(term_state "$name")"
+  case "$state" in
+    live) return 0 ;;
+    unknown) echo "fraim-herdr: $name: the core did not answer; not touching it" >&2; return 1 ;;
+  esac
   hc rm "$name" >/dev/null 2>&1 || true
   hc run --bg --name "$name" --cwd "$HOME/fraim" --label "fraim=$kind" --no-parent --no-notify -- "$@" >/dev/null
 }
@@ -77,10 +140,12 @@ cmd_up() {
   in_workspace || die "the session service runs in the workspace container only"
   mkdir -p "$HOME/.local/state/fraim" "$HOME/fraim"
   hc server status >/dev/null 2>&1 || die "herdr-core did not start"
-  start_service main main fraim-session
+  local failed=0
+  start_service main main fraim-session || failed=1
   # The review queue page, on the last preview slot; restarts itself when it stops.
-  start_service queue-page service bash -c 'while true; do fraim-queue serve 2>>~/.local/state/fraim/queue.log; sleep 5; done'
-  start_service watch service bash -c 'while true; do fraim-herdr watch 2>>~/.local/state/fraim/watch.log; sleep 5; done'
+  start_service queue-page service bash -c 'while true; do fraim-queue serve 2>>~/.local/state/fraim/queue.log; sleep 5; done' || failed=1
+  start_service watch service bash -c 'while true; do fraim-herdr watch 2>>~/.local/state/fraim/watch.log; sleep 5; done' || failed=1
+  return "$failed"
 }
 
 cmd_supervise() {
@@ -111,11 +176,14 @@ cmd_attach() {
     g[0-9]*) exec fraim-goal attach "$name" ;;
     s[0-9]*) exec fraim-sessions attach "$name" ;;
   esac
-  if ! live "$name"; then
+  case "$(term_state "$name")" in
+    live) ;;
+    unknown) die "the session service does not answer; try again in a minute" ;;
+    *)
     [ "$name" != main ] || die "the main session is not running; run: fraim restart workspace"
     hc rm "$name" >/dev/null 2>&1 || true
-    hc run --bg --name "$name" --cwd "$HOME" --label fraim=shell --no-parent --no-notify >/dev/null || die "could not open $name"
-  fi
+    hc run --bg --name "$name" --cwd "$HOME" --label fraim=shell --no-parent --no-notify >/dev/null || die "could not open $name" ;;
+  esac
   echo "Leave with Ctrl+\\ ($name keeps running)."
   exec hc attach "$name"
 }
@@ -157,13 +225,27 @@ cmd_last_text() {
 
 tell_owner() { FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$1" >/dev/null 2>&1 || true; }
 
+# What the owner calls it: the goal's task or the session's repo, never an id. The owner
+# answers in plain words; the server's Claude finds the session with fraim-herdr ls.
+describe() {
+  local name="$1" kind="$2" rec="$3" what
+  case "$kind" in
+    goal)
+      what="$(head -1 "${FRAIM_GOALS_DIR:-$HOME/fraim/goals}/$name/goal.md" 2>/dev/null | cut -c1-80)"
+      printf 'The task "%s"' "${what:-a background task}" ;;
+    session)
+      printf 'The coding session in %s' "$(jq -r '.labels.repo // "a repo"' <<<"$rec")" ;;
+    *) printf 'A session on the server' ;;
+  esac
+}
+
 # Follows status changes. Blocked (a question or a permission) reaches the owner for every
 # kind; a coding session that finished a turn reaches the owner too. Goals send their own
 # result (fraim-goal), main answers on WhatsApp itself.
 cmd_watch() {
   in_workspace || die "the watcher runs in the workspace container only"
   declare -A last=()
-  local line type addr state name kind msg text
+  local line type addr state rec name kind msg text
   while IFS= read -r line; do
     type="$(jq -r '.params.type // empty' <<<"$line" 2>/dev/null)"
     [ "$type" = status ] || continue
@@ -172,8 +254,9 @@ cmd_watch() {
     [ -n "$addr" ] || continue
     [ "${last[$addr]:-}" != "$state" ] || continue
     last[$addr]="$state"
-    name="$(hc get "$addr" --json 2>/dev/null | jq -r '.name // .address')"
-    kind="$(hc get "$addr" --json 2>/dev/null | jq -r '.labels.fraim // ""')"
+    rec="$(hc get "$addr" --json 2>/dev/null)" || continue
+    name="$(jq -r '.name // .address' <<<"$rec")"
+    kind="$(jq -r '.labels.fraim // ""' <<<"$rec")"
     [ -n "$kind" ] && [ "$kind" != service ] || continue
     case "$state" in
       blocked)
@@ -187,13 +270,16 @@ cmd_watch() {
               && tell_owner "The main session waits for an answer on its screen: ${msg:-open it with fraim shell}."
           ) &
         else
-          tell_owner "$name needs you: ${msg:-it waits for an answer}."
+          msg="$(printf '%s' "${msg#answer: }" | redact)"
+          tell_owner "$(describe "$name" "$kind" "$rec") asks you: ${msg:-it waits for your answer}
+Answer me here in your own words."
         fi ;;
       done)
         [ "$kind" = session ] || continue
-        text="$(cmd_last_text "$name" | head -c 1200)"
-        tell_owner "$name is done.
-${text:-(no text)}" ;;
+        # Hide first, then shorten: a cut through a token would keep part of it visible.
+        text="$(cmd_last_text "$name" | redact | head -c 1200)"
+        tell_owner "$(describe "$name" "$kind" "$rec") is done.
+${text:-It wrote no summary.}" ;;
     esac
   done < <(hc events --json 2>/dev/null)
 }
@@ -207,6 +293,9 @@ case "$action" in
   hc) hcx "$@" ;;
   ls) cmd_ls "${1:-}" ;;
   attach) cmd_attach "${1:-main}" ;;
+  trust) [ $# -eq 1 ] || usage "trust DIR"; cmd_trust "$1" ;;
+  state) [ $# -eq 1 ] || usage "state NAME"; term_state "$1" ;;
+  redact) redact ;;
   watch) cmd_watch ;;
   status) [ $# -eq 1 ] || usage "status NAME"; status_of "$1" ;;
   last-text) [ $# -eq 1 ] || usage "last-text NAME"; cmd_last_text "$1" ;;

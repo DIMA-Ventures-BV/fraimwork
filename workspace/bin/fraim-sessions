@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Coding sessions on the server: interactive Claude Code sessions in a repo under ~/code,
 # each in its own herdr terminal (s1, s2, ...), so they keep working while the laptop is
-# closed. The owner talks to them from the laptop, the phone (WhatsApp "s1: ...") or by
+# closed. The owner talks to them from the laptop, the phone (in plain words on WhatsApp,
+# passed on by the server's Claude) or by
 # taking one over (attach). fraim-herdr watch tells the owner when one finishes a turn or
 # asks something. See docs/sessions.md.
 #
@@ -13,7 +14,7 @@
 #   fraim-sessions stop ID                close it (send reopens the same conversation)
 #
 # Each session keeps ~/fraim/sessions/<id>/: repo, cwd, session-id, task.
-# At most FRAIM_SESSIONS_MAX (default 4) run at once: every Claude takes memory.
+# At most FRAIM_SESSIONS_MAX run at once (default: from the server's memory, 4 on 4 GB).
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
@@ -30,20 +31,30 @@ hc() { fraim-herdr hc "$@"; }
 valid_id() { printf '%s' "$1" | grep -Eq '^s[0-9]{1,6}$'; }
 session_dir() { valid_id "$1" || usage "'$1' is not a session id (s1, s2, ...)"; [ -d "$sessions/$1" ] || die "no session $1"; printf '%s' "$sessions/$1"; }
 term_get() { hc get "$1" --json 2>/dev/null; }
-term_live() { [ "$(term_get "$1" | jq -r '.state // ""')" = live ]; }
+# live, finished, gone or unknown; only gone or finished may be replaced (fraim-herdr state).
+term_state() { fraim-herdr state "$1" 2>/dev/null || echo unknown; }
+term_live() { [ "$(term_state "$1")" = live ]; }
 new_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())'; }
 
 live_count() { fraim-herdr ls --json 2>/dev/null | jq '[.[] | select(.kind == "session")] | length' 2>/dev/null || echo 0; }
 
-# Claude Code asks once per folder whether to trust it; a session nobody watches would wait
-# there forever. The owner chose the repo, so mark it trusted.
-trust() {
-  local dir="$1" state="$HOME/.claude.json" tmp
-  [ -s "$state" ] || echo '{}' > "$state"
-  jq -e --arg d "$dir" '.projects[$d].hasTrustDialogAccepted == true' "$state" >/dev/null 2>&1 && return 0
-  tmp="$(mktemp)"
-  jq --arg d "$dir" '.projects[$d].hasTrustDialogAccepted = true' "$state" > "$tmp" && cat "$tmp" > "$state"
-  rm -f "$tmp"
+# A coding session acts as the owner (FRAIM_HEADLESS is not set in it). A run without the
+# owner (a goal, lead or automation) must not start or steer one: a goal that read a hostile
+# page could otherwise have a session approve its own work.
+owner_only() {
+  [ "${FRAIM_HEADLESS:-}" != 1 ] || die "only the owner (or main, for the owner) can start or steer a coding session"
+}
+
+# Opens the terminal when it is gone or finished. A core that does not answer is not "gone":
+# replacing the terminal then would kill a working Claude.
+ensure_open() {
+  local id="$1" dir="$2"
+  case "$(term_state "$id")" in
+    live) return 0 ;;
+    unknown) die "the session service does not answer; try again in a minute" ;;
+  esac
+  check_room
+  launch "$id" "$dir" --resume
 }
 
 launch() {
@@ -51,18 +62,35 @@ launch() {
   sid="$(cat "$dir/session-id")"
   cwd="$(cat "$dir/cwd")"
   [ -d "$cwd" ] || die "the folder $cwd is gone"
-  trust "$cwd"
+  fraim-herdr trust "$cwd" || die "could not mark $cwd as trusted in ~/.claude.json"
   local args=(fraim-claude)
   if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
   hc rm "$id" >/dev/null 2>&1 || true
   hc run --bg --name "$id" --cwd "$cwd" --label fraim=session --label "repo=$(cat "$dir/repo")" \
     --no-parent --no-notify -- "${args[@]}" >/dev/null || die "could not start session $id"
   hc wait "$id" --timeout "${FRAIM_SESSION_READY:-90}" --json >/dev/null 2>&1 || true
-  term_live "$id" || die "session $id stopped right after it started; see: fraim-sessions read $id"
+  local state tries=0
+  while state="$(term_state "$id")"; [ "$state" = unknown ] && [ "$tries" -lt 10 ]; do
+    tries=$((tries + 1))
+    sleep 1
+  done
+  [ "$state" = live ] || die "session $id stopped right after it started; see: fraim-sessions read $id"
+}
+
+# Each Claude takes 300 to 500 MB. Keep about 1.5 GB for main, the browser and WhatsApp, and
+# allow one session per 500 MB of the rest (4 on 4 GB, about 12 on 8 GB), unless set.
+default_max() {
+  local mb
+  mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)"
+  [ -n "$mb" ] || { echo 4; return; }
+  mb=$(( (mb - 1500) / 500 ))
+  [ "$mb" -ge 2 ] || mb=2
+  [ "$mb" -le 20 ] || mb=20
+  echo "$mb"
 }
 
 check_room() {
-  local max="${FRAIM_SESSIONS_MAX:-4}"
+  local max="${FRAIM_SESSIONS_MAX:-$(default_max)}"
   [ "$(live_count)" -lt "$max" ] || die "$max sessions are open, the most this server runs at once; stop one first (fraim-sessions list)"
 }
 
@@ -71,15 +99,17 @@ cmd_new() {
   [ -n "$repo" ] || usage 'new REPO [--] ["task"]'
   shift
   [ "${1:-}" != -- ] || shift
+  owner_only
   case "/$repo/" in */../*|*/./*) usage "'$repo' is not a folder in ~/code" ;; esac
   case "$repo" in
-    /*) cwd="$repo" ;;
-    *) printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || usage "'$repo' is not a folder in ~/code"; cwd="$code/$repo" ;;
+    "$code"/*) repo="${repo#"$code"/}" ;;
   esac
+  printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || usage "'$repo' is not a folder in ~/code"
+  cwd="$code/$repo"
   [ -d "$cwd" ] || die "no folder $cwd (repos live in ~/code; fraim repo add puts one there)"
-  # The real folder, so a symlink cannot point a session outside the home folder.
+  # The real folder, so a symlink cannot point a session outside ~/code (into ~/.claude, say).
   cwd="$(cd "$cwd" && pwd -P)"
-  case "$cwd" in "$(cd "$HOME" && pwd -P)"/*) ;; *) die "a session works in a folder under $HOME" ;; esac
+  case "$cwd" in "$(cd "$code" && pwd -P)"/*) ;; *) die "a session works in a repo folder under $code" ;; esac
   check_room
   mkdir -p "$sessions"
   n=1
@@ -127,11 +157,17 @@ cmd_send() {
   dir="$(session_dir "$id")" || exit $?
   text="$*"
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "send ID \"message\""
-  if ! term_live "$id"; then
-    check_room
-    launch "$id" "$dir" --resume
+  owner_only
+  ensure_open "$id" "$dir"
+  # On a question (AskUserQuestion) the text is the answer. A permission prompt is never
+  # answered this way: typed text plus Enter would pick its default, "Yes".
+  local status
+  status="$(term_get "$id" | jq -c '.status // {}')"
+  if [ "$(jq -r '.state // ""' <<<"$status")" = blocked ]; then
+    [ "$(jq -r '.kind // ""' <<<"$status")" = question ] \
+      || die "session $id waits for a permission, not a question; the owner answers it on the screen (fraim shell $id)"
+    force=(--force)
   fi
-  [ "$(term_get "$id" | jq -r '.status.state // ""')" != blocked ] || force=(--force)
   hc send "${force[@]}" "$id" "$text" >/dev/null || die "the message did not reach session $id"
   echo "Sent to $id."
 }
@@ -148,7 +184,8 @@ cmd_attach() {
   local id="$1" dir
   dir="$(session_dir "$id")" || exit $?
   [ -t 0 ] && [ -t 1 ] || usage "attach is for a person in a terminal; use read or send"
-  if ! term_live "$id"; then check_room; launch "$id" "$dir" --resume; fi
+  owner_only
+  ensure_open "$id" "$dir"
   echo "Session $id. Leave with Ctrl+\\ (the session keeps running)."
   exec fraim-herdr hc attach "$id"
 }
@@ -156,6 +193,7 @@ cmd_attach() {
 cmd_stop() {
   local id="$1"
   session_dir "$id" >/dev/null || exit $?
+  owner_only
   term_live "$id" || { echo "Session $id is not open."; return 0; }
   hc kill "$id" >/dev/null 2>&1 || true
   hc rm "$id" >/dev/null 2>&1 || true
