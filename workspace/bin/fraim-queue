@@ -318,6 +318,28 @@ export function decide(id, verdict, note = '', via = 'cli') {
   return item
 }
 
+// A failed attempt at a decision is no longer a question once a later goal for the same
+// decision succeeded: close those failures (not a decision of the owner, so no brain note).
+// origin: the queue item the goals were started from (~/fraim/goals/gN/queue).
+export function supersedeFailed(origin, by) {
+  if (!/^q\d{1,6}$/.test(origin || '') || !/^g\d{1,6}$/.test(by || '')) usage('supersede --origin qN --by gN')
+  const goals = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim', 'goals')
+  const closed = []
+  for (const item of allItems()) {
+    if (item.state !== 'open' || item.kind !== 'failed' || !/^g\d+$/.test(item.goal || '') || item.goal === by) continue
+    let from = ''
+    try { from = fs.readFileSync(path.join(goals, item.goal, 'queue'), 'utf8').trim() } catch {}
+    if (from !== origin) continue
+    item.state = 'dismissed'
+    item.note = `done after all by goal ${by}`
+    item.decided = now()
+    item.via = 'system'
+    writeItem(item)
+    closed.push(item.id)
+  }
+  return closed
+}
+
 export function setPriority(id, priority) {
   const item = readItem(id)
   const p = parseInt(priority, 10)
@@ -376,7 +398,10 @@ function latestRun(dir) {
   const f = files.at(-1)
   if (!f) return null
   const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(f)
-  return { text: readText(path.join(dir, f), 4000).trim(), time: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` }
+  // The run log ends with the inbox notes the run read (for the lead's own history); the owner
+  // sees only the answer.
+  const text = readText(path.join(dir, f), 4000).split('\n--- inbox this run read ---')[0].trim()
+  return { text, time: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` }
 }
 
 export function team() {
@@ -1119,6 +1144,10 @@ function main(argv) {
       const verdict = { approve: 'approved', reject: 'rejected', dismiss: 'dismissed' }[action]
       const item = decide(id, verdict, args.note || args._.slice(1).join(' '), args.via === 'whatsapp' ? 'whatsapp' : 'cli')
       return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}${item.outcome ? `. ${item.outcome}` : ''}`)
+    }
+    case 'supersede': {
+      const closed = supersedeFailed(args.origin, args.by)
+      return console.log(closed.length ? `closed ${closed.join(' ')}` : 'nothing to close')
     }
     case 'prio': {
       if (!id || !args._[1]) usage('prio ID 1|2|3')

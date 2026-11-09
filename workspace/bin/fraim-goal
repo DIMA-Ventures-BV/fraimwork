@@ -188,13 +188,29 @@ brain_rules() {
   printf "\nThe owner's preferences, learned from earlier reviews. Follow them unless the goal says otherwise:\n\n%s\n" "$rules"
 }
 
+# A queue title the owner can read: a goal started from a queue decision begins with
+# 'The owner approved queue item q22 ("Topic"). Do this...' (and a retry with "Failed: ...");
+# the topic is what matters.
+plain_title() {
+  local t="$1" inner
+  while :; do
+    inner="$(printf '%s' "$t" | sed -n 's/^\(Failed: \)*The owner approved\( queue item\)\{0,1\} q[0-9]* ("\(.*\)").*$/\3/p')"
+    [ -n "$inner" ] || inner="$(printf '%s' "$t" | sed -n 's/^\(Failed: \)*The owner approved\( queue item\)\{0,1\} q[0-9]* ("\(.*\)$/\3/p')"
+    [ -n "$inner" ] && [ "$inner" != "$t" ] || break
+    t="$inner"
+  done
+  t="${t#Failed: }"
+  t="${t#The owner approved: }"
+  printf '%s' "$t" | cut -c1-100
+}
+
 # Puts the result into the review queue and prints the queue id (nothing without fraim-queue).
 to_queue() {
   local id="$1" dir="$2" failed="$3" meta='{}' title kind priority on_approve link file
   command -v fraim-queue >/dev/null || return 0
   if [ -s "$dir/queue.json" ] && jq -e 'type == "object"' "$dir/queue.json" >/dev/null 2>&1; then meta="$(cat "$dir/queue.json")"; fi
   title="$(jq -r '.title // "" | tostring' <<<"$meta" | head -1 | cut -c1-120)"
-  [ -n "$title" ] || title="$(head -1 "$dir/goal.md" | cut -c1-100)"
+  [ -n "$title" ] || title="$(plain_title "$(head -1 "$dir/goal.md")")"
   kind="$(jq -r '.kind // "review" | tostring' <<<"$meta")"
   case "$kind" in review|decision) ;; *) kind=review ;; esac
   priority="$(jq -r '.priority // 2 | tostring' <<<"$meta")"
@@ -347,6 +363,10 @@ report_done() {
   if [ ! -f "$dir/queued" ]; then
     qid="$(to_queue "$id" "$dir" 0)"
     printf '%s\n' "${qid:-none}" > "$dir/queued"
+    # Earlier failed attempts at the same decision are done now: they leave the queue.
+    if [ -s "$dir/queue" ] && command -v fraim-queue >/dev/null; then
+      fraim-queue supersede --origin "$(cat "$dir/queue")" --by "$id" >/dev/null 2>>"$dir/log.txt" || true
+    fi
     [ -z "$qid" ] || review="
 
 It waits for review as queue item $qid. Tell me what you think of it in your own words, or open the queue: $(fraim-queue url 2>/dev/null)"
@@ -413,6 +433,13 @@ cmd_watch() {
     fi
     case "$st" in
       done|idle)
+        # Claude can end a turn while something it started still runs in the background (an
+        # install, a test run); it continues when that finishes. Not a result yet.
+        if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ] && fraim-herdr busy "$id" 2>/dev/null; then
+          idle_since=""
+          sleep "${FRAIM_GOAL_POLL:-15}"
+          continue
+        fi
         if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ]; then
           printf '%s\n' "$tturn" > "$dir/turn"
           if ! report_done "$id" "$dir" "$chat"; then why="the turn ended on an error"; exit 1; fi

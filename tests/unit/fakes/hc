@@ -42,7 +42,7 @@ case "$cmd" in
     [ -n "$name" ] || name="t$RANDOM"
     printf '%s\n' "$@" > "$d/$name.argv"
     jq -n --arg n "$name" --arg c "$cwd" --argjson l "$labels" \
-      '{address: $n, name: $n, cwd: $c, labels: $l, state: "live", status: {app: "claude-code", state: "idle"}, turn: 0}' > "$(file "$name")"
+      '{address: $n, name: $n, cwd: $c, labels: $l, state: "live", status: {app: "claude-code", state: "idle"}, turn: 0, foreground: {pid: 4242}}' > "$(file "$name")"
     jq -c '{address, name, state}' "$(file "$name")" ;;
   get)
     # $HC_FAKE/get-fail holds a count: that many gets fail with exit 1 (a busy core).
@@ -88,6 +88,7 @@ case "$cmd" in
   kill) need "$1"; set_field "$1" '.state = "finished" | .status = null' ;;
   rm) [ -f "$(file "$1")" ] && rm -f "$(file "$1")" ;;
   attach) need "$1"; echo "attached $1" ;;
+  exec) [ ! -e "$d/busy" ] || echo bash ;;
   events) [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS" ;;
   *) echo "fake hc: $cmd not faked" >&2; exit 2 ;;
 esac
