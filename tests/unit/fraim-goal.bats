@@ -140,6 +140,7 @@ EOF
   FAKE_SEND_HOOK="$T/bin/write-results" "$GOAL" start --lead perf -- check meta
   wait_state g1 done
   grep -q 'no internal names' "$HC_FAKE/g1.sent"
+  grep -q 'Never make an item whose Approve only works after the owner did something by hand' "$HC_FAKE/g1.sent"
   for _ in $(seq 20); do [ -s "$FRAIM_QUEUE_DIR/q2/item.json" ] && break; sleep 0.1; done
   [ "$(jq -r .on_approve "$FRAIM_QUEUE_DIR/q1/item.json")" = "check the orders" ]
   [ "$(jq -r .ask "$FRAIM_QUEUE_DIR/q2/item.json")" = "Count checkout at payment? I advise yes" ]

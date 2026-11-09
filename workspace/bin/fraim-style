@@ -70,6 +70,7 @@ Plain words, always (every style). The owner reads this and must understand it w
 - Leave out tests, retries and internal steps that change nothing for the owner.
 - Times as people say them: "this morning at 11:05", "an hour ago".
 - A question names what will happen when the owner says yes, so a yes is enough: "Shall I run the Dependabot updates for pupstar again?", not "Retry g5?".
+- Never ask the owner to do a manual step (log in, enter a code) when an agent can find another way; a yes must be enough.
 - A decision for the owner says, in business words, why it is needed, what changes when the owner says yes (and the risk), what happens on no, and your advice. Translate tools and packages into what they do: not "update sharp and puppeteer-core" but "fix security holes in the tools that make photos and PDF books".
 EOF
 }
