@@ -384,7 +384,7 @@ ${text:0:3500}"
 
 # The watcher. run: open the terminal and send the task first. follow: only watch.
 cmd_watch() {
-  local id="$1" mode="$2" dir chat rec tstate st tturn reason idle_since="" deadline
+  local id="$1" mode="$2" dir chat rec tstate st tturn reason idle_since="" busy_since="" deadline
   dir="$(goal_dir "$id")" || exit $?
   chat="$(cat "$dir/chat" 2>/dev/null || true)"
   heartbeat "$dir"
@@ -434,12 +434,17 @@ cmd_watch() {
     case "$st" in
       done|idle)
         # Claude can end a turn while something it started still runs in the background (an
-        # install, a test run); it continues when that finishes. Not a result yet.
+        # install, a test run); it continues when that finishes. Not a result yet. Something
+        # that never ends (a dev server) holds the result back no longer than the busy limit.
         if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ] && fraim-herdr busy "$id" 2>/dev/null; then
-          idle_since=""
-          sleep "${FRAIM_GOAL_POLL:-15}"
-          continue
+          [ -n "$busy_since" ] || busy_since="$(date +%s)"
+          if [ $(( $(date +%s) - busy_since )) -lt "${FRAIM_GOAL_BUSY_MAX:-1800}" ]; then
+            idle_since=""
+            sleep "${FRAIM_GOAL_POLL:-15}"
+            continue
+          fi
         fi
+        busy_since=""
         if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ]; then
           printf '%s\n' "$tturn" > "$dir/turn"
           if ! report_done "$id" "$dir" "$chat"; then why="the turn ended on an error"; exit 1; fi
@@ -471,6 +476,7 @@ cmd_watch() {
         # working, or blocked (fraim-herdr watch tells the owner; the goal waits for the
         # answer). Either way the time limit holds: a question nobody answers ends too.
         idle_since=""
+        busy_since=""
         if [ "$(date +%s)" -ge "$deadline" ]; then
           why="time limit"
           fail_goal "$id" "$dir" "$chat" "it ran longer than ${FRAIM_GOAL_TIMEOUT:-14400} seconds and was stopped"

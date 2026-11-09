@@ -399,6 +399,16 @@ Not logged in · Please run /login"
   "$GOAL" stop g1
 }
 
+@test "a background task that never ends holds the result back only until the busy limit" {
+  mkdir -p "$HC_FAKE"
+  touch "$HC_FAKE/busy"
+  FRAIM_GOAL_BUSY_MAX=2 FRAIM_GOAL_KEEP=30 "$GOAL" start -- start the dev server
+  wait_state g1 done
+  wait_sent 'Goal g1 done'
+  [ -e "$HC_FAKE/busy" ]
+  "$GOAL" stop g1
+}
+
 @test "a goal from a queue decision gets the decision's topic as its title, and closes earlier failures" {
   export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
   # An earlier attempt at decision q5 (goal g9) failed and still waits in the queue.
