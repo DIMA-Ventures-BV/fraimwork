@@ -92,6 +92,10 @@ default_max() {
 check_room() {
   local max="${FRAIM_SESSIONS_MAX:-$(default_max)}"
   [ "$(live_count)" -lt "$max" ] || die "$max sessions are open, the most this server runs at once; stop one first (fraim-sessions list)"
+  # Memory, not only the count: goals, leads and the chief run Claude too (fraim-capacity).
+  if command -v fraim-capacity >/dev/null && ! fraim-capacity check && ! fraim-capacity reclaim; then
+    die "the server has no free memory for another session right now ($(fraim-capacity status)); try again in a few minutes"
+  fi
 }
 
 cmd_new() {

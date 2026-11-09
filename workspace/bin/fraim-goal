@@ -280,6 +280,7 @@ launch() {
   if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
   args+=(--permission-mode acceptEdits --allowedTools "$(tools)")
   fraim-herdr trust "$dir" 2>>"$dir/log.txt" || true
+  wait_for_room "$dir" || return 1
   hc rm "$id" >/dev/null 2>&1 || true
   hc run --bg --name "$id" --cwd "$dir" --label fraim=goal --no-parent --no-notify -- "${args[@]}" \
     >/dev/null 2>>"$dir/log.txt" || return 1
@@ -287,6 +288,23 @@ launch() {
   # Ready when Claude Code first reports its status.
   hc wait "$id" --timeout "${FRAIM_GOAL_READY:-90}" --json >/dev/null 2>&1 || true
   wait_known "$id" "$dir"
+}
+
+# A goal starts only when the server has memory for one more Claude (fraim-capacity); it
+# waits in line meanwhile, with its heartbeat, up to its own time limit.
+wait_for_room() {
+  local dir="$1" start said=""
+  command -v fraim-capacity >/dev/null || return 0
+  start="$(date +%s)"
+  until fraim-capacity check || fraim-capacity reclaim; do
+    [ $(( $(date +%s) - start )) -lt "${FRAIM_GOAL_TIMEOUT:-14400}" ] || return 1
+    if [ -z "$said" ]; then
+      printf '%s waiting for free memory\n' "$(date '+%H:%M:%S')" >> "$dir/log.txt"
+      said=1
+    fi
+    heartbeat "$dir"
+    sleep "${FRAIM_CAPACITY_POLL:-10}"
+  done
 }
 
 # The terminal's state, asked again for as long as the core does not answer (busy right after

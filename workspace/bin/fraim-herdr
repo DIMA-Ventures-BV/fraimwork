@@ -154,6 +154,8 @@ cmd_supervise() {
     cmd_up 2>>"$HOME/.local/state/fraim/herdr.log" || true
     # A goal whose watcher process died (a container restart) gets a new one.
     fraim-goal reconcile >/dev/null 2>>"$HOME/.local/state/fraim/herdr.log" || true
+    # Memory running low: close idle goal and coding-session terminals before it runs out.
+    fraim-capacity check || fraim-capacity reclaim >/dev/null 2>&1 || true
     sleep "${FRAIM_HERDR_CHECK:-30}"
   done
 }

@@ -247,6 +247,23 @@ if ! swapon --show --noheadings | grep -q .; then
   fi
 fi
 
+# A server out of memory swaps until nothing answers, SSH and Tailscale included (2026-11-09).
+# Swap only as a last resort, and earlyoom stops one Claude before that point; never sshd,
+# Tailscale or Docker. fraim-capacity (in the containers) normally keeps it from coming to this.
+say "Protecting the server from running out of memory"
+echo 'vm.swappiness=10' > /etc/sysctl.d/90-fraim.conf
+sysctl -q -p /etc/sysctl.d/90-fraim.conf || warn "could not set vm.swappiness"
+if command -v earlyoom >/dev/null || apt_wait install -y -q earlyoom >/dev/null; then
+  cat > /etc/default/earlyoom <<'EOF'
+# Installed by fraimwork install.sh: stop a Claude before the server runs out of memory.
+EARLYOOM_ARGS="-m 6 -s 90 -r 3600 --prefer '(^|/)claude$' --avoid '(^|/)(sshd|tailscaled|dockerd|containerd|containerd-shim-runc-v2|systemd|herdr-core)$'"
+EOF
+  systemctl enable earlyoom >/dev/null 2>&1 || true
+  systemctl restart earlyoom || warn "earlyoom did not start"
+else
+  warn "could not install earlyoom; fraim-capacity still limits how many Claudes run"
+fi
+
 say "Building and starting fraimwork (first build takes a few minutes)"
 docker compose up -d --build --remove-orphans
 

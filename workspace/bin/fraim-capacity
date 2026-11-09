@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Keeps the server from running out of memory. Every Claude takes 300 to 500 MB; a 4 GB
+# server that starts a few at once swaps until nothing answers (2026-11-09: CPU 200%, 20,000
+# disk reads a second, WhatsApp and SSH gone). So every new Claude except main asks here
+# first, and the supervisor closes idle sessions when memory runs low.
+#
+#   fraim-capacity check          exit 0 when there is room for one more Claude
+#   fraim-capacity wait [--max S] wait for room (closing idle sessions), exit 1 after S seconds
+#   fraim-capacity reclaim        close idle goal and coding-session terminals, oldest kind
+#                                 first, until there is room (they reopen with their memory)
+#   fraim-capacity status [--json]
+#
+# Room means MemAvailable (the kernel's own estimate, host-wide) of at least
+# FRAIM_CLAUDE_MB (default 450) plus FRAIM_MEM_RESERVE_MB (default 350) for main, the browser
+# and WhatsApp. Exit codes: 0 ok, 1 no room, 2 usage.
+set -uo pipefail
+
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+usage() { echo "fraim-capacity: $*" >&2; exit 2; }
+
+meminfo="${FRAIM_MEMINFO:-/proc/meminfo}"
+available_mb() { awk '/^MemAvailable:/ { print int($2 / 1024) }' "$meminfo" 2>/dev/null || echo 0; }
+need_mb() { echo $(( ${FRAIM_CLAUDE_MB:-450} + ${FRAIM_MEM_RESERVE_MB:-350} )); }
+# No /proc/meminfo (not Linux, a laptop test): nothing to measure, so no limit.
+has_room() { [ ! -r "$meminfo" ] || [ "$(available_mb)" -ge "$(need_mb)" ]; }
+log() { mkdir -p "$HOME/.local/state/fraim" && printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$HOME/.local/state/fraim/capacity.log"; }
+
+# Terminals that may go: a goal whose result is already in (state done, nothing new since),
+# then a coding session that waits for the owner (idle or done). Never one that works or
+# asks something: closing those would lose work or a question. A run without the owner
+# (FRAIM_HEADLESS=1) may only close goals; fraim-herdr refuses the rest.
+candidates() {
+  local list name kind status goals="${FRAIM_GOALS_DIR:-$HOME/fraim/goals}"
+  list="$(fraim-herdr ls --json 2>/dev/null)" || return 0
+  while IFS=$'\t' read -r name kind status; do
+    case "$kind:$status" in
+      goal:done|goal:idle)
+        [ "$(cut -d' ' -f1 "$goals/$name/state" 2>/dev/null)" = "done" ] || continue
+        echo "$name" ;;
+    esac
+  done < <(jq -r '.[] | [.name, .kind, .status] | @tsv' <<<"$list")
+  [ "${FRAIM_HEADLESS:-}" = 1 ] && return 0
+  jq -r '.[] | select(.kind == "session" and (.status == "idle" or .status == "done")) | .name' <<<"$list"
+}
+
+cmd_reclaim() {
+  local name closed=0
+  has_room && return 0
+  for name in $(candidates); do
+    fraim-herdr hc kill "$name" >/dev/null 2>&1 || continue
+    fraim-herdr hc rm "$name" >/dev/null 2>&1 || true
+    closed=$((closed + 1))
+    log "closed $name to free memory ($(available_mb) MB available)"
+    sleep 2
+    has_room && break
+  done
+  has_room
+}
+
+cmd_wait() {
+  local max="${1:-1200}" waited=0 said=""
+  while ! has_room; do
+    cmd_reclaim && break
+    [ "$waited" -lt "$max" ] || { log "no room after ${max}s for a new Claude"; return 1; }
+    if [ -z "$said" ]; then
+      echo "fraim: waiting for free memory before starting Claude ($(available_mb) MB free, $(need_mb) MB needed)" >&2
+      said=1
+    fi
+    sleep "${FRAIM_CAPACITY_POLL:-10}"
+    waited=$((waited + ${FRAIM_CAPACITY_POLL:-10}))
+  done
+  return 0
+}
+
+cmd_status() {
+  local avail need ok=false
+  avail="$(available_mb)"; need="$(need_mb)"
+  [ "$avail" -lt "$need" ] || ok=true
+  if [ "${1:-}" = --json ]; then
+    jq -cn --argjson a "$avail" --argjson n "$need" --argjson ok "$ok" \
+      --argjson c "$(pgrep -xc claude 2>/dev/null || echo 0)" \
+      '{available_mb: $a, needed_mb: $n, room: $ok, claude_processes: $c}'
+  else
+    printf 'Free memory: %s MB; one more Claude needs %s MB: %s\n' "$avail" "$need" \
+      "$([ "$ok" = true ] && echo room || echo "no room")"
+  fi
+}
+
+action="${1:-status}"
+[ $# -eq 0 ] || shift
+case "$action" in
+  check) has_room ;;
+  wait)
+    max=1200
+    if [ "${1:-}" = --max ]; then
+      printf '%s' "${2:-}" | grep -Eq '^[0-9]+$' || usage "--max needs seconds"
+      max="$2"
+    fi
+    cmd_wait "$max" ;;
+  reclaim) cmd_reclaim ;;
+  status) cmd_status "${1:-}" ;;
+  *) usage "check | wait [--max SECONDS] | reclaim | status [--json]" ;;
+esac
