@@ -310,7 +310,8 @@ cmd_watch() {
   chat="$(cat "$dir/chat" 2>/dev/null || true)"
   heartbeat "$dir"
   # A watcher that ended is not alive, even within the heartbeat window.
-  trap 'rm -f "$dir/heartbeat"' EXIT
+  trap 'rm -f "$dir/heartbeat"; printf "%s watcher ended (%s)\n" "$(date "+%H:%M:%S")" "${why:-?}" >> "$dir/log.txt"' EXIT
+  local why="" rc misses=0
   deadline=$(( $(date +%s) + ${FRAIM_GOAL_TIMEOUT:-14400} ))
   if [ "$mode" = run ]; then
     if ! launch "$id" "$dir"; then
@@ -324,15 +325,27 @@ cmd_watch() {
   fi
   while true; do
     heartbeat "$dir"
-    [ "$(state_of "$dir")" = stopped ] && { hc kill "$id" >/dev/null 2>&1; exit 0; }
-    rec="$(term_get "$id")"
+    [ "$(state_of "$dir")" = stopped ] && { why=stopped; hc kill "$id" >/dev/null 2>&1; exit 0; }
+    rec="$(hc get "$id" --json 2>/dev/null)"
+    rc=$?
+    # Exit 3 is "no such terminal"; anything else (a busy or restarting core) is retried.
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ] && [ "$misses" -lt 10 ]; then
+      misses=$((misses + 1))
+      sleep "${FRAIM_GOAL_POLL:-15}"
+      continue
+    fi
+    misses=0
     [ -n "$rec" ] || rec='{}'
     tstate="$(jq -r '.state // "gone"' <<<"$rec")"
     st="$(jq -r '.status.state // "none"' <<<"$rec")"
     tturn="$(jq -r '.turn // 0' <<<"$rec")"
     if [ "$tstate" != live ]; then
       # Closed after its result (keep time over, or the owner closed it): nothing to report.
-      [ "$(state_of "$dir")" = "done" ] && [ "${tturn:-0}" -le "$(reported_turn "$dir")" ] && exit 0
+      if [ "$(state_of "$dir")" = "done" ] && [ "${tturn:-0}" -le "$(reported_turn "$dir")" ]; then
+        why="terminal closed after its result"
+        exit 0
+      fi
+      why="terminal $tstate (get exit $rc)"
       reason="$(fail_reason "$(screen_text "$id")")"
       fail_goal "$id" "$dir" "$chat" "${reason:-the Claude session ended}"
       exit 1
@@ -341,15 +354,17 @@ cmd_watch() {
       done|idle)
         if [ "${tturn:-0}" -gt "$(reported_turn "$dir")" ]; then
           printf '%s\n' "$tturn" > "$dir/turn"
-          report_done "$id" "$dir" "$chat" || exit 1
+          if ! report_done "$id" "$dir" "$chat"; then why="the turn ended on an error"; exit 1; fi
           idle_since="$(date +%s)"
         fi
         [ -n "$idle_since" ] || idle_since="$(date +%s)"
         if [ $(( $(date +%s) - idle_since )) -ge "${FRAIM_GOAL_KEEP:-1800}" ]; then
           if [ "$(reported_turn "$dir")" = 0 ] && [ "$(state_of "$dir")" != "done" ]; then
+            why="no turn before the keep time"
             fail_goal "$id" "$dir" "$chat" "Claude did not start on the task"
             exit 1
           fi
+          why="keep time over"
           hc kill "$id" >/dev/null 2>&1; hc rm "$id" >/dev/null 2>&1
           exit 0
         fi
