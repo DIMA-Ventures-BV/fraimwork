@@ -352,7 +352,7 @@ failure_to_queue() {
         fix=(--lead "$eng" --ask "Nothing to do: the engineer is already fixing it and reports back. Skip this when you have read it." --advise dismiss --why "$reason.")
         fraim-lead tell "$eng" --from "automation $name" -- "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause and fix it, then tell the chief in one line what was wrong." >/dev/null 2>&1 || true
       else
-        fix=(--ask "Let Claude find out why $name failed and fix it?" --advise approve --why "$reason."
+        fix=(--ask "Let Claude find out why $name failed and fix it?" --advise approve --need "The automation $name stopped working: $reason." --if-yes "Claude finds the cause, fixes it and tests it once without sending anything." --if-no "$name stays broken until someone looks at it." --why "$reason."
       --on-approve "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause, fix ~/fraim/automations/$name (use the building-automations skill), check it with fraim-auto check $name, and run it once with fraim-auto run $name --dry.")
       fi ;;
   esac

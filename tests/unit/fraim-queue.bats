@@ -25,7 +25,7 @@ EOF
   run "$Q" add --title "First"
   [ "$status" -eq 0 ]
   [ "$output" = q1 ]
-  grep -q 'New in your queue: q1 First' "$SENT"
+  grep -q 'New in your queue: First' "$SENT"
   run "$Q" add --title "Second" --quiet
   [ "$output" = q2 ]
   [ "$(grep -c '^notify' "$SENT")" = 1 ]
@@ -71,6 +71,20 @@ EOF
   [ "$(printf '%s' "$output" | jq -c '.why')" = '["one","two","three"]' ]
   run "$Q" show q1
   [[ "$output" == *"Question: May I read the orders?"*"Advice: Send back"*"- one"*"Details:"*"All the numbers."* ]]
+}
+
+@test "an item says why it is needed and what yes and no change, in the message and in show" {
+  "$Q" add --title "PDF tool update" --ask "Merge the PDF tool update?" --advise approve \
+    --need "It closes security holes on the live site." --if-yes "Safer site; check one PDF book first." \
+    --if-no "The holes stay open." --why "Tests pass"
+  grep -q '^notify New in your queue: PDF tool update' "$SENT"
+  grep -q 'Why: It closes security holes on the live site.' "$SENT"
+  grep -q 'If you approve: Safer site; check one PDF book first.' "$SENT"
+  grep -q 'If you say no: The holes stay open.' "$SENT"
+  grep -q 'My advice: Approve' "$SENT"
+  ! grep -q 'q1' "$SENT"
+  run "$Q" show q1
+  [[ "$output" == *"Question: Merge the PDF tool update?"*"Why it is needed: It closes"*"If you approve: Safer"*"If you say no: The holes"*"Advice: Approve"* ]]
 }
 
 @test "media are copied in, other files are skipped" {

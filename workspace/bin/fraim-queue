@@ -167,6 +167,21 @@ function notify(text, direct = false) {
   spawnSync('fraim-notify', [text], { env, stdio: 'ignore', timeout: 30000 })
 }
 
+const ADVICE_WORD = { approve: 'Approve', reject: 'Send back', dismiss: 'Skip' }
+
+// The message about a new item says what it is about and what the owner gains or risks, so the
+// owner can decide from the message alone.
+export function newText(item) {
+  const lines = [`New in your queue: ${item.title}`]
+  if (item.ask) lines.push(item.ask)
+  if (item.need) lines.push(`Why: ${item.need}`)
+  if (item.if_yes) lines.push(`If you approve: ${item.if_yes}`)
+  if (item.if_no) lines.push(`If you say no: ${item.if_no}`)
+  if (item.advise) lines.push(`My advice: ${ADVICE_WORD[item.advise]}`)
+  lines.push(queueUrl())
+  return lines.join('\n')
+}
+
 export function addItem(opts) {
   const title = String(opts.title || '').trim()
   if (!title) usage('add needs --title')
@@ -185,9 +200,13 @@ export function addItem(opts) {
   const item = {
     id,
     title: title.slice(0, 200),
-    // The decision in one look: the question for the owner, the advice and at most 3 reasons.
+    // The decision in one look: the question for the owner, the advice, why it is needed, what
+    // changes when the owner says yes or no, and at most 3 reasons for the advice.
     ask: String(opts.ask || '').trim().slice(0, 300),
     advise,
+    need: String(opts.need || '').trim().slice(0, 400),
+    if_yes: String(opts.ifYes || '').trim().slice(0, 400),
+    if_no: String(opts.ifNo || '').trim().slice(0, 400),
     why: why.map((w) => w.slice(0, 300)),
     summary: String(opts.summary || '').slice(0, 20000),
     kind,
@@ -208,7 +227,7 @@ export function addItem(opts) {
     decided: '',
   }
   writeItem(item)
-  if (!opts.quiet) notify(`New in your queue: ${id} ${item.title}\n${queueUrl()}`)
+  if (!opts.quiet) notify(newText(item))
   // A lead hears at once when a goal it started ends; the chief hears through its queue events.
   if (item.goal && item.lead && !isChief(item.lead)) {
     tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`)
@@ -486,9 +505,11 @@ function line(item) {
 
 function describe(item) {
   const parts = [`${item.id}: ${item.title}`, `${item.kind}, priority ${item.priority}, ${item.state}, from ${item.source}, ${item.created}`]
-  const verb = { approve: 'Approve', reject: 'Send back', dismiss: 'Skip' }
   if (item.ask) parts.push('', `Question: ${item.ask}`)
-  if (item.advise) parts.push(`Advice: ${verb[item.advise]}`)
+  if (item.need) parts.push(`Why it is needed: ${item.need}`)
+  if (item.if_yes) parts.push(`If you approve: ${item.if_yes}`)
+  if (item.if_no) parts.push(`If you say no: ${item.if_no}`)
+  if (item.advise) parts.push(`Advice: ${ADVICE_WORD[item.advise]}`)
   for (const w of item.why || []) parts.push(`- ${w}`)
   if (item.summary) parts.push('', item.ask ? 'Details:' : '', item.summary)
   if (item.links.length) parts.push('', ...item.links.map((l) => `link: ${l}`))
@@ -727,6 +748,10 @@ svg { display: block; flex: none; }
 .decide .q { font-size: 17px; line-height: 1.4; font-weight: 600; color: var(--ink); margin: 0 0 12px; }
 .decide .adv { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 0 0 8px; }
 .decide .adv b { color: var(--advc, var(--accent)); font-weight: 600; }
+.decide .fx { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 4px 0 12px; }
+.decide .fx dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.decide .fx dd { margin: 0; color: var(--ink); }
+@media (max-width: 560px) { .decide .fx { grid-template-columns: 1fr; gap: 2px; } .decide .fx dd { margin-bottom: 8px; } }
 .decide ul { margin: 0; padding: 0 0 0 18px; color: var(--soft); }
 .decide li { margin: 3px 0; }
 details.more { margin: 0 0 20px; }
@@ -945,14 +970,16 @@ function renderDetail() {
   var html = '<div class="bar"><div class="crumb">' + esc(crumb) + '<span>/</span><b>' + esc(it.id.toUpperCase()) + '</b></div><span class="grow"></span>' +
     '<span class="c">' + (sel + 1) + ' / ' + items.length + '</span><button class="icon" id="prev" title="Previous (k)" aria-label="Previous">' + ICON.up + '</button><button class="icon" id="next" title="Next (j)" aria-label="Next">' + ICON.down + '</button></div>'
   var ADV = { approve: ['Approve', 'var(--green)'], reject: ['Send back', 'var(--red)'], dismiss: ['Skip', 'var(--muted)'] }
-  var card = it.ask || it.advise || (it.why && it.why.length)
+  var card = it.ask || it.advise || it.need || (it.why && it.why.length)
+  var effects = [['Why it is needed', it.need], ['If you approve', it.if_yes], ['If you say no', it.if_no]].filter(function (e) { return e[1] })
   html += '<div class="doc"><div class="doc-in">' +
     '<h2>' + esc(it.title) + '</h2>' +
     (card ? '<div class="decide">' + (it.ask ? '<p class="q">' + esc(it.ask) + '</p>' : '') +
-      (it.advise ? '<div class="adv" style="--advc:' + ADV[it.advise][1] + '">Advice: <b>' + ADV[it.advise][0] + '</b></div>' : '') +
+      (it.advise ? '<div class="adv" style="--advc:' + ADV[it.advise][1] + '">My advice: <b>' + ADV[it.advise][0] + '</b></div>' : '') +
+      (effects.length ? '<dl class="fx">' + effects.map(function (e) { return '<dt>' + e[0] + '</dt><dd>' + esc(e[1]) + '</dd>' }).join('') + '</dl>' : '') +
       (it.why && it.why.length ? '<ul>' + it.why.map(function (w) { return '<li>' + esc(w) + '</li>' }).join('') + '</ul>' : '') +
       '</div>' : '') +
-    (card && (it.on_approve || it.switch_on) ? '<div class="h3" style="margin-top:0">If you approve</div><div class="next" style="margin-bottom:20px">' + esc(it.on_approve || ('It starts running: ' + it.switch_on + '.')) + '</div>' : '') +
+    (card && !it.if_yes && (it.on_approve || it.switch_on) ? '<div class="h3" style="margin-top:0">If you approve</div><div class="next" style="margin-bottom:20px">' + esc(it.on_approve || ('It starts running: ' + it.switch_on + '.')) + '</div>' : '') +
     '<dl class="props">' +
     '<dt>Status</dt><dd>' + statusIcon(it) + (open ? 'Waiting for you' : VERB[it.state] + ' ' + ago(it.decided) + ' ago') + '</dd>' +
     '<dt>Type</dt><dd><span class="label" style="--lc:' + KIND_COLOR[it.kind] + '"><i></i>' + esc(KIND[it.kind] || it.kind) + '</span></dd>' +

@@ -109,7 +109,7 @@ wait_gone() {
 #!/usr/bin/env bash
 mkdir -p "$FRAIM_GOALS_DIR/g1/media"
 printf 'png' > "$FRAIM_GOALS_DIR/g1/media/after.png"
-printf '{"title":"New login page","priority":1,"kind":"review","links":["https://example.com/pr/1"],"on_approve":"merge PR #1"}' > "$FRAIM_GOALS_DIR/g1/queue.json"
+printf '{"title":"New login page","priority":1,"kind":"review","links":["https://example.com/pr/1"],"on_approve":"merge PR #1","need":"Customers cannot log in on phones","if_yes":"The new page goes live after merge","if_no":"Phone users stay locked out"}' > "$FRAIM_GOALS_DIR/g1/queue.json"
 EOF
   chmod +x "$T/bin/write-results"
   FAKE_SEND_HOOK="$T/bin/write-results" FAKE_REPLY="Built the login page." "$GOAL" start --lead web -- build the login page
@@ -122,6 +122,9 @@ EOF
   [ "$(jq -r .goal "$item")" = g1 ]
   [ "$(jq -r .lead "$item")" = web ]
   [ "$(jq -r .on_approve "$item")" = "merge PR #1" ]
+  [ "$(jq -r .need "$item")" = "Customers cannot log in on phones" ]
+  [ "$(jq -r .if_yes "$item")" = "The new page goes live after merge" ]
+  [ "$(jq -r .if_no "$item")" = "Phone users stay locked out" ]
   [ "$(jq -c .media "$item")" = '["after.png"]' ]
   [ "$(jq -c .links "$item")" = '["https://example.com/pr/1"]' ]
   wait_sent 'Tell me what you think of it in your own words'
