@@ -17,7 +17,8 @@
       "Bash(fraim-auto:*)",
       "Bash(fraim-queue:*)",
       "Bash(fraim-lead:*)",
-      "Bash(fraim-brain:*)"
+      "Bash(fraim-brain:*)",
+      "mcp__whatsapp__session_command"
     ]
   }
 }

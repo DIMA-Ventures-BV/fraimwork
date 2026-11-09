@@ -1,7 +1,7 @@
 // WhatsApp goal shortcuts: owner only, and plain messages still reach Claude.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { goalArgs, parseGoalCommand } from '../../workspace/channel/goal-command.mjs'
+import { goalArgs, parseGoalCommand, sessionCommandArgs } from '../../workspace/channel/goal-command.mjs'
 
 const OWNER = '31612345678'
 const msg = (text, sender = OWNER) => ({ type: 'message', sender, text })
@@ -45,4 +45,13 @@ test('goalArgs passes the text as one argument after --', () => {
   ])
   assert.deepEqual(goalArgs({ action: 'list' }, 'c'), ['list'])
   assert.deepEqual(goalArgs({ action: 'stop', id: 'g2' }, 'c'), ['stop', 'g2'])
+})
+
+test('sessionCommandArgs maps the tool input and refuses other commands', () => {
+  assert.deepEqual(sessionCommandArgs({ command: 'clear', chat_id: 'c@s' }), ['--chat', 'c@s', 'clear'])
+  assert.deepEqual(sessionCommandArgs({ command: 'compact', argument: 'keep the flights' }), ['compact', 'keep the flights'])
+  assert.deepEqual(sessionCommandArgs({ command: 'compact' }), ['compact'])
+  assert.deepEqual(sessionCommandArgs({ command: 'model', argument: ' Opus ' }), ['model', 'opus'])
+  assert.throws(() => sessionCommandArgs({ command: 'login' }))
+  assert.throws(() => sessionCommandArgs({}))
 })

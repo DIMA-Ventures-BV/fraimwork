@@ -69,6 +69,7 @@ Read the logs before you name a cause. A restart that fixes it still gets one li
 | Review queue (goal results, lead ideas, decisions; see docs/queue.md) | `$F queue` opens the page, `$F queue list`, `$F queue approve q3 [NOTE]`, `$F queue reject q3 "WHY"`, `$F queue dismiss q3`. Only approve or reject when the user says so. On WhatsApp: `queue`, `ok q3`, `no q3 WHY`, `skip q3` |
 | Lead agents and the chief of staff | Ask the user for the area and what the lead may start alone, then `$F lead new NAME --area "..." [--at "0 7 * * 1-5"] [--budget 3]`, then write the brief with `$F exec -- fraim-lead show NAME` and edit `~/fraim/leads/NAME/lead.md` (synced folder). `$F lead new chief --chief` adds the daily digest. `$F lead list`, `$F lead run NAME`, `$F lead pause NAME`. Needs the scheduler module |
 | Learned preferences (brain) | `$F brain` shows the rules, `$F brain note "PREFERENCE"` adds one, `$F brain distill` rebuilds them now |
+| Clear, compact or switch model of the always-on session | The owner says it on WhatsApp in plain words; the server's Claude uses its `session_command` tool (owner chats only). From the laptop: `$F exec -- fraim-session-command clear` (or `compact [FOCUS]`, `model opus|sonnet|haiku|default`) |
 | File sync GUI | `$F sync --print-url`; `$F sync stop` after |
 | Claude config | `$F config status` (see managing-fraim-config) |
 | Open the user's workspace (macOS) | `<checkout>/bin/fraim-desktop open`; `fraim-desktop install` first when cmux is missing, `fraim-desktop dock` after the server changed |
