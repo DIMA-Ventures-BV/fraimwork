@@ -37,14 +37,14 @@ EOF
 mem() { printf 'MemAvailable: %s kB\n' "$(( $1 * 1024 ))" > "$FRAIM_MEMINFO"; }
 
 @test "room means free memory for one Claude plus the reserve" {
-  mem 900
+  mem 1000
   run "$CAP" check
   [ "$status" -eq 0 ]
-  mem 700
+  mem 800
   run "$CAP" check
   [ "$status" -eq 1 ]
   run "$CAP" status --json
-  [ "$(jq -r .needed_mb <<<"$output")" = 800 ]
+  [ "$(jq -r .needed_mb <<<"$output")" = 900 ]
   [ "$(jq -r .room <<<"$output")" = false ]
 }
 

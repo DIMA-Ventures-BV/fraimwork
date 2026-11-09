@@ -7,9 +7,12 @@ ARG SUPERCRONIC_VERSION=v0.2.51
 ARG SUPERCRONIC_SHA256_AMD64=cc232108374e8e2b537045f2d5eaa1229f619db314c3ba6a14d38b35dc0aa123
 ARG SUPERCRONIC_SHA256_ARM64=4ae22576a78223d8ccdf5f3b3660a5cbb5288416bf0ca96afc4a36d195932b94
 
+# No usage statistics from chrome-devtools-mcp: each copy (one per Claude) otherwise starts
+# a telemetry watchdog of about 50 MB.
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    DISABLE_AUTOUPDATER=1
+    DISABLE_AUTOUPDATER=1 \
+    CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

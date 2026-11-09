@@ -11,7 +11,7 @@
 #   fraim-capacity status [--json]
 #
 # Room means MemAvailable (the kernel's own estimate, host-wide) of at least
-# FRAIM_CLAUDE_MB (default 450) plus FRAIM_MEM_RESERVE_MB (default 350) for main, the browser
+# FRAIM_CLAUDE_MB (default 550) plus FRAIM_MEM_RESERVE_MB (default 350) for main, the browser
 # and WhatsApp. Exit codes: 0 ok, 1 no room, 2 usage.
 set -uo pipefail
 
@@ -36,7 +36,9 @@ available_mb() {
   fi
   echo "$host"
 }
-need_mb() { echo $(( ${FRAIM_CLAUDE_MB:-450} + ${FRAIM_MEM_RESERVE_MB:-350} )); }
+# Measured on a server (2026-11-09): Claude about 250 to 300 MB, plus about 140 MB for each
+# browser MCP it starts.
+need_mb() { echo $(( ${FRAIM_CLAUDE_MB:-550} + ${FRAIM_MEM_RESERVE_MB:-350} )); }
 # No /proc/meminfo (not Linux, a laptop test): nothing to measure, so no limit.
 has_room() { [ ! -r "$meminfo" ] || [ "$(available_mb)" -ge "$(need_mb)" ]; }
 log() { mkdir -p "$HOME/.local/state/fraim" && printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$HOME/.local/state/fraim/capacity.log"; }
