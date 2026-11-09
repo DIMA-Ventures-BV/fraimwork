@@ -20,7 +20,19 @@ goals (background work) ──── results ────►  REVIEW QUEUE  ◄�
 | Review queue | `fraim-queue` | `~/fraim/queue/qN/item.json` plus `media/` |
 | Queue page | `fraim-queue serve` (started with the workspace) | container port 3109, the space's last preview port |
 | Goals | `fraim-goal` | `~/fraim/goals/gN/` |
-| Leads | `fraim-lead` | `~/fraim/leads/<name>/` and a line in `~/fraim/jobs/crontab` |
+| Leads | `fraim-lead` | `~/fraim/leads/<name>/`, scheduled by the automation `~/fraim/automations/<name>/` (`lead: <name>`) |
+| Automations | `fraim-auto` | `~/fraim/automations/<name>/`; see [automations.md](automations.md) |
+
+## How the parts work together
+
+One system, one inbox:
+
+- **Leads are automations.** `fraim-lead new` writes an automation with `lead: <name>`. `fraim-auto list` shows leads and automations together; pause, failure alerts, run history and `trigger: after: <lead>` work the same for both. Old `fraim-lead run` crontab lines move into automations when the scheduler starts.
+- **Everything reports to the queue.** Goals put their result there. Leads add ideas and decisions. An automation with `output: queue` (or `queue:decision`, `queue:idea`, `queue:review`) adds its answer as an item.
+- **Failures land in the queue too.** A failed automation or lead adds one `failed` item (priority 1) next to the WhatsApp alert. Approving it starts a goal that finds the cause and fixes the automation. A login or usage-limit failure only informs.
+- **The chief sees all of it**: the queue, every lead's notes, `fraim-auto list` and the recent automation answers in `~/fraim/outbox.md`. Its digest names failed or paused automations.
+- **The brain applies everywhere.** General rules go into every goal, lead and automation prompt. Rules for one lead stay with that lead.
+- **Leads can propose automations.** For a fixed check without judgement, a lead adds a decision whose `on_approve` makes the automation with the building-automations skill.
 | Brain | `fraim-brain` | `~/fraim/brain/log.md` (evidence), `rules.md` (rules), `~/.claude/skills` (skills); see [brain.md](brain.md) |
 
 ## The queue

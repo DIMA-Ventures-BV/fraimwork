@@ -134,12 +134,17 @@ Chains: after a delivered answer the runner runs each automation with `trigger: 
 | `whatsapp:<chat id>` | A specific chat or group | built (plugin) |
 | `file:<path>` | A file under `~/fraim`, with `{date}`, `{time}`, `{name}` filled in; Syncthing brings it to the laptop | built (plugin) |
 | `webhook:<https url or ENV_NAME>` | POST of `{"text", "automation"}`; Slack and Teams incoming webhooks accept it | built (plugin) |
+| `queue` or `queue:<kind>` | The owner's review queue ([queue.md](queue.md)); the first line is the title; kind `info` (default), `review`, `decision` or `idea` | built (plugin) |
 | `<type>:<value>` | The owner's own plugin in `~/fraim/automations/_outputs/<type>` | built |
 | `outbox` | `~/fraim/outbox.md` (last 100). Always on unless `none` | built (runner) |
 | `none` | Only the run folder | built (runner) |
 | `email:<address>` | Gmail through the google container, as a draft unless the automation allows sending | step 5 |
 
-The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent`. Failures always go to `fraim-notify`, never to the normal outputs, so a broken mail digest does not mail anyone.
+The answer `SILENT` (or `[SILENT]`) means: deliver nothing, mark the run `silent`. Failures always go to `fraim-notify` and to the review queue as one `failed` item, never to the normal outputs, so a broken mail digest does not mail anyone. Approving that item starts a goal that fixes the automation.
+
+### Leads are automations
+
+An automation with `lead: <name>` runs the lead `~/fraim/leads/<name>` instead of a prompt: the lead builds its own prompt and tools, and the runner adds the schedule, the run history, pause, the failure rules and `after:` chaining. `fraim-lead new` writes it (`output: none`, because a lead sends its own message when it added something). A lead has no `--dry` run. Every prompt also gets the owner's general rules from the brain (`fraim-brain show --plain`).
 
 ### The runner: `fraim-auto`
 
@@ -205,6 +210,7 @@ Three ways, all on the same file:
 ### Migration (built)
 
 - When the scheduler starts, `fraim-auto migrate` turns every `<cron> fraim-job <name>` line of `~/fraim/jobs/crontab` into `~/fraim/automations/<name>/automation.md` (schedule, tools from `<name>.tools`, output whatsapp, the prompt). It comments the old line out (`# moved to ...`) and leaves `<name>.md` in place. Lines that are already commented out are not moved.
+- The same step moves `<cron> fraim-lead run <name>` lines into an automation with `lead: <name>`; a paused lead stays paused.
 - `fraim-job <name>` is an alias for `fraim-auto run <name>`.
 - New homes get one switched-off example, `new-files`, instead of `jobs/example.md`.
 - Step 2: a goal (`goal: ...`) becomes a one-off manual run; `goals` lists those runs.

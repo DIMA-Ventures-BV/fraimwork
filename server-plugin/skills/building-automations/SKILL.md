@@ -72,6 +72,7 @@ A check that finds nothing costs no tokens. Claude runs only when something happ
 | `whatsapp: <chat id>` | One chat or group (`1203630@g.us`) |
 | `file: reports/{name}-{date}.md` | A file inside `~/fraim`; `{date}`, `{time}`, `{name}` are filled in. It is replaced each run, so put `{date}` or `{time}` in the name to keep history |
 | `webhook: https://...` | POST `{"text", "automation"}` as JSON. A Slack or Teams incoming webhook works as is. For a secret URL, name an environment variable instead: `webhook: SLACK_URL` |
+| `queue` / `queue: decision` | The owner's review queue, where the chief of staff ranks it with everything else. The first line is the title. Kinds: `info` (default), `review`, `decision`, `idea`. Use it for answers the owner should act on, not for plain reports |
 | `outbox` | Only `~/fraim/outbox.md`. Every answer goes there too, unless the output is `none` |
 | `none` | Nowhere; only the run history |
 | `<your-type>: ...` | The owner's own plugin in `_outputs/` |
@@ -146,4 +147,10 @@ When a plugin would help every fraim owner, tell the owner: it can move into the
 - `fraim-auto list` shows every automation with its trigger, state and last run. `fraim-auto show <name>` shows the settings and the last answer. `fraim-auto runs <name>` shows the history.
 - Pause: `fraim-auto pause <name>`. Start again: `fraim-auto resume <name>`. Or set `enabled: false`.
 - Remove: delete the folder `~/fraim/automations/<name>`.
-- A failed or paused automation: follow "An automation failed" in the running-the-fraim-server skill.
+- A failed or paused automation: follow "An automation failed" in the running-the-fraim-server skill. A failure also waits in the review queue as a `failed` item; when the owner approves it, a goal runs this skill to fix the automation.
+
+## Leads, the queue and the chief
+
+Leads are automations too. An automation with `lead: <name>` runs the lead `~/fraim/leads/<name>` on its schedule; `fraim-lead new` makes it. Do not write a prompt for it and do not change `output: none`. To change when a lead runs, edit its `schedule:`; to stop it, `fraim-lead pause <name>`.
+
+When the owner wants to decide on an answer rather than only read it, use `output: queue` (or `queue: decision`). The chief of staff reads the queue, every automation's state and the recent answers, and puts what matters in the morning digest.

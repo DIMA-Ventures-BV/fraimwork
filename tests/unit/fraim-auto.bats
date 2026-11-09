@@ -416,3 +416,38 @@ EOF
   run env FRAIM_TRIGGER_STATE="$st" "$FRAIM_AUTO_KIT_DIR/triggers/page" https://shop.example.com
   [[ "$output" == *"changed: https://shop.example.com"*"Price 12"* ]]
 }
+
+@test "the queue output puts the answer in the review queue, with the first line as title" {
+  export FRAIM_QUEUE_DIR="$HOME/fraim/queue" FRAIM_QUEUE_QUIET=1
+  make_auto ads 'output: queue:decision' 'Report.'
+  FAKE_ANSWER="**Ad spend doubled**
+Meta spent 400 euro this week for 3 orders." run "$AUTO" run ads
+  [ "$status" -eq 0 ]
+  [ "$(cat "$(last_run ads)/delivery")" = ok ]
+  run fraim-queue list --json
+  [[ "$output" == *'"title":"Ad spend doubled"'* ]]
+  [[ "$output" == *"automation ads"* ]]
+  [[ "$output" == *'"kind":"decision"'* ]]
+  make_auto bad 'output: queue:urgent' 'Report.'
+  run "$AUTO" check bad
+  [[ "$output" == *"'urgent' is not a queue kind"* ]]
+}
+
+@test "the owner's learned rules go into every automation's prompt" {
+  FRAIM_QUEUE_QUIET=1 fraim-brain note "Never mail customers on Sunday."
+  make_auto digest 'output: none' 'Report.'
+  run "$AUTO" run digest
+  grep -q 'Never mail customers on Sunday.' "$(last_run digest)/prompt.md"
+}
+
+@test "a failed automation waits in the queue once, and approving it starts a fix" {
+  export FRAIM_QUEUE_DIR="$HOME/fraim/queue" FRAIM_QUEUE_QUIET=1
+  make_auto digest 'output: whatsapp' 'Report.'
+  printf '#!/usr/bin/env bash\necho boom >&2; exit 3\n' > "$T/bin/fraim-claude"
+  run "$AUTO" run digest
+  run "$AUTO" run digest
+  run fraim-queue list --json
+  [ "$(printf '%s' "$output" | jq 'length')" -eq 1 ]
+  [[ "$output" == *"Automation digest failed"* ]]
+  [[ "$output" == *"building-automations skill"* ]]
+}

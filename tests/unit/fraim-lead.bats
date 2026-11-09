@@ -9,6 +9,9 @@ setup() {
   export HOME="$T/home" SENT="$T/sent" CLAUDE_ARGS="$T/claude.args" FRAIM_QUEUE_QUIET=1
   export FRAIM_LEADS_DIR="$T/home/fraim/leads" FRAIM_CRONTAB="$T/home/fraim/jobs/crontab"
   export FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_GOALS_DIR="$T/home/fraim/goals" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
+  export FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations" FRAIM_FILES_DIR="$T/home/fraim"
+  export FRAIM_AUTO_STATE_DIR="$T/home/.local/state/fraim/automations" FRAIM_AUTO_CRONTAB="$T/home/.local/state/fraim/automations.crontab"
+  export FRAIM_AUTO_KIT_DIR="$BATS_TEST_DIRNAME/../../workspace/automation-kit"
   # The fake Claude records its arguments and runs FAKE_ACTION, to act like a lead would.
   cat > "$T/bin/fraim-claude" <<'EOF'
 #!/usr/bin/env bash
@@ -26,14 +29,60 @@ EOF
   export PATH="$T/bin:$BIN:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
 }
 
-@test "new writes the brief, the budget and a crontab line" {
+@test "new writes the brief, the budget and an automation that runs it" {
   run fraim-lead new web --area "the mijnlevensverhalen web app" --at "0 6 * * 1-5"
   [ "$status" -eq 0 ]
   grep -q 'the mijnlevensverhalen web app' "$FRAIM_LEADS_DIR/web/lead.md"
   [ "$(cat "$FRAIM_LEADS_DIR/web/budget")" = 3 ]
-  grep -qx '0 6 \* \* 1-5 fraim-lead run web' "$FRAIM_CRONTAB"
+  grep -qx 'lead: web' "$FRAIM_AUTOMATIONS_DIR/web/automation.md"
+  grep -q 'description: Lead web: the mijnlevensverhalen web app' "$FRAIM_AUTOMATIONS_DIR/web/automation.md"
+  grep -qx '0 6 \* \* 1-5 fraim-auto fire web' "$FRAIM_AUTO_CRONTAB"
+  [ ! -e "$FRAIM_CRONTAB" ]
+  run fraim-auto check web
+  [ "$status" -eq 0 ]
+  run fraim-auto list
+  [[ "$output" == *"web (lead)  [on]  schedule 0 6 * * 1-5"* ]]
+  run fraim-lead list
+  [[ "$output" == *"web  lead  0 6 * * 1-5"* ]]
   run fraim-lead new web
   [ "$status" -eq 1 ]
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/report"
+  run fraim-lead new report
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"automation is already called report"* ]]
+}
+
+@test "its automation runs the lead: one history, one alert and a queue item on failure" {
+  fraim-lead new web
+  FAKE_OUTPUT="Checked the web app." run fraim-auto run web
+  [ "$status" -eq 0 ]
+  grep -q 'Checked the web app.' "$FRAIM_AUTOMATIONS_DIR"/web/runs/*/output.md
+  run fraim-auto run web --dry
+  [[ "$output" == *"no dry run"* ]]
+  rm -f "$SENT"
+  FAKE_FAIL=1 run fraim-auto run web
+  [ "$(grep -c 'failed' "$SENT")" -eq 1 ]
+  grep -q "Automation web failed: the Claude plan's usage limit was reached" "$SENT"
+  run fraim-queue list --json
+  [[ "$output" == *'"kind":"failed"'* ]]
+  [[ "$output" == *"Automation web failed"* ]]
+  [[ "$output" != *"on_approve\":\"The automation"* ]]
+}
+
+@test "migrate moves old crontab lines of leads into automations, paused stays paused" {
+  mkdir -p "$FRAIM_LEADS_DIR/web" "$FRAIM_LEADS_DIR/ops"
+  printf -- '---\nrole: lead\n---\n# Lead: web\n\n## Area\nThe shop.\n' > "$FRAIM_LEADS_DIR/web/lead.md"
+  printf -- '---\nrole: lead\n---\n# Lead: ops\n' > "$FRAIM_LEADS_DIR/ops/lead.md"
+  touch "$FRAIM_LEADS_DIR/ops/paused"
+  printf '0 5 * * * fraim-lead run web\n20 5 * * 1-5 fraim-lead run ops\n0 9 * * * fraim-lead run gone\n' > "$FRAIM_CRONTAB"
+  run fraim-auto migrate
+  [ "$status" -eq 0 ]
+  grep -q 'description: Lead web: The shop.' "$FRAIM_AUTOMATIONS_DIR/web/automation.md"
+  grep -qx 'schedule: "20 5 \* \* 1-5"' "$FRAIM_AUTOMATIONS_DIR/ops/automation.md"
+  grep -qx '# moved to ~/fraim/automations/web: 0 5 \* \* \* fraim-lead run web' "$FRAIM_CRONTAB"
+  grep -qx '0 9 \* \* \* fraim-lead run gone' "$FRAIM_CRONTAB"
+  run fraim-auto list
+  [[ "$output" == *"ops (lead)  [paused]"* ]]
 }
 
 @test "new refuses bad names and bad cron times" {
@@ -116,7 +165,9 @@ EOF
   grep -q 'Two things today.' "$SENT"
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-queue prio:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-auto show:*)"* ]]
   [[ "$tools" != *"fraim-goal start"* ]]
+  grep -q 'chief (lead)  \[on\]' "$CLAUDE_ARGS"
   rm -f "$SENT"
   FAKE_OUTPUT=SILENT run fraim-lead run chief
   [ ! -s "$SENT" ]
@@ -136,7 +187,11 @@ EOF
   run fraim-lead run web
   [[ "$output" == *paused* ]]
   [ ! -f "$CLAUDE_ARGS" ]
+  run fraim-auto list
+  [[ "$output" == *"web (lead)  [paused]"* ]]
   fraim-lead resume web
+  run fraim-auto list
+  [[ "$output" == *"web (lead)  [on]"* ]]
   run fraim-lead run web
   [ -f "$CLAUDE_ARGS" ]
 }

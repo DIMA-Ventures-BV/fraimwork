@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# usage: queue | queue:KIND
+# description: The owner's review queue, where the chief of staff ranks it with everything else. KIND: info (default), review, decision, idea.
+# Output plugin. The answer is on stdin; $1 is the kind. The first line becomes the title.
+set -uo pipefail
+if [ "${1:-}" = --check ]; then
+  case "${2:-}" in ""|info|review|decision|idea) exit 0 ;; esac
+  echo "'$2' is not a queue kind (info, review, decision or idea)"
+  exit 1
+fi
+command -v fraim-queue >/dev/null || { echo "this server has no review queue"; exit 1; }
+text="$(cat)"
+title="$(printf '%s\n' "$text" | grep -v '^[[:space:]]*$' | head -1 | sed 's/^[#*>[:space:]-]*//; s/[*_`]//g' | cut -c1-80)"
+[ -n "$title" ] || title="${FRAIM_AUTOMATION:-automation}"
+fraim-queue add --quiet --kind "${1:-info}" --source "automation ${FRAIM_AUTOMATION:-}" \
+  --title "$title" --summary "${text:0:6000}" >/dev/null 2>&1 \
+  || { echo "the review queue did not take the item"; exit 1; }
