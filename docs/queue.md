@@ -165,6 +165,16 @@ Guards:
 - **No loops.** A failure of the engineer's own runs goes to the queue as before, not back to the engineer.
 - It cannot send mail or messages, post, pay, merge or deploy.
 
+### Hiring
+
+The chief and the engineer grow your team for you. A lead is an employee with one area of one of your companies or projects: a product, a repo, ads, sales, support, finance or ops.
+
+1. The chief notices work that no lead owns: three or more items or notes in two weeks, or one lead's area that is too big. It tells the engineer: "Hire: someone for <area> of <company> because <what it saw>". It sends at most one hire a week and never repeats one you turned down.
+2. The engineer creates the lead switched off and writes the brief from what is really on the server: repos, automations, APIs and your rules.
+3. You get one question: "Hire someone for ads of the shop: checks spend and sales every weekday morning?" When you approve, the lead is hired and starts working.
+
+On a fresh server, with only the chief and the engineer, both suggest a first team of at most 3 leads for the areas with the most going on. You can also just say "I need someone for X". The chief passes it to the engineer in the same way.
+
 Its schedule (default Monday 06:00) is a weekly check for automations that fail, are paused or answer nothing useful. All other runs start from a note.
 
 ## The brain
