@@ -240,7 +240,9 @@ cmd_run() {
     rm -rf "$dir/.running"; mkdir "$dir/.running" || die "could not lock $dir"
   fi
   printf '%s\n' "$$" > "$dir/.running/pid"
-  trap 'rm -rf "$dir/.running"' EXIT
+  # dir is local to this function, so expand it now: the EXIT trap runs after it is gone.
+  # shellcheck disable=SC2064
+  trap "rm -rf $(printf '%q' "$dir/.running")" EXIT
 
   before="$(fraim-queue list --all --json --lead "$name" 2>/dev/null | jq -r '.[].id' | sort)"
   local goals_before
