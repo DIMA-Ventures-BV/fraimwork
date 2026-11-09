@@ -31,7 +31,7 @@ One system, one inbox:
 - **Everything reports to the queue.** Goals put their result there. Leads add ideas and decisions. An automation with `output: queue` (or `queue:decision`, `queue:idea`, `queue:review`) adds its answer as an item.
 - **Failures land in the queue too.** A failed automation or lead adds one `failed` item (priority 1) next to the WhatsApp alert. Approving it starts a goal that finds the cause and fixes the automation. A login or usage-limit failure only informs.
 - **The chief sees all of it**: the queue, every lead's notes, `fraim-auto list` and the recent automation answers in `~/fraim/outbox.md`. Its digest names failed or paused automations.
-- **The chief works all day.** Its `chief-events` automation wakes it when a goal result, a failure, an automation answer or a priority 1 item lands in the queue, and `chief: ...` on WhatsApp wakes it at once. See "The chief of staff" below.
+- **The chief works all day.** Its `chief-events` automation wakes it when a goal result, a failure, an automation answer or a priority 1 item lands in the queue, and work you ask for on WhatsApp wakes it at once: the server's Claude reads your message by meaning and passes it on with `fraim-lead ask`. There is no keyword. See "The chief of staff" below.
 - **The brain applies everywhere.** General rules go into every goal, lead and automation prompt. Rules for one lead stay with that lead.
 - **Leads can propose automations.** For a fixed check without judgement, a lead adds a decision whose `on_approve` makes the automation with the building-automations skill.
 | Brain | `fraim-brain` | `~/fraim/brain/log.md` (evidence), `rules.md` (rules), `~/.claude/skills` (skills); see [brain.md](brain.md) |
@@ -53,7 +53,7 @@ The ranking is: priority, then age, so nothing waits forever. The chief of staff
 ### Where you review
 
 - **Page:** `fraim queue` on the laptop opens it. Keys: `j`/`k` move, `a` approve, `r` reject, `d` dismiss, `n` write a note, `v` dictate a note, `1` `2` `3` priority. The page is on the tailnet only and needs the link with the token once (the browser then keeps a cookie).
-- **WhatsApp:** `queue`, `ok q3`, `ok q3 <note>`, `no q3 <why>`, `skip q3`, `remember: <preference>`, `leads`, `chief: <message>`.
+- **WhatsApp:** `queue`, `ok q3`, `ok q3 <note>`, `no q3 <why>`, `skip q3`, `remember: <preference>`, `leads`.
 - **Laptop:** `fraim queue list`, `fraim queue approve q3`, `fraim queue reject q3 "why"`.
 
 ## Goals feed the queue
@@ -93,7 +93,7 @@ You get one WhatsApp message per run, and none when the lead found nothing.
 |---|---|---|---|
 | Morning digest | its schedule (default 07:30) | reads all leads and the open queue, fixes priorities | one digest, or nothing (`SILENT`) |
 | Event | `chief-events` sees new queue items (checked every 15 minutes, 07:00 to 22:00) | routes each new thing | only when you must act today |
-| Your message | `chief: <message>` on WhatsApp, or `fraim lead ask -- "..."` | routes your request | always: what it did |
+| Your request | any WhatsApp message that asks for work (the server's Claude passes it on), or `fraim lead ask -- "..."` | routes your request | always: what it did |
 
 The events are new open queue items: goal results, failures, automation answers (such as the Gmail and Linear watchers) and anything priority 1. A lead's own ideas wait for the morning digest. Items the chief added itself never wake it.
 

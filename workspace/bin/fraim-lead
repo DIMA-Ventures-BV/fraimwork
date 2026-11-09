@@ -4,8 +4,9 @@
 # ideas and decisions in the owner's review queue. The chief of staff is a lead that reads
 # all other leads and the queue, ranks the queue and sends the owner one digest each morning.
 # During the day it also wakes on events: new goal results, failures and automation answers in
-# the queue (its NAME-events automation), and a message from the owner ("chief: ..." on
-# WhatsApp). Then it starts a goal, hands the work to a lead, or asks the owner.
+# the queue (its NAME-events automation), and work the owner asks for in plain words (the
+# server's Claude passes it on with fraim-lead ask). Then it starts a goal, hands the work to
+# a lead, or asks the owner.
 #
 #   fraim-lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief]
 #   fraim-lead list

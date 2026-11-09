@@ -88,6 +88,7 @@ const mcp = new Server(
       `If a website needs a login, ask the sender to log in at ${VIEW_URL} and wait. Never ask for passwords or codes.`,
       'For long tasks, first reply that you started, then reply again with the result.',
       'For a task that takes more than a few minutes, run it as a background goal: fraim-goal start --chat <chat_id> -- "<the task>".',
+      'The owner never uses keywords: decide by meaning. Work for the business (a request, a feature, a problem, a forwarded mail) goes to the chief of staff: fraim-lead ask -- "<the request with its context>". It starts the work, hands it to a lead or asks the owner, and answers here.',
       'It prints the goal id; reply with it. The goal sends its own result. The owner can also type "goal: <task>", "goals" and "stop g1".',
       'Goal results wait in the review queue (fraim-queue). The owner answers with "queue", "ok q3", "no q3 <why>" and "skip q3".',
       'When the owner asks to manage this session (start fresh, forget this chat, compact, switch to Opus/Sonnet/Haiku, or types /clear, /compact or /model), reply first, then call session_command. It runs after your reply.',
