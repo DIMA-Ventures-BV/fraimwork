@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# workspace/bin/fraim-lead and fraim-brain with a fake fraim-claude and fraim-notify, and
+# workspace/bin/fraim-lead (and its brain rules) with a fake fraim-claude and fraim-notify, and
 # the lead budget in fraim-goal.
 
 setup() {
@@ -133,18 +133,13 @@ EOF
   [ -f "$FRAIM_GOALS_DIR/g3/by-owner" ]
 }
 
-@test "brain note and distill write the rules, and keep the old ones" {
-  run fraim-brain distill
-  [[ "$output" == *"nothing to distill"* ]]
-  fraim-brain note "never use emoji"
-  grep -q 'owner said: never use emoji' "$FRAIM_BRAIN_DIR/log.md"
-  FAKE_OUTPUT=$'# How the owner wants things\n- Never use emoji.' run fraim-brain distill
-  [ "$status" -eq 0 ]
-  grep -qx -- '- Never use emoji.' "$FRAIM_BRAIN_DIR/rules.md"
-  grep -q 'never use emoji' "$CLAUDE_ARGS"
-  run fraim-brain distill --if-new
-  [[ "$output" == *"No new feedback"* ]]
-  FAKE_OUTPUT="sorry, I cannot" run fraim-brain distill
-  [ "$status" -eq 1 ]
-  grep -qx -- '- Never use emoji.' "$FRAIM_BRAIN_DIR/rules.md"
+@test "a lead gets the general rules and its own, not another lead's" {
+  fraim-brain note "Write in Dutch"
+  fraim-brain note --lead ops "Check the backups first"
+  fraim-brain note --lead web "Test on a phone screen"
+  fraim-lead new web --area "the web app"
+  fraim-lead run web
+  grep -q 'Write in Dutch' "$CLAUDE_ARGS"
+  grep -q 'phone screen' "$CLAUDE_ARGS"
+  ! grep -q 'backups first' "$CLAUDE_ARGS"
 }

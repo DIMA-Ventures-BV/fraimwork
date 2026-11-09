@@ -4,7 +4,8 @@
 //
 //   fraim-queue add --title T [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
 //                   [--priority 1|2|3] [--source S] [--goal gN] [--lead NAME] [--link URL]...
-//                   [--media FILE]... [--on-approve TEXT] [--quiet]        prints the id (q1, q2, ...)
+//                   [--media FILE]... [--on-approve TEXT] [--brain pN | --skill sN] [--quiet]
+//                                                               prints the id (q1, q2, ...)
 //   fraim-queue list [--all] [--json] [--lead NAME]   open items, most urgent first
 //   fraim-queue show ID [--json]
 //   fraim-queue approve ID [--note TEXT]   runs the item's on-approve step as a goal, if it has one
@@ -24,7 +25,6 @@ import path from 'node:path'
 
 const HOME = process.env.HOME || '/home/claude'
 const QUEUE = process.env.FRAIM_QUEUE_DIR || path.join(HOME, 'fraim/queue')
-const BRAIN = process.env.FRAIM_BRAIN_DIR || path.join(HOME, 'fraim/brain')
 const GOALS = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim/goals')
 const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
 const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
@@ -47,6 +47,18 @@ function runtimeEnv() {
     }
   } catch {}
   return { ...env, ...process.env }
+}
+
+// The command on PATH; otherwise the script next to this one (a checkout without an install).
+function tool(name) {
+  for (const dir of (process.env.PATH || '').split(':')) {
+    if (dir && fs.existsSync(path.join(dir, name))) return name
+  }
+  try {
+    const sibling = path.join(path.dirname(fs.realpathSync(process.argv[1])), name)
+    if (fs.existsSync(sibling)) return sibling
+  } catch {}
+  return name
 }
 
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z')
@@ -157,6 +169,8 @@ export function addItem(opts) {
   if (!KINDS.includes(kind)) usage(`--kind must be one of ${KINDS.join(', ')}`)
   const priority = parseInt(opts.priority || '2', 10)
   if (![1, 2, 3].includes(priority)) usage('--priority must be 1, 2 or 3')
+  if (opts.brain && !/^p\d{1,6}$/.test(opts.brain)) usage('--brain needs a proposal id (p1, p2, ...)')
+  if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
   const id = newId()
   const dir = itemDir(id)
   const item = {
@@ -171,6 +185,8 @@ export function addItem(opts) {
     links: opts.links || [],
     media: copyMedia(dir, opts.media || []),
     on_approve: String(opts.onApprove || ''),
+    brain: opts.brain || '',
+    skill: opts.skill || '',
     state: 'open',
     note: '',
     created: now(),
@@ -181,16 +197,18 @@ export function addItem(opts) {
   return item
 }
 
+function brain(args) {
+  const res = spawnSync(tool('fraim-brain'), args, { encoding: 'utf8', timeout: 30000 })
+  if (res.status !== 0) throw new Error((res.stderr || res.error?.message || 'fraim-brain failed').trim().replace(/^fraim-brain: /, ''))
+  return res.stdout.trim()
+}
+
+// Every reason the owner gives is evidence for the brain. A failed write must not undo a decision.
 function brainNote(item, verdict, note) {
   if (!note) return
-  fs.mkdirSync(BRAIN, { recursive: true })
-  const file = path.join(BRAIN, 'log.md')
-  if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, '# What the owner said in reviews\n\nNewest at the bottom. fraim-brain distills this into rules.md.\n\n')
-  }
-  const where = item.lead ? ` (lead ${item.lead})` : ''
-  const line = `- ${now().slice(0, 16).replace('T', ' ')} ${verdict} ${item.id} "${item.title}"${where}: ${note.replace(/\s+/g, ' ').trim()}\n`
-  fs.appendFileSync(file, line)
+  const args = ['log', '--verdict', verdict, '--item', item.id, '--title', item.title]
+  if (item.lead) args.push('--lead', item.lead)
+  try { brain([...args, '--', note]) } catch (err) { process.stderr.write(`fraim-queue: the brain did not save the reason: ${err.message}\n`) }
 }
 
 function startGoal(text, item) {
@@ -244,13 +262,23 @@ export function decide(id, verdict, note = '') {
   if (verdict === 'rejected' && !note) usage('reject needs a reason (--note), so the agent knows what to change')
   if (!['approved', 'rejected', 'dismissed'].includes(verdict)) usage(`unknown decision ${verdict}`)
   let followUp = ''
-  if (verdict === 'approved' && item.on_approve) followUp = startGoal(approveText(item, note), item)
-  // A rejected idea only teaches the brain; a rejected piece of work is done again.
-  if (verdict === 'rejected' && item.goal) followUp = startGoal(reworkText(item, note), item)
+  let outcome = ''
+  // A brain proposal or a new skill changes nothing until the owner approves it here.
+  if (item.brain) {
+    outcome = verdict === 'approved' ? brain(['apply', item.brain]) : brain(['discard', item.brain, '--note', verdict === 'rejected' ? note : ''])
+  } else if (item.skill) {
+    outcome = verdict === 'approved' ? brain(['skill', 'install', item.skill]) : brain(['skill', 'discard', item.skill, '--note', note])
+  } else if (verdict === 'approved' && item.on_approve) {
+    followUp = startGoal(approveText(item, note), item)
+  } else if (verdict === 'rejected' && item.goal) {
+    // A rejected idea only teaches the brain; a rejected piece of work is done again.
+    followUp = startGoal(reworkText(item, note), item)
+  }
   item.state = verdict
   item.note = note
   item.decided = now()
   item.follow_up = followUp
+  item.outcome = outcome
   writeItem(item)
   if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   return item
@@ -279,6 +307,7 @@ function describe(item) {
   if (item.on_approve) parts.push('', `On approve: ${item.on_approve}`)
   if (item.note) parts.push('', `Owner: ${item.note}`)
   if (item.follow_up) parts.push(`Follow-up goal: ${item.follow_up}`)
+  if (item.outcome) parts.push(item.outcome)
   return parts.join('\n')
 }
 
@@ -560,7 +589,7 @@ function renderItem(animate) {
     (it.summary ? '<p class="summary">' + esc(it.summary) + '</p>' : '') +
     (it.links.length ? '<div class="links">' + it.links.map(function (l) { return '<a target="_blank" rel="noopener" href="' + esc(safeUrl(l)) + '">' + esc(l) + '</a>' }).join('') + '</div>' : '') +
     (it.on_approve ? '<div class="next"><b>When you approve, the server does this</b>' + esc(it.on_approve) + '</div>' : '') +
-    (open ? '' : '<p class="verdict">' + VERB[it.state] + (it.note ? ': ' + esc(it.note) : '') + (it.follow_up ? '. Follow-up goal ' + esc(it.follow_up) + '.' : '') + '</p>') +
+    (open ? '' : '<p class="verdict">' + VERB[it.state] + (it.note ? ': ' + esc(it.note) : '') + (it.follow_up ? '. Follow-up goal ' + esc(it.follow_up) + '.' : '') + (it.outcome ? ' ' + esc(it.outcome) : '') + '</p>') +
     '</article>'
   if (open) {
     html += '<div class="dock"><div class="dock-in">' +
@@ -592,6 +621,7 @@ async function decide(verdict) {
   if (!out) return
   stamp(verdict)
   if (out.follow_up) toast(VERB[verdict] + '. The server started goal ' + out.follow_up + '.')
+  else if (out.outcome) toast(VERB[verdict] + '. ' + out.outcome)
   setTimeout(function () { load().then(function () { renderItem(true) }) }, 420)
 }
 async function setPrio(p) { var it = items[sel]; if (it && await post(it.id, 'priority', { priority: p })) load(it.id) }
@@ -684,7 +714,7 @@ function main(argv) {
       if (!id) usage(`${action} ID`)
       const verdict = { approve: 'approved', reject: 'rejected', dismiss: 'dismissed' }[action]
       const item = decide(id, verdict, args.note || args._.slice(1).join(' '))
-      return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}`)
+      return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}${item.outcome ? `. ${item.outcome}` : ''}`)
     }
     case 'prio': {
       if (!id || !args._[1]) usage('prio ID 1|2|3')

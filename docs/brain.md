@@ -1,0 +1,57 @@
+# The brain
+
+The brain is what the server's agents learn about you. You stay in charge of it: agents propose changes, and only your approval in the queue applies them.
+
+```
+your reasons in the queue ─┐                         ┌─► rules.md   (goal and lead prompts)
+"remember: ..." ───────────┼─► log.md (evidence) ────┤
+fraim-brain note ──────────┘    e1, e2, ...          └─► proposals ─► queue ─► you approve ─► applied
+
+goal finishes ─► skill folder ─► fraim-brain skill propose ─► queue ─► you approve ─► ~/.claude/skills
+```
+
+## Three kinds of memory
+
+| Memory | File | What it holds |
+|---|---|---|
+| Evidence | `~/fraim/brain/log.md` | Every reason you gave and every preference you stated, one line each, with an id (`e12`). Nothing edits or deletes it. |
+| Rules | `~/fraim/brain/rules.md` | One-line rules in sections. Each rule has an id and cites its evidence: `- Never use emoji. [r4: e2 e9]`. |
+| Skills | `~/.claude/skills/NAME/SKILL.md` | Step-by-step know-how: when to use it, steps, pitfalls, how to check the result. Claude loads one when a task fits. |
+
+## How rules change
+
+| Who | How | Needs approval |
+|---|---|---|
+| You | `remember: ...` on WhatsApp, `fraim brain note "..."`, or the server Claude when you correct it | No. It applies at once. |
+| You | `forget r4`, `undo rules` on WhatsApp; `fraim brain forget r4`, `fraim brain undo` | No. |
+| The weekly distill (Sunday 20:00) | Claude reads new evidence and proposes add, change or remove steps | Yes. The proposal is one queue item. |
+
+A proposal is checked before it reaches you: every step must cite events that exist, a change or removal must name a rule that exists, a rule is one line of at most 300 characters, and the file holds at most 60 rules. A proposal that fails a check is dropped and the rules stay the same.
+
+The distill only adds a rule when you stated it as a general preference, or when at least two events point the same way. One correction of one piece of work is not a rule yet.
+
+When you reject a proposal, give a reason: the brain proposes again with it. While a proposal waits, no new one is made.
+
+Every change keeps the previous file in `~/fraim/brain/history/`, so `undo` always works. `fraim brain history` lists the changes and `fraim brain why r4` shows the events behind a rule.
+
+## Rules per lead
+
+Sections named `Lead <name>` hold rules for one lead's area. A lead and its goals get the general sections plus their own; the chief of staff gets all of them. Other leads never see them. Reasons given on a lead's queue items name the lead, so the distill can file them there.
+
+## Skills
+
+When a goal finds a procedure worth reusing (a multi-step task that will come back, a dead end it got past, or your correction of how to do something), it writes a skill folder and runs `fraim-brain skill propose DIR`. The queue item shows the whole skill, or for a change, the diff.
+
+Checks before it reaches you: `SKILL.md` with a name and a description that says when to use it, at most 20 files and 256 KB, plain text only, no links. Invisible characters and anything that looks like a key or token are refused. A download piped into a shell, a delete of a home folder, or text that tells the agent to ignore instructions raise the item to priority 1 with a warning.
+
+The brain only changes skills it installed itself. Your own skills and plugin skills stay as they are. `fraim-brain skill lock NAME` freezes a brain skill. A replaced version is kept in `~/fraim/brain/history/skills/`.
+
+## Limits
+
+- Goals run with full shell access, so a goal could call `fraim-brain apply` itself. The prompts forbid it, and leads do not have the command. The queue is the gate, not a hard boundary.
+- The brain learns from the queue, from `remember:` and from what the server Claude notes when you correct it. It does not read old chats on its own.
+- No numbers yet on whether the rules reduce rejections. Count your rejections per week in the queue to judge it.
+
+## Where the design comes from
+
+The memory split (evidence, rules, skills), the patch-style edits, the size limits and the approval gate follow Nous Research's [Hermes Agent](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory). Treating a generalization as a guess until more evidence supports it, and keeping each rule linked to its evidence, follow [current work on agent memory](https://alpeshnakrani.com/books/memory-systems-for-agents/reflection-consolidation-and-the-summaries-that-lie/).

@@ -10,7 +10,7 @@ goals (background work) ──── results ────►  REVIEW QUEUE  ◄�
    ▲                                              │
    └──────── rework with your feedback ───────────┤
                                                   ▼
-                       brain: your reasons become rules in every prompt
+         brain: your reasons become rules and skills, after your approval
 ```
 
 ## Parts
@@ -21,7 +21,7 @@ goals (background work) ──── results ────►  REVIEW QUEUE  ◄�
 | Queue page | `fraim-queue serve` (started with the workspace) | container port 3109, the space's last preview port |
 | Goals | `fraim-goal` | `~/fraim/goals/gN/` |
 | Leads | `fraim-lead` | `~/fraim/leads/<name>/` and a line in `~/fraim/jobs/crontab` |
-| Brain | `fraim-brain` | `~/fraim/brain/log.md` (raw) and `rules.md` (distilled) |
+| Brain | `fraim-brain` | `~/fraim/brain/log.md` (evidence), `rules.md` (rules), `~/.claude/skills` (skills); see [brain.md](brain.md) |
 
 ## The queue
 
@@ -77,9 +77,7 @@ The chief of staff (`--chief`) starts no goals. It reads all leads and the open 
 
 ## The brain
 
-`fraim-queue` writes every reason you give to `~/fraim/brain/log.md`. Every Sunday at 20:00 `fraim-brain distill --if-new` rewrites `rules.md`: at most 40 one-line rules, newest wins. Goal and lead prompts include `rules.md`.
-
-`rules.md` is a plain file: edit it when a rule is wrong. `fraim brain note "..."` or `remember: ...` on WhatsApp adds a preference directly.
+`fraim-queue` gives every reason you write to the brain as evidence. Every Sunday at 20:00 the brain proposes rule changes as one queue item; approve applies them, reject with a reason makes it try again. Goals can propose skills the same way. `remember: ...` on WhatsApp adds a rule at once. Details: [brain.md](brain.md).
 
 ## Costs
 
