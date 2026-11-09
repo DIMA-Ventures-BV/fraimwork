@@ -87,7 +87,9 @@ You get one WhatsApp message per run, and none when the lead found nothing.
 
 ## The chief of staff
 
-`fraim lead new chief --chief` makes it. It has two kinds of run.
+`fraim lead new chief --chief` makes it. The chief is the one voice between you and everything technical. The WhatsApp chat talks as the chief: before it answers about work, it reads `fraim-lead brief` (the chief's brief and notes, what you were told, recent tasks with what they were for, coding sessions, leads, automations, open decisions and your rules) and tells you what each thing means, without ids. Every message you read also gets the plain-words rules from `fraim-style prompt`.
+
+Besides the chat, it has these runs.
 
 | Run | Starts when | It does | It tells you |
 |---|---|---|---|

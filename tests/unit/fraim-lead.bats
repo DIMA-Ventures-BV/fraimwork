@@ -482,3 +482,29 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
   FAKE_FAIL=1 run fraim-auto run digest
   [ ! -e "$FRAIM_LEADS_DIR/engineer/inbox.md" ]
 }
+
+@test "brief gives the chat the chief's brief, notes, tasks with what they were for, leads and open decisions" {
+  fraim-lead new chief --chief
+  fraim-lead new web --area "the mijnlevensverhalen web app"
+  printf 'Watch the Meta ads spend.\n' > "$FRAIM_LEADS_DIR/chief/state.md"
+  mkdir -p "$FRAIM_GOALS_DIR/g5"
+  printf 'Merge the Dependabot updates for pupstar\n' > "$FRAIM_GOALS_DIR/g5/goal.md"
+  printf 'done 2026-11-09 11:05\n' > "$FRAIM_GOALS_DIR/g5/state"
+  printf 'web\n' > "$FRAIM_GOALS_DIR/g5/lead"
+  printf 'Merged 3 of 4 updates.\n' > "$FRAIM_GOALS_DIR/g5/result.md"
+  fraim-queue add --quiet --lead web --kind decision --title "Meta ads tracking" --ask "May I check the orders?" >/dev/null
+  run fraim-lead brief
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Ids (g.., s.., q..) are for commands only"* ]]
+  [[ "$output" == *"Watch the Meta ads spend."* ]]
+  [[ "$output" == *"g5, done 2026-11-09 11:05, started by lead web. Task: Merge the Dependabot updates for pupstar"* ]]
+  [[ "$output" == *"Result: Merged 3 of 4 updates."* ]]
+  [[ "$output" == *"- web: "*"mijnlevensverhalen web app"* ]]
+  [[ "$output" == *"Meta ads tracking | asks: May I check the orders?"* ]]
+}
+
+@test "brief works without a chief or any goals" {
+  run fraim-lead brief
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Background tasks"* ]]
+}
