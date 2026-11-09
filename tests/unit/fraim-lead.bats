@@ -182,7 +182,8 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
 @test "the chief's answer is the digest, SILENT sends nothing" {
   fraim-lead new chief --chief
   FAKE_OUTPUT="Two things today." run fraim-lead run chief
-  grep -q 'Chief of staff:' "$SENT"
+  ! grep -q 'Chief of staff:' "$SENT"
+  grep -A1 -x -- '--disallowedTools' "$CLAUDE_ARGS" | grep -qx mcp__whatsapp
   grep -q 'Two things today.' "$SENT"
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-queue prio:*)"* ]]
@@ -274,7 +275,7 @@ wait_for() { for _ in $(seq 80); do grep -q "$1" "$2" 2>/dev/null && return 0; s
   for _ in $(seq 50); do grep -q 'Started g1' "$SENT" 2>/dev/null && break; sleep 0.1; done
   grep -q 'The owner wrote: customers want a PDF export' "$CLAUDE_ARGS"
   grep -q 'Never answer SILENT' "$CLAUDE_ARGS"
-  grep -q 'Chief of staff:' "$SENT"
+  grep -q 'never call a WhatsApp or reply tool' "$CLAUDE_ARGS"
   grep -q 'Started g1 for the export.' "$SENT"
   ls "$FRAIM_AUTOMATIONS_DIR"/chief/runs/*/trigger.json >/dev/null
 }

@@ -308,7 +308,7 @@ $(repos_note)
 Queue items you add:
 $(style_block queue)
 
-Your final answer goes to the owner on WhatsApp next to the titles of your new queue items. Write at most 2 short sentences: what you built or fixed, in plain words for someone who did not see your work. No ids, no file names, no markdown, no lists.
+Your final answer goes to the owner on WhatsApp by itself (never call a WhatsApp or reply tool for it, and never write about chat ids, tools or how it is delivered) next to the titles of your new queue items. Write at most 2 short sentences: what you built or fixed, in plain words for someone who did not see your work. No ids, no file names, no markdown, no lists.
 EOF
 }
 
@@ -391,9 +391,9 @@ ${FRAIM_LEAD_INPUT:0:8000}
 Handle only this: route each new thing (start it, hand it to a lead, ask the owner, or leave it), and change priorities if needed.
 EOF
       if [ "${FRAIM_LEAD_INPUT#The owner wrote:}" != "$FRAIM_LEAD_INPUT" ]; then
-        echo "The owner wrote to you and waits for an answer. Your final answer goes to the owner on WhatsApp: what you did with it, in at most 5 short lines. Never answer SILENT."
+        echo "The owner wrote to you and waits for an answer. Your final answer goes to the owner on WhatsApp by itself (never call a WhatsApp or reply tool for it, and never write about chat ids, tools or how it is delivered): what you did with it, in at most 5 short lines. Never answer SILENT."
       else
-        echo "Your final answer goes to the owner on WhatsApp only when the owner must act today: at most 5 short lines. Otherwise answer exactly SILENT; the morning digest covers the rest."
+        echo "Your final answer goes to the owner on WhatsApp by itself (never call a WhatsApp or reply tool for it, and never write about chat ids, tools or how it is delivered) only when the owner must act today: at most 5 short lines. Otherwise answer exactly SILENT; the morning digest covers the rest."
       fi
       style_block whatsapp
       return
@@ -402,7 +402,7 @@ EOF
 
 Put in the digest: an automation that failed or is paused, and an automation answer that needs the owner. Automation failures are also queue items of kind failed.
 
-Your final answer goes to the owner on WhatsApp and to the top of the queue page as the daily digest: plain text, at most 10 short lines. Answer exactly SILENT when nothing needs the owner.
+Your final answer goes to the owner on WhatsApp by itself (never call a WhatsApp or reply tool for it, and never write about chat ids, tools or how it is delivered) and to the top of the queue page as the daily digest: plain text, at most 10 short lines. Answer exactly SILENT when nothing needs the owner.
 
 $(style_block whatsapp)
 EOF
@@ -443,7 +443,7 @@ $(repos_note)
 Queue items you add:
 $(style_block queue)
 
-Your final answer goes to the owner on WhatsApp next to the titles of your new queue items. Write at most 2 short sentences: the one fact that matters most, with its number, and why it matters. Plain words for someone who did not see your work: no queue ids, no "goal", no "lead", no markdown, no lists.
+Your final answer goes to the owner on WhatsApp by itself (never call a WhatsApp or reply tool for it, and never write about chat ids, tools or how it is delivered) next to the titles of your new queue items. Write at most 2 short sentences: the one fact that matters most, with its number, and why it matters. Plain words for someone who did not see your work: no queue ids, no "goal", no "lead", no markdown, no lists.
 EOF
 }
 
@@ -551,7 +551,7 @@ cmd_run() {
   [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
   # What the engineer creates starts switched off (fraim-auto new and fraim-lead new read it).
   if is_engineer "$dir"; then export FRAIM_LEAD_ROLE=engineer; else unset FRAIM_LEAD_ROLE; fi
-  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" ${dirs[@]+"${dirs[@]}"} 2>"$log.err")"
+  output="$("${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} 2>"$log.err")"
   code=$?
   printf '%s\n' "$output" > "$log"
   ls -1t "$dir/runs" 2>/dev/null | tail -n +61 | while IFS= read -r old; do rm -f "$dir/runs/$old"; done
@@ -597,11 +597,9 @@ cmd_run() {
       FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "The chief routed new work: ${output:0:3500}"
       return 0
     fi
-    FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "Chief of staff:
+    FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "${output:0:3500}
 
-${output:0:3500}
-
-Queue: $(fraim-queue url 2>/dev/null)"
+$(fraim-queue url 2>/dev/null)"
     return 0
   fi
 
