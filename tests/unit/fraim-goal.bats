@@ -227,7 +227,7 @@ EOF
   [ "$(jq -r .state "$HC_FAKE/t-g1.json")" = finished ]
 }
 
-@test "reconcile gives a live goal without a watcher a new one, and fails a vanished one" {
+@test "reconcile gives a live goal without a watcher a new one, and restarts a vanished one" {
   mkdir -p "$FRAIM_GOALS_DIR/g1" "$FRAIM_GOALS_DIR/g2"
   for g in g1 g2; do
     echo "goal $g" > "$FRAIM_GOALS_DIR/$g/goal.md"
@@ -240,11 +240,30 @@ EOF
   printf -- 'fraim-claude\n--session-id\nsid-g1\n' > "$HC_FAKE/g1.argv"
   run "$GOAL" reconcile
   [ "$status" -eq 0 ]
-  wait_state g2 failed
-  grep -q 'server restarted' "$FRAIM_GOALS_DIR/g2/state"
+  [ "$(cat "$FRAIM_GOALS_DIR/g2/restarts")" = 1 ]
+  for _ in $(seq 30); do grep -q 'server restarted' "$HC_FAKE/g2.sent" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'server restarted' "$HC_FAKE/g2.sent"
   for _ in $(seq 30); do [ -n "$(find "$FRAIM_GOALS_DIR/g1/heartbeat" -newer "$FRAIM_GOALS_DIR/g1/goal.md")" ] && break; sleep 0.1; done
   [ -n "$(find "$FRAIM_GOALS_DIR/g1/heartbeat" -newer "$FRAIM_GOALS_DIR/g1/goal.md")" ]
   "$GOAL" stop g1
+}
+
+@test "reconcile starts a vanished goal without a conversation from the start, and fails it after 2 restarts" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
+  mkdir -p "$FRAIM_GOALS_DIR/g1" "$FRAIM_GOALS_DIR/g2"
+  for g in g1 g2; do
+    echo "check the orders $g" > "$FRAIM_GOALS_DIR/$g/goal.md"
+    echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/$g/state"
+  done
+  echo 2 > "$FRAIM_GOALS_DIR/g2/restarts"
+  echo "sid-g2" > "$FRAIM_GOALS_DIR/g2/session-id"
+  run "$GOAL" reconcile
+  [ "$status" -eq 0 ]
+  wait_state g1 done
+  grep -q 'check the orders g1' "$HC_FAKE/g1.sent"
+  [ "$(cat "$FRAIM_GOALS_DIR/g1/restarts")" = 1 ]
+  wait_state g2 failed
+  grep -q 'server restarted' "$FRAIM_GOALS_DIR/g2/state"
 }
 
 @test "bad input is a usage error" {

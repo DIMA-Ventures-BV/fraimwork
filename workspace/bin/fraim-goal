@@ -384,7 +384,7 @@ cmd_list() {
   for id in $(find "$goals" -mindepth 1 -maxdepth 1 -type d -name 'g[0-9]*' -exec basename {} \; | sed 's/^g//' | grep -E '^[0-9]+$' | sort -rn | head -20); do
     dir="$goals/g$id"
     st="$(cat "$dir/state" 2>/dev/null || echo unknown)"
-    if [ "${st%% *}" = running ] && ! alive "$dir"; then st="failed (the run disappeared)"; fi
+    if [ "${st%% *}" = running ] && ! alive "$dir"; then st="restarting (the server restarted)"; fi
     now="$(jq -r --arg n "g$id" '.[] | select(.name == $n) | if .status == "blocked" then "needs you: " + .question else empty end' <<<"$live" 2>/dev/null)"
     printf 'g%s  %s  %s%s\n' "$id" "$st" "$(head -1 "$dir/goal.md" | cut -c1-80)" "${now:+  ($now)}"
     found=1
@@ -464,17 +464,37 @@ cmd_reconcile() {
   local dir id st
   for dir in "$goals"/g*/; do
     id="$(basename "$dir")"
-    valid_id "$id" && [ -s "$dir/session-id" ] || continue
+    valid_id "$id" || continue
     st="$(state_of "$dir")"
     case "$st" in running|done) ;; *) continue ;; esac
     alive "$dir" && continue
-    if term_live "$id"; then
+    if [ -s "$dir/session-id" ] && term_live "$id"; then
       touch "$dir/heartbeat"
       spawn_watcher "$id" follow
     elif [ "$st" = running ]; then
-      fail_goal "$id" "$dir" "$(cat "$dir/chat" 2>/dev/null)" "the Claude session ended (the server restarted)"
+      restart_goal "$id" "$dir"
     fi
   done
+}
+
+# A server restart (an update) ended a running goal: start it again, at most
+# FRAIM_GOAL_RESTARTS times. It continues its own conversation when there is one.
+restart_goal() {
+  local id="$1" dir="$2" n
+  n="$(cat "$dir/restarts" 2>/dev/null || echo 0)"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -ge "${FRAIM_GOAL_RESTARTS:-2}" ]; then
+    fail_goal "$id" "$dir" "$(cat "$dir/chat" 2>/dev/null)" "the Claude session ended (the server restarted)"
+    return 0
+  fi
+  echo $((n + 1)) > "$dir/restarts"
+  echo "restart $((n + 1)) after the session ended $(date '+%Y-%m-%d %H:%M')" >> "$dir/log.txt"
+  if [ -s "$dir/session-id" ] && (cmd_send "$id" "The server restarted while you worked. Continue the goal where you stopped; your notes are in ~/fraim/goals/$id.") >/dev/null 2>>"$dir/log.txt"; then
+    return 0
+  fi
+  rm -f "$dir/session-id"
+  touch "$dir/heartbeat"
+  spawn_watcher "$id" run
 }
 
 action="${1:-}"
