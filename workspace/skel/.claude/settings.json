@@ -21,6 +21,7 @@
       "Bash(fraim-style:*)",
       "Bash(fraim-sessions:*)",
       "Bash(fraim-herdr ls:*)",
+      "Bash(fraim-relay said:*)",
       "mcp__whatsapp__session_command"
     ]
   }

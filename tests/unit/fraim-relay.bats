@@ -1,0 +1,135 @@
+#!/usr/bin/env bats
+# workspace/bin/fraim-relay and fraim-notify: push notices reach the owner in the chief's words,
+# with a fake fraim-claude (the chief) and fraim-gateway (WhatsApp).
+
+setup() {
+  BIN="$BATS_TEST_DIRNAME/../../workspace/bin"
+  T="$BATS_TEST_TMPDIR"
+  mkdir -p "$T/bin" "$T/home/fraim"
+  export HOME="$T/home" SENT="$T/sent" CLAUDE_ARGS="$T/claude.args" CLAUDE_CALLS="$T/claude.calls"
+  export FRAIM_FILES_DIR="$T/home/fraim" FRAIM_LEADS_DIR="$T/home/fraim/leads" FRAIM_GOALS_DIR="$T/home/fraim/goals"
+  export FRAIM_SESSIONS_DIR="$T/home/fraim/sessions" FRAIM_RELAY_DIR="$T/home/fraim/relay"
+  export FRAIM_RELAY_SYNC=1 FRAIM_RELAY_WAIT=0 WHATSAPP_OWNER=31600000000
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGS"
+echo call >> "$CLAUDE_CALLS"
+[ -z "${FAKE_FAIL:-}" ] || { echo "usage limit reached" >&2; exit 1; }
+echo "${FAKE_OUTPUT:-Klaar: het antwoord is Alpha. Goed zo?}"
+EOF
+  cat > "$T/bin/fraim-gateway" <<'EOF'
+#!/usr/bin/env bash
+printf 'gateway %s\n' "$3" >> "$SENT"
+EOF
+  for tool in fraim-brain fraim-style fraim-queue; do printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/$tool"; done
+  chmod +x "$T/bin/"*
+  printf 'FRAIM_MODULES=whatsapp\n' > "$T/runtime.env"
+  export PATH="$T/bin:$BIN:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
+}
+
+make_chief() {
+  mkdir -p "$FRAIM_LEADS_DIR/chief"
+  printf -- '---\nrole: chief\n---\n# Chief of staff\nKeep the owner informed.\n' > "$FRAIM_LEADS_DIR/chief/lead.md"
+}
+
+@test "without a chief, a notice goes out as it is" {
+  run fraim-notify "Goal g9 done."
+  [ "$status" -eq 0 ]
+  grep -qE '"to": ?"31600000000"' "$SENT"
+  grep -q 'Goal g9 done.' "$SENT"
+  [ ! -e "$CLAUDE_CALLS" ]
+}
+
+@test "with a chief, the owner gets the chief's words, not the raw notice" {
+  make_chief
+  run fraim-notify "Goal g9 done. Alpha. I wrote only queue.json. Review it: reply ok q10"
+  [ "$status" -eq 0 ]
+  grep -q 'Klaar: het antwoord is Alpha' "$SENT"
+  run grep -q 'queue.json' "$SENT"; [ "$status" -eq 1 ]
+  grep -q 'Never write ids' "$CLAUDE_ARGS"
+  grep -q 'Goal g9 done' "$CLAUDE_ARGS"
+  # The log keeps the ids, so the WhatsApp Claude can route the owner's answer.
+  run fraim-relay said
+  [[ "$output" == *"Klaar: het antwoord is Alpha"* ]]
+  [[ "$output" == *"ok q10"* ]]
+}
+
+@test "the chief sees what the owner asked for behind a goal and a coding session" {
+  make_chief
+  mkdir -p "$FRAIM_GOALS_DIR/g7" "$FRAIM_SESSIONS_DIR/s2"
+  echo "Count the folders in ~/fraim" > "$FRAIM_GOALS_DIR/g7/goal.md"
+  echo "Make hello.py print hello" > "$FRAIM_SESSIONS_DIR/s2/task"
+  echo pupstar > "$FRAIM_SESSIONS_DIR/s2/repo"
+  fraim-notify "Goal g7 done. 11 folders."
+  grep -q 'Count the folders in ~/fraim' "$CLAUDE_ARGS"
+  fraim-notify "s2 needs you: Red or blue?"
+  grep -q 'Make hello.py print hello' "$CLAUDE_ARGS"
+  grep -q 'coding session in pupstar' "$CLAUDE_ARGS"
+}
+
+@test "notices that wait together become one message" {
+  make_chief
+  mkdir -p "$FRAIM_RELAY_DIR"
+  FRAIM_RELAY_SYNC=0 fraim-relay add -- "s2 is done. Red." &
+  # Hold the lock so the background drain leaves both notices for one drain.
+  mkdir "$FRAIM_RELAY_DIR/.lock"; echo $$ > "$FRAIM_RELAY_DIR/.lock/pid"
+  wait
+  FRAIM_RELAY_SYNC=0 fraim-relay add -- "s2 is done. Red again." &
+  wait
+  sleep 0.3
+  [ ! -e "$CLAUDE_CALLS" ]
+  rm -rf "$FRAIM_RELAY_DIR/.lock"
+  run fraim-relay drain
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CLAUDE_CALLS")" -eq 1 ]
+  grep -q 'Red\.' "$CLAUDE_ARGS"
+  grep -q 'Red again' "$CLAUDE_ARGS"
+  [ "$(grep -c '^gateway' "$SENT")" -eq 1 ]
+}
+
+@test "SILENT holds a notice back and logs it" {
+  make_chief
+  FAKE_OUTPUT=SILENT run fraim-notify "Goal g8 answered. two"
+  [ "$status" -eq 0 ]
+  [ ! -e "$SENT" ]
+  grep -q '(held back)' "$FRAIM_RELAY_DIR/said.md"
+}
+
+@test "when the chief cannot run, the notice goes out as it is" {
+  make_chief
+  FAKE_FAIL=1 run fraim-notify "Lead web failed: exit 1."
+  [ "$status" -eq 0 ]
+  grep -q 'Lead web failed: exit 1.' "$SENT"
+  grep -q 'the chief could not write it' "$FRAIM_RELAY_DIR/said.md"
+  touch "$FRAIM_LEADS_DIR/chief/paused"
+  rm -f "$SENT" "$CLAUDE_CALLS"
+  run fraim-notify "Goal g1 done."
+  grep -q 'Goal g1 done.' "$SENT"
+  [ ! -e "$CLAUDE_CALLS" ]
+}
+
+@test "a direct notice and a goal's chat skip or keep their path" {
+  make_chief
+  FRAIM_NOTIFY_DIRECT=1 run fraim-notify "q3 was approved from the command line. Not you? Reply *undo rules*."
+  grep -q 'Not you?' "$SENT"
+  [ ! -e "$CLAUDE_CALLS" ]
+  rm -f "$SENT"
+  FRAIM_NOTIFY_CHAT=316@s.whatsapp.net run fraim-notify "Goal g1 done."
+  grep -q '"chat_id":"316@s.whatsapp.net"' "$SENT"
+  grep -q 'Klaar' "$SENT"
+}
+
+@test "the relay is off without WhatsApp, with FRAIM_RELAY=off, and its tools change nothing" {
+  make_chief
+  FRAIM_RELAY=off run fraim-relay on
+  [ "$status" -eq 1 ]
+  printf 'FRAIM_MODULES=scheduler\n' > "$T/runtime.env"
+  run fraim-notify "Goal g1 done."
+  [ ! -e "$SENT" ]
+  [ ! -e "$CLAUDE_CALLS" ]
+  printf 'FRAIM_MODULES=whatsapp\n' > "$T/runtime.env"
+  fraim-notify "Goal g1 done."
+  tools="$(grep -A1 -x -- --allowedTools "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == Read,Glob,Grep,* ]]
+  [[ "$tools" != *Edit* && "$tools" != *Write* && "$tools" != *approve* ]]
+}

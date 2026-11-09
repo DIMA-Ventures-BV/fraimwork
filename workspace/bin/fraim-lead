@@ -428,7 +428,7 @@ cmd_run() {
     if [ -n "${FRAIM_LEAD_IN_AUTO:-}" ]; then
       echo "Lead $name failed: $reason. Log: ${log#"$HOME"/}" >&2
     else
-      fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"
+      if [ "$chief" = 1 ]; then FRAIM_NOTIFY_DIRECT=1 fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"; else fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"; fi
     fi
     exit 1
   fi
@@ -440,7 +440,13 @@ cmd_run() {
 
   if [ "$chief" = 1 ]; then
     [ "$(printf '%s' "$output" | tr -d '[:space:]')" = SILENT ] && return 0
-    FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "Chief of staff:
+    # A run woken by queue events goes through the relay, which knows what the owner was
+    # already told about the same results; the digest and answers to the owner go as they are.
+    if [ -n "${FRAIM_LEAD_INPUT:-}" ] && [ "${FRAIM_LEAD_TRIGGER:-manual}" != manual ]; then
+      FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "The chief routed new work: ${output:0:3500}"
+      return 0
+    fi
+    FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "Chief of staff:
 
 ${output:0:3500}
 
