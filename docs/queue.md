@@ -40,6 +40,19 @@ One system, one inbox:
 
 An item has a title, a summary, a kind (`review`, `decision`, `idea`, `info`, `failed`), a priority (1 = today, 2 = normal, 3 = whenever), links, screenshots and videos, and an optional `on_approve` step.
 
+A decision is written so you can decide from the card alone, in business words, not tool or package names:
+
+| Field | Flag | What it says |
+|---|---|---|
+| `ask` | `--ask` | the yes/no question |
+| `advise` | `--advise` | the agent's advice: approve, send back or skip |
+| `need` | `--need` | why it is needed: the problem it solves or what you gain |
+| `if_yes` | `--if-yes` | what changes when you approve, and the real risk |
+| `if_no` | `--if-no` | what happens when you say no or wait |
+| `why` | `--why` (at most 3) | the reasons for the advice |
+
+The WhatsApp message about a new item carries the same parts, without ids.
+
 Your decision has these effects, and only these:
 
 | Decision | Effect |
