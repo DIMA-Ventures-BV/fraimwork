@@ -65,7 +65,7 @@ RUN groupmod -n claude node \
 
 COPY channel/package.json channel/package-lock.json /opt/fraim/channel/
 RUN cd /opt/fraim/channel && npm ci --omit=dev && npm cache clean --force
-COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs channel/goal-command.mjs channel/unanswered.mjs channel/context.mjs channel/voice.mjs /opt/fraim/channel/
+COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs channel/goal-command.mjs channel/unanswered.mjs channel/context.mjs channel/voice.mjs channel/quote.mjs /opt/fraim/channel/
 
 # Speech to text for WhatsApp voice messages (fraim-transcribe). The model is part of the
 # image, so a voice message never waits for a download. "base" needs about 500 MB while it
@@ -75,7 +75,13 @@ ARG WHISPER_MODEL=base
 RUN python3 -m venv /opt/fraim/whisper/venv \
  && /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" \
  && /opt/fraim/whisper/venv/bin/python -c "from faster_whisper import download_model; download_model('${WHISPER_MODEL}', output_dir='/opt/fraim/whisper/model')"
-COPY whisper/transcribe.py /opt/fraim/whisper/transcribe.py
+# Pillow: still pictures from videos (fraim-frames). poppler-utils: Claude reads PDFs with it.
+ARG PILLOW_VERSION=11.3.0
+RUN /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "pillow==${PILLOW_VERSION}" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends poppler-utils \
+ && rm -rf /var/lib/apt/lists/*
+COPY whisper/transcribe.py whisper/frames.py /opt/fraim/whisper/
 
 COPY sshd_config /etc/ssh/sshd_config.d/fraim.conf
 COPY managed-settings.json /etc/claude-code/managed-settings.json

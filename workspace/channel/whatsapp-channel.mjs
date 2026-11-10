@@ -14,7 +14,8 @@ import { withContext } from './context.mjs'
 import { Unanswered, lastAnswer } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
 import { startedByMainSession } from './main-session.mjs'
-import { inOrder, withTranscript } from './voice.mjs'
+import { inOrder, withTranscript, withVideo } from './voice.mjs'
+import { withQuote } from './quote.mjs'
 
 function loadEnvFile(file) {
   const out = {}
@@ -237,9 +238,23 @@ async function transcribe(file) {
   throw new Error(result.err)
 }
 
+async function frames(file) {
+  const result = await runTool('fraim-frames', [file], 120000)
+  if (result.ok) return result.out.split('\n').filter(Boolean)
+  log('could not read the frames of a video:', result.err)
+  throw new Error(result.err)
+}
+
+// The message as Claude reads it: audio and video as text, and what it replies to.
+async function readable(event) {
+  const heard = await withTranscript(event, transcribe)
+  const seen = await withVideo(heard, transcribe, frames)
+  return withQuote(seen, transcribe)
+}
+
 async function handleEvent(event) {
   if (event.type === 'contact') {
-    event = await withTranscript(event, transcribe)
+    event = await readable(event)
     execFile('fraim-queue', ['thread', 'whatsapp', '--number', String(event.sender), '--name', String(event.name || ''), '--', String(event.text || '')], { timeout: 30000 }, (err) => {
       if (err) process.stderr.write(`fraim-channel: could not save a message from a contact: ${err.message}\n`)
     })
@@ -251,7 +266,7 @@ async function handleEvent(event) {
     await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
     return
   }
-  event = await withTranscript(event, transcribe)
+  event = await readable(event)
   const fromOwner = Boolean(OWNER) && event.sender === OWNER
   if (fromOwner) ownerChats.add(event.chat_id)
   let content = event.text || '(empty message)'
