@@ -17,7 +17,7 @@ case "$file" in
 esac
 [ -f "$file" ] || { echo "fraim-transcribe: no such file: $file" >&2; exit 1; }
 # VOICE=off in .env builds the image without the speech engine.
-[ -n "${FRAIM_WHISPER_PYTHON:-}" ] || [ -d "${FRAIM_WHISPER_MODEL_DIR:-/opt/fraim/whisper/model}" ] \
+[ -n "${FRAIM_WHISPER_PYTHON:-}" ] || [ -d "${FRAIM_WHISPER_MODEL:-/opt/fraim/whisper/model}" ] \
   || { echo "fraim-transcribe: voice is not installed on this server" >&2; exit 1; }
 
 # The engine takes about 500 MB, like one more Claude.

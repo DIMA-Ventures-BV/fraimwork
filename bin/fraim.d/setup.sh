@@ -39,7 +39,7 @@ cmd_setup() {
 
   if [ -z "$(flag no-full-login)" ] && [ "$FRAIM_ACCESS" != local ]; then
     setup_step "Full Claude login: Remote Control and claude.ai connectors (space $FRAIM_SPACE)"
-    if workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; then say "ok"; else login_full_start; fi
+    if has_full_login; then say "ok"; else login_full_start; fi
   fi
 
   profiles="$(remote_env COMPOSE_PROFILES)"

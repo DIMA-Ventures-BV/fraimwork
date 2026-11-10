@@ -42,5 +42,5 @@ jobs:
       - name: Unit tests (fraim CLI and config layer)
         run: make test-unit
 
-      - name: Unit tests (WhatsApp rules)
+      - name: Unit tests (Node)
         run: make test-node

@@ -422,3 +422,10 @@ EOF
   run "$UPD" run --to latest
   [ "$status" -eq 2 ]
 }
+
+# fraim deploy and the updater keep separate copies of the rsync rules; they must match,
+# or an update deletes what a deploy keeps (authorized_keys, .env).
+@test "the updater copies code with the same rules as fraim deploy" {
+  rules() { sed -n "/^$2()/,/^}/p" "$1" | grep -oE -- "--(exclude|include|filter) ('[^']+'|[^ ]+)" | sort -u; }
+  diff <(rules "$BATS_TEST_DIRNAME/../../bin/fraim-updater" copy_code) <(rules "$BATS_TEST_DIRNAME/../../bin/fraim" push_code)
+}

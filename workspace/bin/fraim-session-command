@@ -18,11 +18,13 @@ set -uo pipefail
 usage() { echo "fraim-session-command: $*" >&2; exit 2; }
 die() { echo "fraim-session-command: $*" >&2; exit 1; }
 
-session="${FRAIM_SESSION_NAME:-main}"
+# Through fraim-herdr, so a run without the owner (FRAIM_HEADLESS=1) cannot type into main.
+session=main
+hc() { fraim-herdr hc "$@"; }
 
 screen() { hc read "$session" --lines 0 2>/dev/null; }
 # Claude Code reports its own status to herdr; "working" means a reply is still running.
-busy() { [ "$(hc get "$session" --json 2>/dev/null | jq -r '.status.state // ""')" = working ]; }
+busy() { [ "$(fraim-herdr status "$session")" = working ]; }
 
 confirm() {
   local chat="$1" text="$2"

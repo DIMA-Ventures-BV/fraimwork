@@ -1,5 +1,5 @@
 # fraim system jobs. Baked into the image and updated with every release.
-# Owners and their Claude edit ~/fraim/jobs/crontab instead; this file is read-only.
+# Owners and their Claude make automations in ~/fraim/automations instead; this file is read-only.
 
 # Pick up new or changed automations in ~/fraim/automations within a minute.
 * * * * * fraim-auto sync --quiet

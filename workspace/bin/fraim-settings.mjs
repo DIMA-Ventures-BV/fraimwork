@@ -84,7 +84,7 @@ function setFront(text, key, value) {
   return `${lines.join('\n')}\n${body}`
 }
 
-export function parseRules(text) {
+function parseRules(text) {
   const sections = []
   let section = null
   for (const line of String(text || '').split('\n')) {

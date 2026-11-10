@@ -51,12 +51,14 @@ last_run() { find "$FRAIM_AUTOMATIONS_DIR/$1/runs" -mindepth 1 -maxdepth 1 -type
 @test "check names each mistake in plain words" {
   make_auto broken 'schedule: "every morning"
 whatsapp: ^digest
+mail: all
 output: whatsapp, email:me@example.com, file:../etc/x
 colour: blue' 'Do it.'
   run "$AUTO" check
   [ "$status" -eq 1 ]
   [[ "$output" == *"not a cron line"* ]]
   [[ "$output" == *"'whatsapp:' triggers are not available yet"* ]]
+  [[ "$output" == *"write it as 'trigger: mail: VALUE'"* ]]
   [[ "$output" == *"output 'email' is not available yet"* ]]
   [[ "$output" == *"must be a path inside ~/fraim"* ]]
   [[ "$output" == *"unknown setting 'colour:'"* ]]

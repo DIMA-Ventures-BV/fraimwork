@@ -28,6 +28,17 @@ space_compose() {
   fi
 }
 
+# Fills in the generated secrets of ENV_FILE that are still empty.
+generate_secrets() {
+  [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
+  [ -n "$(get_env REPLY_TOKEN)" ] || set_env REPLY_TOKEN "$(openssl rand -hex 24)"
+  # VNC only uses the first 8 characters of a password.
+  [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
+  [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
+  # Session token between Claude's workspace and the secrets proxy (see docs/secrets.md).
+  [ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
+}
+
 # Sets a fresh Syncthing GUI password, so the GUI is never open without one.
 secure_syncthing() {
   for _ in $(seq 30); do
@@ -64,11 +75,7 @@ start_space() {
   if [ "$(get_env ACCESS_MODE)" = tailscale ]; then
     set_env BROWSER_VIEW_URL "http://$(get_env FRAIM_HOSTNAME):$(get_env VNC_PORT)/vnc.html"
   fi
-  [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
-  [ -n "$(get_env REPLY_TOKEN)" ] || set_env REPLY_TOKEN "$(openssl rand -hex 24)"
-  [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
-  [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
-  [ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
+  generate_secrets
   if has_module whatsapp && [ -z "$(get_env WHATSAPP_OWNER)" ]; then
     die "space $name has the whatsapp module but no WHATSAPP_OWNER"
   fi
@@ -187,13 +194,7 @@ if [ -z "$(get_env VOICE)" ]; then
 fi
 
 say "Generating secrets"
-[ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
-[ -n "$(get_env REPLY_TOKEN)" ] || set_env REPLY_TOKEN "$(openssl rand -hex 24)"
-# VNC only uses the first 8 characters of a password.
-[ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
-[ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
-# Session token between Claude's workspace and the secrets proxy (see docs/secrets.md).
-[ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
+generate_secrets
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 # Wait for Ubuntu's own apt runs (unattended-upgrades, apt-daily) instead of failing.

@@ -14,36 +14,20 @@ import net from "node:net";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { runtimeEnv } from "./fraim-channels.mjs";
 
 const SLOT_BASE = 3100;
 const SLOTS = 9;
 const stateDir = path.join(process.env.HOME || "/home/claude", ".local/state/fraim/previews");
-
-function runtimeEnv() {
-  const env = {};
-  try {
-    for (const line of fs.readFileSync("/etc/fraim/runtime.env", "utf8").split("\n")) {
-      const m = line.match(/^([A-Z_]+)=(.*)$/);
-      if (m) env[m[1]] = m[2].replace(/^'(.*)'$/, "$1").replace(/\\(.)/g, "$1");
-    }
-  } catch {}
-  return { ...env, ...process.env };
-}
 
 function fail(msg, code = 1) {
   process.stderr.write(`fraim-preview: ${msg}\n`);
   process.exit(code);
 }
 
-function hostPort(slot) {
-  const env = runtimeEnv();
-  const start = parseInt(String(env.FRAIM_PREVIEW_PORTS || "3100-3109").split("-")[0], 10);
-  return start + (slot - SLOT_BASE);
-}
-
 function urlFor(slot) {
   const env = runtimeEnv();
-  const port = hostPort(slot);
+  const port = parseInt(String(env.FRAIM_PREVIEW_PORTS || "3100-3109").split("-")[0], 10) + (slot - SLOT_BASE);
   if (env.FRAIM_PREVIEW_HOST) return `http://${env.FRAIM_PREVIEW_HOST}:${port}`;
   const mode = env.FRAIM_ACCESS_MODE || "";
   if (mode === "tailscale") return `http://${env.FRAIM_HOSTNAME || "fraim"}:${port}`;

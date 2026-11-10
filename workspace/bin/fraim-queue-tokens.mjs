@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { HOME, Refused, now, usage } from './fraim-queue-store.mjs'
 
-export const SCOPES = ['read', 'write', 'decide']
+const SCOPES = ['read', 'write', 'decide']
 const NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/
 
 const dir = () => process.env.FRAIM_AUTHORITY_DIR || path.join(HOME, '.config/fraim/authority')

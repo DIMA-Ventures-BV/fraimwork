@@ -49,15 +49,8 @@ cmd_secret() {
       ;;
     set)
       [ -n "$name" ] || usage "$usage_line"
-      if [ -n "$(flag stdin)" ]; then
-        value="$(cat)"
-      elif is_tty; then
-        read -r -s -p "Paste the key for $name (it stays hidden), then press Enter: " value
-        printf '\n'
-      else
-        human "In your own Terminal app (not in the Claude chat), run: fraim secret set $name  and paste the key when it asks. Then tell Claude 'done'."
-      fi
-      [ -n "$value" ] || usage "no key given for $name"
+      need_secret_input "In your own Terminal app (not in the Claude chat), run: fraim secret set $name$(space_hint)  and paste the key when it asks. Then tell Claude 'done'."
+      value="$(read_secret_input "Paste the key for $name")"
       printf '%s' "$value" | secret_store "$name"
       say "Key for $name stored. It is never shown again."
       ;;

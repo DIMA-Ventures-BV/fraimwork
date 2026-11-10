@@ -61,7 +61,7 @@ migrate() {
     found="$found$role $name"$'\n'
   done
   [ -n "$found" ] || return 0
-  write_roles "$found"
+  write_file "$roles" "$found"
 }
 
 write_file() {
@@ -70,7 +70,6 @@ write_file() {
   tmp="$(mktemp "$dir/.write.XXXXXX")" || exit 1
   printf '%s' "$2" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$1"
 }
-write_roles() { write_file "$roles" "$1"; }
 
 holder() { awk -v r="$1" '$1 == r { print $2; exit }' "$roles" 2>/dev/null; }
 
@@ -97,7 +96,7 @@ cmd_set_role() {
   migrate
   local rest
   rest="$(grep -v "^$1 " "$roles" 2>/dev/null || true)"
-  write_roles "${rest:+$rest$'\n'}$1 $2"$'\n'
+  write_file "$roles" "${rest:+$rest$'\n'}$1 $2"$'\n'
 }
 
 recorded() {
@@ -173,7 +172,7 @@ cmd_rename() {
   refuse_unattended "only the owner renames an agent"
   migrate
   if [ -f "$roles" ]; then
-    write_roles "$(awk -v o="$1" -v n="$2" '$2 == o { $2 = n } { print }' "$roles")"$'\n'
+    write_file "$roles" "$(awk -v o="$1" -v n="$2" '$2 == o { $2 = n } { print }' "$roles")"$'\n'
   fi
   if [ -f "$settings" ]; then
     write_file "$settings" "$(awk -v o="$1" -v n="$2" '(NF == 2 || $1 == "cap") && $2 == o { $2 = n } { print }' "$settings")"$'\n'

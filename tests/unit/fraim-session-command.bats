@@ -15,7 +15,7 @@ printf '%s\n' "$3" >> "$SENT"
 EOF
   chmod +x "$T/bin/"*
   printf 'FRAIM_MODULES=whatsapp\n' > "$T/runtime.env"
-  export PATH="$T/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env" FRAIM_SESSION_FOREGROUND=1
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env" FRAIM_SESSION_FOREGROUND=1
 }
 
 sent() { sed -n '/^---$/!p' "$HC_FAKE/main.sent" 2>/dev/null; }
@@ -77,4 +77,10 @@ sent() { sed -n '/^---$/!p' "$HC_FAKE/main.sent" 2>/dev/null; }
   rm "$T/hc/t-main.json"
   run "$CMD" clear
   [ "$status" -eq 1 ]
+}
+
+@test "a run without the owner cannot type into main" {
+  FRAIM_HEADLESS=1 run "$CMD" clear
+  [ "$status" -eq 1 ]
+  [ -z "$(sent)" ]
 }

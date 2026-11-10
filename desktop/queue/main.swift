@@ -132,8 +132,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigation
     DispatchQueue.main.async {
       self.window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
-      if id.range(of: "^q[0-9]+$", options: .regularExpression) != nil {
-        self.web.evaluateJavaScript("view = 'inbox'; showDone = false; load('\(id)')")
+      if id.range(of: "^[qt][0-9]+$", options: .regularExpression) != nil {
+        self.web.evaluateJavaScript(
+          "typeof pick === 'function' ? pick('\(id)') : (view = 'inbox', showDone = false, load('\(id)'))")
       }
     }
     done()
@@ -200,7 +201,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigation
 
   // Coming back to the window shows the newest state at once, not after the next 30s refresh.
   func applicationDidBecomeActive(_ note: Notification) {
-    if loaded { web?.evaluateJavaScript("typeof load === 'function' && !rec && load(items[sel] && (items[sel].id || items[sel].name))") }
+    if loaded {
+      web?.evaluateJavaScript(
+        "typeof loadRows === 'function' ? (loadRows(), loadDetail()) : typeof load === 'function' && !rec && load(items[sel] && (items[sel].id || items[sel].name))"
+      )
+    }
   }
 
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {

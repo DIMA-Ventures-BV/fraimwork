@@ -1,7 +1,7 @@
 // fraim WhatsApp gateway: one linked-device session, a sender allowlist, and a
 // token-protected HTTP API on the internal Docker network.
 //   GET  /health            no auth, for Docker
-//   GET  /status            { connected, me, waitingForQr }
+//   GET  /status            { connected, waitingForQr, me, queued, listeners }
 //   GET  /events            SSE stream of allowed inbound messages
 //   POST /send              { chat_id | to, text }
 //   POST /send-file         { chat_id | to, path: "fraim/..." | "pc/...", caption }
