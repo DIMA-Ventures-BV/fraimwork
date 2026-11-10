@@ -99,6 +99,16 @@ model: sonnet' 'Mail since {{since}}. Extra: {{input}}'
   [ "$(cat "$(last_run quiet)/status")" = silent ]
 }
 
+@test "an answer that explains itself and ends on SILENT delivers nothing; SILENT inside a report does not count" {
+  make_auto quiet '' 'Anything new?'
+  FAKE_ANSWER=$'I checked Linear. There are none, so I am answering SILENT.\n\n**SILENT**' run "$AUTO" run quiet
+  [ "$status" -eq 0 ]
+  [ ! -s "$SENT" ]
+  [ "$(cat "$(last_run quiet)/status")" = silent ]
+  FAKE_ANSWER=$'Two new issues.\nOne says the app went SILENT after login.' run "$AUTO" run quiet
+  [ -s "$SENT" ]
+}
+
 @test "an empty check.sh skips the run without calling Claude" {
   make_auto poll 'every: 15m' 'New mail: {{check}}'
   printf 'exit 0\n' > "$FRAIM_AUTOMATIONS_DIR/poll/check.sh"

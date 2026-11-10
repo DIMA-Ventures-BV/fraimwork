@@ -28,6 +28,9 @@ said="$relay/said.md"
 
 usage() { echo "fraim-relay: $*" >&2; exit 2; }
 die() { echo "fraim-relay: $*" >&2; exit 1; }
+# SILENT means nothing to report. Models sometimes explain first ("None today, so: SILENT"), so the
+# answer is silent when its last non-empty line is SILENT, with or without brackets or stars.
+is_silent() { [ "$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:][]*`.:')" = SILENT ]; }
 
 the_chief() {
   local f
@@ -238,7 +241,7 @@ relay_chat() {
   fi
   output="$(printf '%s' "$output" | sed -e 's/[[:space:]]*$//')"
   if [ "$code" -eq 0 ] && [ -n "$output" ]; then
-    if [ "$(printf '%s' "$output" | tr -d '[:space:]')" = SILENT ]; then
+    if is_silent "$output"; then
       remember "$chat" "(held back)" "$notices"
       return 0
     fi
