@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Authenticated call to the WhatsApp gateway. Usage: fraim-gateway GET /status
-#                                                    fraim-gateway POST /send '{"to":"316...","text":"hi"}'
+# Authenticated call to the channel (docs/channels.md); the WhatsApp gateway unless
+# FRAIM_CHANNEL_URL is set. Usage: fraim-gateway GET /status
+#                                  fraim-gateway POST /send '{"to":"316...","text":"hi"}'
 set -euo pipefail
 # shellcheck source=/dev/null
-. /etc/fraim/runtime.env
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}"
 
 method="${1:?usage: fraim-gateway METHOD PATH [JSON]}"
 route="${2:?usage: fraim-gateway METHOD PATH [JSON]}"
-case ",${FRAIM_MODULES:-}," in
-  *,whatsapp,*) ;;
-  *) echo "fraim-gateway: the whatsapp module is off" >&2; exit 2 ;;
-esac
+if [ -n "${FRAIM_CHANNEL_URL:-}" ]; then
+  # No fallback to the WhatsApp token: it must never reach another service.
+  [ -n "${FRAIM_CHANNEL_TOKEN:-}" ] || { echo "fraim-gateway: FRAIM_CHANNEL_URL is set but FRAIM_CHANNEL_TOKEN is empty" >&2; exit 2; }
+  url="$FRAIM_CHANNEL_URL" token="$FRAIM_CHANNEL_TOKEN"
+else
+  case ",${FRAIM_MODULES:-}," in
+    *,whatsapp,*) ;;
+    *) echo "fraim-gateway: the whatsapp module is off" >&2; exit 2 ;;
+  esac
+  url="$FRAIM_GATEWAY_URL" token="$FRAIM_GATEWAY_TOKEN"
+fi
 
-args=(-fsS -X "$method" -H "Authorization: Bearer ${FRAIM_GATEWAY_TOKEN}")
+args=(-fsS -X "$method" -H "Authorization: Bearer ${token}")
 if [ $# -ge 3 ]; then args+=(-H 'Content-Type: application/json' --data "$3"); fi
-exec curl "${args[@]}" "${FRAIM_GATEWAY_URL}${route}"
+exec curl "${args[@]}" "${url}${route}"

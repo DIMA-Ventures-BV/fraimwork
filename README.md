@@ -28,14 +28,14 @@ Claude does the rest. You only do these steps, one at a time, when Claude asks:
 | Create a free Tailscale account and install the Tailscale app on your laptop and phone | 5 min | free |
 | Approve a Claude login in your browser (the setup command does this; otherwise Claude asks you to run `claude setup-token`) | 1 min | your Claude Pro or Max plan |
 | Optional, for WhatsApp: a second phone number (prepaid eSIM) with WhatsApp Business, then type a code Claude gives you | 10 min | about 5 to 10 euro once |
-| Optional: log in to websites in the server's browser when Claude asks | 1 min each | |
+| Optional: log in to websites in the server's browser when Claude asks (the browser is off until a service needs it) | 1 min each | |
 
 Never paste passwords or tokens into the chat. Claude asks you to copy them and reads them from your clipboard.
 
 ## How you use it
 
 - **On your laptop:** keep talking to Claude as usual. Ask it to "send this to my fraim server" or "check on the job you started".
-- **In your workspace (macOS):** setup opens a [cmux](https://cmux.com) window with your server's Claude on the left and a panel with server status and the server browser on the right. Ask Claude to "open my workspace" any time. cmux is GPL-3.0 software, installed unmodified from Homebrew; fraim only adds its own Dock controls and leaves your cmux settings alone.
+- **In your workspace (macOS):** setup opens a [cmux](https://cmux.com) window with your server's Claude on the left and a panel with server status (and the server browser, when it is on) on the right. Ask Claude to "open my workspace" any time. cmux is GPL-3.0 software, installed unmodified from Homebrew; fraim only adds its own Dock controls and leaves your cmux settings alone.
 - **fraimwork app (test build):** our own macOS app, a GPL-3.0 fork of cmux without its telemetry or update checks. Download [fraimwork 0.1.1](https://github.com/DIMA-Ventures-BV/fraimwork-app/releases/tag/v0.1.1) (Apple Silicon, not signed yet: right-click > Open the first time).
 - **On your phone:** use the Claude app (Remote Control, after a full login: ask Claude to "turn on Remote Control for fraim"), or send a WhatsApp message to your agent's number. Voice messages work too: your server turns them into text itself, so the audio stays on your server.
 - **Work and personal apart:** ask Claude to "add a personal space". Each space is its own agent with its own files, keys and connections, so your bank never sits next to your work mail (see `docs/spaces.md`).
@@ -68,6 +68,8 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 | Path | What |
 |---|---|
 | `compose.yaml` | All services. Modules are compose profiles: `sync`, `browser`, `whatsapp`, `scheduler`. Every space starts this file as its own compose project (`docs/spaces.md`). |
+| `modules/` | One manifest per module with flat `key: value` lines: `id`, `version`, `min_fraim_version`, `description`, `profile` (the compose profile), `requires`, and `check: NAME COMMAND` lines. `fraim-doctor` runs the checks of the modules that are on. |
+| `docs/channels.md` | What a second chat channel must implement next to WhatsApp. |
 | `install.sh` | Server setup on Ubuntu 24.04: Docker, Tailscale, firewall, secrets. Safe to run again. |
 | `bin/fraim` | The CLI Claude uses. |
 | `bin/fraim-config` | Claude configuration shared between laptop and server (see `docs/config.md`). |

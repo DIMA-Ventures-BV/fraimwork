@@ -452,7 +452,7 @@ EOF
 
 space_add() {
   local name="$1" modules owner existing n used
-  [ -n "$name" ] || usage "fraim space add NAME [--modules browser,scheduler] [--whatsapp-owner N]"
+  [ -n "$name" ] || usage "fraim space add NAME [--modules scheduler,browser] [--whatsapp-owner N]"
   valid_space "$name" || usage "a space name is lowercase letters, digits and dashes (at most 16), starting with a letter"
   [ "$name" != main ] || usage "'main' is the first space; it always exists"
   existing="$(list_spaces)"
@@ -460,7 +460,7 @@ space_add() {
     say "Space $name already exists; starting it."
   else
     [ "$(printf '%s\n' "$existing" | grep -c .)" -lt "$SPACE_MAX" ] || usage "a server holds at most $((SPACE_MAX + 1)) spaces (main plus $SPACE_MAX)"
-    modules="$(flag modules)"; modules="${modules:-browser,scheduler}"
+    modules="$(flag modules)"; modules="${modules:-scheduler}"
     check_modules "$modules"
     [ "$FRAIM_ACCESS" != local ] || case ",$modules," in *,sync,*) usage "file sync is not part of the local test stack" ;; esac
     owner=""
@@ -712,7 +712,7 @@ cmd_local() {
         env_set PRIVATE_BIND_IP 127.0.0.1
         env_set BROWSER_VIEW_URL "http://localhost:$((6080 + offset))/vnc.html"
         # Syncthing stays off locally: it would clash with a Syncthing app on this computer.
-        env_set COMPOSE_PROFILES browser,scheduler
+        env_set COMPOSE_PROFILES scheduler
       fi
       # Secrets proxy: token and subnets, also for instances created before it existed.
       [ -n "$(env_get SECRETS_TOKEN)" ] || env_set SECRETS_TOKEN "$(openssl rand -hex 32)"
@@ -2684,6 +2684,13 @@ cmd_browser() {
     stop) tunnel stop "$vnc"; return ;;
     open|start) ;;
     *) usage "fraim browser [--print-url | --url-only] | stop" ;;
+  esac
+  # Empty means the server could not say; only a known list without the browser is refused.
+  local profiles
+  profiles="$(remote_env COMPOSE_PROFILES 2>/dev/null || true)"
+  case ",$profiles," in
+    ,,|*,browser,*) ;;
+    *) usage "the server browser is off; switch it on with: fraim space policy ${FRAIM_SPACE:-main} --modules $profiles,browser" ;;
   esac
   local url
   # --url-only: a fixed URL for bookmarks and the cmux Dock. No tunnel, no password.

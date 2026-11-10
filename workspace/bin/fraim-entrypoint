@@ -14,6 +14,8 @@ write_runtime_env() {
     printf 'FRAIM_HOSTNAME=%q\n' "${FRAIM_HOSTNAME:-fraim}"
     printf 'FRAIM_GATEWAY_URL=%q\n' "${FRAIM_GATEWAY_URL:-}"
     printf 'FRAIM_GATEWAY_TOKEN=%q\n' "${FRAIM_GATEWAY_TOKEN:-}"
+    printf 'FRAIM_CHANNEL_URL=%q\n' "${FRAIM_CHANNEL_URL:-}"
+    printf 'FRAIM_CHANNEL_TOKEN=%q\n' "${FRAIM_CHANNEL_TOKEN:-}"
     printf 'FRAIM_REPLY_TOKEN=%q\n' "${FRAIM_REPLY_TOKEN:-}"
     printf 'WHATSAPP_OWNER=%q\n' "${WHATSAPP_OWNER:-}"
     printf 'BROWSER_CDP_URL=%q\n' "${BROWSER_CDP_URL:-}"

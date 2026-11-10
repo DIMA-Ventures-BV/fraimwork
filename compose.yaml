@@ -31,6 +31,8 @@ x-workspace-env: &workspace-env
   FRAIM_HOSTNAME: ${FRAIM_HOSTNAME:-fraim}
   FRAIM_GATEWAY_URL: http://whatsapp:8080
   FRAIM_GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+  FRAIM_CHANNEL_URL: ${CHANNEL_URL:-}
+  FRAIM_CHANNEL_TOKEN: ${CHANNEL_TOKEN:-}
   FRAIM_REPLY_TOKEN: ${REPLY_TOKEN:-}
   WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
   BROWSER_CDP_URL: http://${BROWSER_IP:-172.30.0.10}:9223
@@ -59,6 +61,7 @@ x-workspace-volumes: &workspace-volumes
   - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
   - ./config/claude-template:/opt/fraim/claude-template:ro
   - ./server-plugin:/opt/fraim/server-plugin:ro
+  - ./modules:/etc/fraim/modules:ro
 
 services:
   workspace:
@@ -90,6 +93,7 @@ services:
       - ./config/claude-template:/opt/fraim/claude-template:ro
       - ./server-plugin:/opt/fraim/server-plugin:ro
       - ./docs:/etc/fraim/docs:ro
+      - ./modules:/etc/fraim/modules:ro
       - ssh-host-keys:/etc/ssh/keys
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
     networks: [fraim, wa, sync, secrets]
