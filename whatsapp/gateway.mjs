@@ -284,7 +284,7 @@ const server = http.createServer(async (req, res) => {
       return reply(200, { ok: true })
     }
     if (req.method === 'GET' && url.pathname === '/status') {
-      return reply(200, { connected, waitingForQr, me: sock?.user?.id || null, queued: queue.length })
+      return reply(200, { connected, waitingForQr, me: sock?.user?.id || null, queued: queue.length, listeners: listeners.size })
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })

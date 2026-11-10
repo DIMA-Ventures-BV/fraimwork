@@ -163,6 +163,17 @@ setup() { setup_isolated; }
   grep -qF '"number":"31687654321"' "$SSH_LOG"
 }
 
+@test "whatsapp check passes only when Claude listens and nothing waits" {
+  use_public_target
+  ssh_handler 'case "$REMOTE" in *"GET /status"*) echo "{\"connected\":true,\"listeners\":1,\"queued\":0}" ;; esac'
+  run "$FRAIM" whatsapp check
+  [ "$status" -eq 0 ]
+  ssh_handler 'case "$REMOTE" in *"GET /status"*) echo "{\"connected\":true,\"listeners\":0,\"queued\":2}" ;; esac'
+  FRAIM_WHATSAPP_CHECK_TRIES=2 FRAIM_WHATSAPP_CHECK_WAIT=0 run "$FRAIM" whatsapp check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not reach Claude"* ]]
+}
+
 # --- status --------------------------------------------------------------------------
 
 @test "status --json is valid JSON and exits 0 when healthy" {

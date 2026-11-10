@@ -129,7 +129,8 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 2. `$F whatsapp link --number <bot number>`. It prints a pairing code. (Without `--number` it writes a QR code to `~/.fraim/whatsapp-qr.png` and exits 3: show the user that file.)
 3. Human step, right away: "In WhatsApp Business: on iPhone tap Settings, on Android tap the three dots. Then Linked devices, Link a device, 'Link with phone number instead', and type this code: <code>."
    When the code expired (after about 1 minute), run step 2 again for a fresh code.
-4. Wait until `$F whatsapp status` shows connected, then `$F whatsapp test`. Ask the user to confirm that the message arrived on their own phone.
+4. Run `$F whatsapp check`. It waits until WhatsApp is linked and Claude listens. It must exit 0. Then `$F whatsapp test`.
+5. Ask the owner to send the bot "are you ok?". WhatsApp is done only after the owner gets an answer from Claude.
 
 ## Claude config
 

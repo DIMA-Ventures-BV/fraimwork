@@ -12,6 +12,8 @@
 #   fraim-herdr ls [--json]      the fraim terminals: name, kind, status, folder
 #   fraim-herdr attach [NAME]    humans: main (default), g3, s1, or a plain shell that stays
 #   fraim-herdr watch            tell the owner when a session needs them or a session finished
+#   fraim-herdr confirm-channel [--once]  press Enter on the WhatsApp channel prompt of main
+#   fraim-herdr heal             one repair pass: restart main when WhatsApp cannot reach it
 #   fraim-herdr status ADDR      the terminal's status word (working, done, blocked, idle, ...)
 #   fraim-herdr state NAME       live, finished, gone or unknown (the core did not answer)
 #   fraim-herdr trust DIR        mark a folder trusted for Claude Code (atomic ~/.claude.json write)
@@ -148,10 +150,57 @@ cmd_up() {
   return "$failed"
 }
 
+# The screen keeps old prompts above the current one, so only a prompt on the last lines counts.
+at_channel_prompt() {
+  local bottom
+  bottom="$(hc read main --lines 0 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n 5)"
+  grep -q 'Enter to confirm' <<<"$bottom" && grep -q '❯.*local development' <<<"$bottom"
+}
+
+cmd_confirm_channel() {
+  while true; do
+    if at_channel_prompt; then hc keys main enter >/dev/null 2>&1; fi
+    [ "${1:-}" != --once ] || return 0
+    sleep "${FRAIM_CONFIRM_POLL:-2}"
+  done
+}
+
+has_whatsapp() { case ",${FRAIM_MODULES:-}," in *,whatsapp,*) return 0 ;; *) return 1 ;; esac; }
+logged_in() { [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.config/fraim/claude-token" ]; }
+
+# Main listens to WhatsApp through its channel. No listener for a few checks in a row means
+# messages only pile up: restart main. A working main finishes first, and after a few failed
+# restarts the owner hears it once. The state file holds: misses restarts.
+cmd_heal() {
+  in_workspace || return 0
+  has_whatsapp && logged_in || return 0
+  local listeners state="$HOME/.local/state/fraim/heal-main" misses=0 restarts=0
+  # Empty when the gateway does not answer: that is whatsapp-connected's problem, not main's.
+  listeners="$(fraim-gateway GET /status 2>/dev/null | jq -r '.listeners // empty' 2>/dev/null)"
+  [ -n "$listeners" ] || return 0
+  if [ "$listeners" -gt 0 ]; then rm -f "$state"; return 0; fi
+  if [ -f "$state" ]; then read -r misses restarts < "$state"; fi
+  misses=$((misses + 1))
+  mkdir -p "$(dirname "$state")"
+  if [ "$misses" -ge "${FRAIM_HEAL_MISSES:-4}" ] && [ "$(status_of main)" != working ]; then
+    if [ "$restarts" -lt "${FRAIM_HEAL_RESTARTS:-3}" ]; then
+      echo "fraim-herdr: WhatsApp cannot reach main; restarting it" >&2
+      hc kill main >/dev/null 2>&1 || true
+      restarts=$((restarts + 1))
+      misses=0
+    elif [ "$restarts" -eq "${FRAIM_HEAL_RESTARTS:-3}" ]; then
+      tell_owner "Claude on your server does not receive WhatsApp messages, and restarting it did not help. Ask Claude on your laptop to fix fraim."
+      restarts=$((restarts + 1))
+    fi
+  fi
+  printf '%s %s\n' "$misses" "$restarts" > "$state"
+}
+
 cmd_supervise() {
   in_workspace || die "the session service runs in the workspace container only"
   while true; do
     cmd_up 2>>"$HOME/.local/state/fraim/herdr.log" || true
+    cmd_heal 2>>"$HOME/.local/state/fraim/herdr.log" || true
     # A goal whose watcher process died (a container restart) gets a new one.
     fraim-goal reconcile >/dev/null 2>>"$HOME/.local/state/fraim/herdr.log" || true
     # Memory running low: close idle goal and coding-session terminals before it runs out.
@@ -313,6 +362,8 @@ case "$action" in
   state) [ $# -eq 1 ] || usage "state NAME"; term_state "$1" ;;
   redact) redact ;;
   watch) cmd_watch ;;
+  confirm-channel) cmd_confirm_channel "${1:-}" ;;
+  heal) cmd_heal ;;
   status) [ $# -eq 1 ] || usage "status NAME"; status_of "$1" ;;
   last-text) [ $# -eq 1 ] || usage "last-text NAME"; cmd_last_text "$1" ;;
   busy) [ $# -eq 1 ] || usage "busy NAME"; cmd_busy "$1" ;;

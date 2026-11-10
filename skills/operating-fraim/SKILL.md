@@ -31,6 +31,7 @@ and exits 1 when any check fails (also `claude-login` before the first login: th
 | `claude-session-running` | `$F restart workspace`, then status again |
 | `sessions-service` | herdr-core (the session terminals) does not answer. `$F exec -- tail -30 .local/state/fraim/herdr.log`, then `$F restart workspace` |
 | `whatsapp-connected` | `$F whatsapp status`; if logged out, `$F whatsapp relink` (ask first) |
+| `whatsapp-reaches-claude` | The server restarts Claude by itself after about 2 minutes. Still failing: `$F exec -- fraim-herdr hc read main`, then `$F restart workspace` |
 | `server-browser` | `$F restart browser` |
 | `syncthing` | `$F restart syncthing`, then `$F sync --print-url` |
 | `disk-below-90-percent` | `$F exec -- sh -c 'du -sh ~/fraim/*'` and tell the user what is large |

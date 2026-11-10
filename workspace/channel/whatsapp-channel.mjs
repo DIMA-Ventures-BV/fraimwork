@@ -13,6 +13,7 @@ import { sessionCommandArgs } from './goal-command.mjs'
 import { withContext } from './context.mjs'
 import { Unanswered, lastAnswer } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
+import { startedByMainSession } from './main-session.mjs'
 
 function loadEnvFile(file) {
   const out = {}
@@ -373,6 +374,8 @@ await mcp.connect(new StdioServerTransport())
 
 if (!GATEWAY || !TOKEN) {
   log('FRAIM_GATEWAY_URL or FRAIM_GATEWAY_TOKEN is missing; channel is idle')
+} else if (!startedByMainSession()) {
+  log('not the main session; WhatsApp messages stay for main')
 } else {
   listen()
 }
