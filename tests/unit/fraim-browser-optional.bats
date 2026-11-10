@@ -13,12 +13,12 @@ setup() {
 }
 
 @test "fraim local up starts without the browser" {
-  grep -q 'env_set COMPOSE_PROFILES scheduler$' "$FRAIM"
-  ! grep -q 'env_set COMPOSE_PROFILES browser,scheduler' "$FRAIM"
+  grep -q 'env_set COMPOSE_PROFILES scheduler$' "$REPO/bin/fraim.d/local.sh"
+  ! grep -q 'env_set COMPOSE_PROFILES browser,scheduler' "$REPO/bin/fraim.d/local.sh"
 }
 
 @test "a new space starts without the browser" {
-  grep -q 'modules="${modules:-scheduler}"' "$FRAIM"
+  grep -q 'modules="${modules:-scheduler}"' "$REPO/bin/fraim.d/space.sh"
 }
 
 @test "setup explains how to switch the browser on" {
