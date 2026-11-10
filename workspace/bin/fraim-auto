@@ -156,16 +156,36 @@ trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
 
 # --- plugins: ~/fraim/automations/_KIND/TYPE (the owner's) first, then $kit/KIND/TYPE ---
 valid_type() { printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9_-]{0,31}$'; }
+# Code a run nobody watches wrote does not run until the owner says yes (fraim-auto on).
+# The marks live outside the folders the agents may edit.
+unreviewed="${FRAIM_AUTHORITY_DIR:-$HOME/.config/fraim/authority}/unreviewed"
+is_unreviewed() { [ -f "$unreviewed/$1" ]; }
+mark_unreviewed() { mkdir -p "$unreviewed" && : > "$unreviewed/$1"; }
+cmd_mark_unreviewed() {
+  local path="$1" rest first second
+  case "$path" in
+    "$autos"/*) rest="${path#"$autos"/}" ;;
+    *) return 0 ;;
+  esac
+  first="${rest%%/*}"
+  case "$first" in
+    _triggers|_outputs|_sources)
+      second="${rest#*/}"; second="${second%%/*}"
+      valid_type "$second" && mark_unreviewed "$first.$second" ;;
+    *) valid_name "$first" && mark_unreviewed "$first" ;;
+  esac
+}
 plugin() {
   valid_type "$2" || return 1
   local p
   for p in "$autos/_$1/$2" "$kit/$1/$2"; do
+    if [ "$p" = "$autos/_$1/$2" ] && is_unreviewed "_$1.$2"; then continue; fi
     [ -f "$p" ] && { printf '%s' "$p"; return 0; }
   done
   return 1
 }
 plugin_types() {
-  { ls "$autos/_$1" 2>/dev/null; ls "$kit/$1" 2>/dev/null; } \
+  { ls "$autos/_$1" 2>/dev/null | while IFS= read -r t; do is_unreviewed "_$1.$t" || printf '%s\n' "$t"; done; ls "$kit/$1" 2>/dev/null; } \
     | while IFS= read -r t; do valid_type "$t" && printf '%s\n' "$t"; done | sort -u
 }
 plugin_meta() { sed -n "s/^# $2: //p" "$1" | head -1; }
@@ -596,10 +616,29 @@ gate() {
 }
 
 # Runs NAME with a lock, so a trigger during a run waits for one more run instead of stacking.
+# One card per change, so a nightly schedule does not ask every night.
+ask_review() {
+  local name="$1" asked
+  asked="$(sdir "$name")/review_asked"
+  [ ! -f "$asked" ] || return 0
+  : > "$asked"
+  command -v fraim-queue >/dev/null || return 0
+  fraim-queue add --kind decision --title "Changed automation: $name" --ask "Switch on the new version of $name?" \
+    --need "An agent changed it, so it stopped running until you say yes" --if-yes "It runs again on its schedule, with the new version" \
+    --switch-on "$name" --source "automation $name" --quiet >/dev/null 2>&1 || true
+}
+
 cmd_run() {
   local name="$1" trigger="$2" input="$3" dry="$4" auto="${5:-0}" f lock
   f="$(auto_file "$name")" || exit $?
   gate "$name" "$f" "$auto"
+  if is_unreviewed "$name"; then
+    if [ "$auto" = 1 ]; then ask_review "$name"; exit 0; fi
+    # A test run while it waits: a prompt with limited tools is fine, code and a shell are not.
+    if [ -f "$(dirname "$f")/check.sh" ] || get "$f" tools | grep -Eq '(^|[ ,])Bash'; then
+      die "$name holds code or a shell and an agent changed it, so it waits for the owner's yes: fraim-queue add --switch-on $name"
+    fi
+  fi
   lock="$(sdir "$name")/lock"
   if ! mkdir "$lock" 2>/dev/null; then
     if lock_held "$lock" "$f"; then
@@ -776,7 +815,9 @@ cmd_on() {
       && cat "$tmp" > "$f"
     rm -f "$tmp"
   fi
-  rm -f "$state_root/$name/paused" "$state_root/$name/last_alert"
+  rm -f "$state_root/$name/paused" "$state_root/$name/last_alert" "$state_root/$name/review_asked"
+  # The yes covers this automation and the plug-ins that were built with it.
+  rm -f "$unreviewed/$name" "$unreviewed"/_triggers.* "$unreviewed"/_outputs.* "$unreviewed"/_sources.*
   sset "$name" streak 0
   lead="$(get "$f" lead)"
   if [ -n "$lead" ] && [ -f "$leads_dir/$lead/paused" ] && command -v fraim-lead >/dev/null; then
@@ -908,6 +949,7 @@ cmd_new() {
     mkdir -p "$dest"
     printf -- '---\ndescription: \noutput: whatsapp\n---\nWrite the task here.\n\nIf there is nothing worth reporting, answer with exactly: SILENT\n' > "$dest/automation.md"
   fi
+  [ "${FRAIM_HEADLESS:-}" != 1 ] || mark_unreviewed "$name"
   if [ "$off" = 1 ]; then
     { echo ---; echo 'enabled: false'; tail -n +2 "$dest/automation.md"; } > "$dest/automation.md.new" \
       && mv "$dest/automation.md.new" "$dest/automation.md"
@@ -1000,6 +1042,7 @@ case "$action" in
   pause) [ $# -eq 1 ] || usage "pause NAME"; cmd_pause "$1" ;;
   resume) [ $# -eq 1 ] || usage "resume NAME"; cmd_resume "$1" ;;
   on) [ $# -eq 1 ] || usage "on NAME"; cmd_on "$1" ;;
+  mark-unreviewed) [ $# -eq 1 ] || usage "mark-unreviewed PATH"; cmd_mark_unreviewed "$1" ;;
   check) cmd_check "$@" ;;
   catalog|plugins|examples) cmd_catalog ;;
   sources) cmd_sources "$@" ;;

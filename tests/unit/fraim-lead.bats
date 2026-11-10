@@ -166,7 +166,7 @@ FAKE
   grep -q 'q1 \[rejected\] p2 idea: Old idea | owner: we tried that in May' "$CLAUDE_ARGS"
   grep -q 'Goal budget: 0 of 3 used today' "$CLAUDE_ARGS"
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  [[ "$tools" == *"Bash(fraim-goal start --lead web:*)"* ]]
+  [[ "$tools" != *"fraim-goal start"* ]]
   [[ "$tools" == *"Edit(~/fraim/leads/web/**)"* ]]
   [[ "$tools" != *"Bash,"* ]]
   [[ "$tools" != *"fraim-queue prio"* ]]
@@ -220,7 +220,7 @@ FAKE
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-queue prio:*)"* ]]
   [[ "$tools" == *"Bash(fraim-auto show:*)"* ]]
-  [[ "$tools" == *"Bash(fraim-goal start --lead chief:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-goal start --lead chief --approved-by:*)"* ]]
   [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
   [[ "$tools" != *"Bash,"* ]]
   grep -q 'Goal budget: 0 of 2 used today' "$CLAUDE_ARGS"
@@ -698,7 +698,7 @@ FAKE
   fraim-lead new shop
   fraim-lead run shop
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  [[ "$tools" == *"Bash(fraim-goal start --lead shop:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
   [[ "$tools" == *"Edit(~/fraim/leads/shop/**)"* ]]
   [[ "$tools" != *"fraim-queue prio"* ]]
   mkdir -p "$FRAIM_LEADS_DIR/shop/prompts"
@@ -716,7 +716,7 @@ FAKE
   fraim-lead new shop
   fraim-lead run shop
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  [ "$tools" = "Read,Glob,Grep,WebSearch,Edit(~/fraim/leads/shop/**),Write(~/fraim/leads/shop/**),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue add:*),Bash(fraim-queue thread show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-lead list:*),Bash(fraim-lead show:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-auto runs:*),Bash(fraim-api:*),Bash(git log:*),Bash(git status:*),Bash(git diff:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(fraim-goal start --lead shop:*),Bash(fraim-lead tell:*)" ]
+  [ "$tools" = "Read,Glob,Grep,WebSearch,Edit(~/fraim/leads/shop/**),Write(~/fraim/leads/shop/**),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue add:*),Bash(fraim-queue thread show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-lead list:*),Bash(fraim-lead show:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-auto runs:*),Bash(fraim-api:*),Bash(git log:*),Bash(git status:*),Bash(git diff:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(fraim-lead tell:*)" ]
   fraim-lead run chief
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   for rule in 'Bash(fraim-queue prio:*)' 'Bash(fraim-queue solved:*)' 'Bash(fraim-queue thread close:*)' 'Bash(fraim-queue thread ignore:*)' 'Bash(fraim-queue reply:*)'; do [[ "$tools" == *"$rule"* ]]; done

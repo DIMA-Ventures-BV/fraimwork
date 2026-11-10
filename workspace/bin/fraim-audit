@@ -4,6 +4,16 @@
 # as the same user. For a tamper-proof trail, ship it off the server.
 dir="$HOME/.local/state/fraim"
 mkdir -p "$dir" 2>/dev/null
+input="$(cat)"
 jq -c '{ts: (now | todate), session: .session_id, tool: .tool_name, input: (.tool_input | tostring | .[0:500])}' \
-  >> "$dir/audit.jsonl" 2>/dev/null
+  <<<"$input" >> "$dir/audit.jsonl" 2>/dev/null
+# An automation or plug-in that a run nobody watches wrote waits for the owner's yes (fraim-auto).
+if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
+  case "$(jq -r '.tool_name // empty' <<<"$input" 2>/dev/null)" in
+    Edit|Write|MultiEdit|NotebookEdit)
+      path="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$input" 2>/dev/null)"
+      [ -z "$path" ] || fraim-auto mark-unreviewed "$path" >/dev/null 2>&1 || true
+      ;;
+  esac
+fi
 exit 0

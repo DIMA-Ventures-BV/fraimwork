@@ -449,6 +449,22 @@ export function approvedByGrant(item, grantId) {
   return done
 }
 
+// The chief starts the task the owner asked for in the chat: that request covers one goal.
+export function useYesForGoal(grantId) {
+  if (!/^q\d{1,6}$/.test(grantId || '')) usage('use-yes needs a queue id (q1, q2, ...)')
+  const lead = process.env.FRAIM_LEAD_NAME || ''
+  if (!lead || !isChief(lead)) throw new Error('only the chief can start a task from the owner\'s request')
+  const grant = readItem(grantId)
+  if (grant.source !== 'the owner in the chat') throw new Error(`${grantId} is not a request from the owner's chat`)
+  const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')
+  if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner`)
+  const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
+  if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days`)
+  if (grant.goal_started) throw new Error(`${grantId} already started a task`)
+  grant.goal_started = true
+  writeItem(grant)
+}
+
 // A request the owner gave in the chat is already their yes: record it as an approved item, so
 // what gets built for it can cite it with --approved-by and start without a second question.
 export function grantRequest(title, note, via = 'cli') {
@@ -1636,6 +1652,11 @@ function main(argv) {
       if (!id) usage('show ID')
       const item = readItem(id)
       return console.log(args.json ? JSON.stringify(item) : describe(item))
+    }
+    case 'use-yes': {
+      if (!id) usage('use-yes ID')
+      useYesForGoal(id)
+      return console.log(`${id} covers this task`)
     }
     case 'approve':
     case 'reject':
