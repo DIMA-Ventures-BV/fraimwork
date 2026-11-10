@@ -2152,7 +2152,7 @@ function when(d, short) {
   return short ? day : day + ', ' + hm
 }
 function toast(t) { var e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.style.display = 'none' }, 3000) }
-function shown() { return rows.filter(function (r) { return tab === 'all' || r.state === tab || (tab === 'work' && r.state === 'new') }) }
+function shown() { return rows.filter(function (r) { return tab === 'all' ? !(r.kind === 'item' && r.state === 'done') : r.state === tab || (tab === 'work' && r.state === 'new') }) }
 function drawList() {
   var key = JSON.stringify([rows, cur, tab, chief && chief.typing, chief && chief.messages.length]); if (key === listKey) return; listKey = key
   $('#tabs').innerHTML = TABS.map(function (x) { return '<button data-t="' + x[0] + '" class="' + (tab === x[0] ? 'on' : '') + '">' + x[1] + '</button>' }).join('')
