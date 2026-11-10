@@ -9,32 +9,41 @@
 //   POST /reply/check       { to } is this number a contact (REPLY_TOKEN)
 //   POST /pair              { number } -> { code } pairing code for "Link with phone number"
 //   GET  /qr.png            current linking QR code as PNG (404 when linked)
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import makeWASocket, {
   Browsers,
   DisconnectReason,
   downloadMediaMessage,
   fetchLatestBaileysVersion,
+  normalizeMessageContent,
   useMultiFileAuthState,
 } from 'baileys'
 import pino from 'pino'
 import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
 import {
+  MAX_FILE_MB,
   allowedSender,
-  audioOf,
   contactChat,
   contactSender,
+  describeShare,
   digits,
   guardConsole,
   httpError,
   isGroupOrBroadcast,
+  mediaFileName,
+  mediaOf,
   parseAllowlist,
   parseContacts,
+  quotedOf,
   resolveChat as resolveChatFor,
   resolveSharedPath,
+  textOf,
+  tooLarge,
 } from './lib.mjs'
 
 guardConsole()
@@ -78,14 +87,6 @@ const queue = []
 const knownChats = new Set([...ALLOW].map((d) => `${d}@s.whatsapp.net`))
 const lastQueuedNotice = new Map()
 
-function unwrap(message) {
-  let m = message
-  while (m?.ephemeralMessage || m?.viewOnceMessage || m?.viewOnceMessageV2 || m?.documentWithCaptionMessage) {
-    m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message
-  }
-  return m || {}
-}
-
 function emit(event) {
   if (listeners.size === 0) {
     queue.push(event)
@@ -127,21 +128,61 @@ async function sendFile(jid, sharedPath, caption) {
   await sock.sendMessage(jid, content)
 }
 
-async function saveMedia(msg, inner) {
-  const media = inner.imageMessage || inner.documentMessage || inner.audioMessage || inner.videoMessage
-  if (!media) return null
-  const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+// Straight to disk: a large video held in memory would freeze a small server.
+async function saveMedia(msg, media) {
+  const stream = await downloadMediaMessage(msg, 'stream', {}, {
     logger: waLogger,
     reuploadRequest: sock.updateMediaMessage,
   })
-  const ext = media.fileName
-    ? path.extname(media.fileName)
-    : `.${String(media.mimetype || 'bin').split('/')[1].split(';')[0]}`
-  const base = media.fileName ? path.basename(media.fileName, ext).replace(/[^\w.-]+/g, '_') : 'attachment'
-  const name = `${new Date().toISOString().replace(/[:.]/g, '-')}-${base}${ext}`
+  const name = mediaFileName(media, new Date().toISOString().replace(/[:.]/g, '-'))
+  const file = path.join(INBOX, name)
   await mkdir(INBOX, { recursive: true })
-  await writeFile(path.join(INBOX, name), buffer)
+  try {
+    await pipeline(stream, createWriteStream(file))
+  } catch (err) {
+    await rm(file, { force: true })
+    throw err
+  }
   return `~/fraim/inbox/${name}`
+}
+
+async function readQuote(msg, inner) {
+  const quote = quotedOf(inner, [sock.user?.id, sock.user?.lid], normalizeMessageContent)
+  if (!quote) return undefined
+  const result = { from: quote.from, text: quote.text }
+  const found = mediaOf(quote.message)
+  if (!found || tooLarge(found.media)) return result
+  const key = { remoteJid: msg.key.remoteJid, id: quote.id, fromMe: quote.from === 'server' }
+  try {
+    result.file = await saveMedia({ key, message: quote.message }, found.media)
+    result.kind = found.kind
+  } catch (err) {
+    logger.warn({ err: err.message }, 'could not download the file of a quoted message')
+  }
+  return result
+}
+
+// Text, file and quote of one message. Audio and video go on as `voice` and `video`, so the
+// workspace can turn them into something Claude can read.
+async function readContent(msg, inner) {
+  const content = { text: textOf(inner) || describeShare(inner) }
+  const addNote = (note) => { content.text = `${content.text}\n${note}`.trim() }
+  const found = mediaOf(inner)
+  if (found && tooLarge(found.media)) {
+    addNote(`[a file larger than ${MAX_FILE_MB} MB was not saved; ask the sender for a smaller one]`)
+  } else if (found) {
+    try {
+      const saved = await saveMedia(msg, found.media)
+      if (found.kind === 'audio') content.voice = saved
+      else if (found.kind === 'video') content.video = saved
+      else addNote(`[attachment saved to ${saved}]`)
+    } catch (err) {
+      logger.warn({ err: err.message }, 'could not download attachment')
+      addNote('[an attachment could not be downloaded]')
+    }
+  }
+  content.quote = await readQuote(msg, inner)
+  return content
 }
 
 async function onMessage(msg) {
@@ -150,17 +191,14 @@ async function onMessage(msg) {
 
   const contact = contactSender(key, ALLOW, CONTACTS)
   if (contact) {
-    const said = unwrap(msg.message)
-    const voice = audioOf(said)
-      ? await saveMedia(msg, said).catch((err) => { logger.warn({ err: err.message }, 'could not download a voice message'); return '' })
-      : ''
+    const content = await readContent(msg, normalizeMessageContent(msg.message) || {})
     emit({
       type: 'contact',
       id: key.id,
       sender: contact,
       name: msg.pushName || '',
-      text: said.conversation || said.extendedTextMessage?.text || said.imageMessage?.caption || said.documentMessage?.caption || said.videoMessage?.caption || (voice ? '' : '[sent a file or a voice message]'),
-      voice: voice || undefined,
+      ...content,
+      text: content.text || (content.voice || content.video ? '' : '[sent something that cannot be read here]'),
       ts: Number(msg.messageTimestamp || 0),
     })
     return
@@ -173,21 +211,8 @@ async function onMessage(msg) {
   }
   knownChats.add(key.remoteJid)
 
-  const inner = unwrap(msg.message)
-  let text = inner.conversation || inner.extendedTextMessage?.text || ''
-  const caption = inner.imageMessage?.caption || inner.documentMessage?.caption || inner.videoMessage?.caption
-  if (caption) text = text ? `${text}\n${caption}` : caption
-
-  let voice = ''
-  try {
-    const saved = await saveMedia(msg, inner)
-    if (saved && audioOf(inner)) voice = saved
-    else if (saved) text = `${text}\n[attachment saved to ${saved}]`.trim()
-  } catch (err) {
-    logger.warn({ err: err.message }, 'could not download attachment')
-    text = `${text}\n[an attachment could not be downloaded]`.trim()
-  }
-  if (!text && !voice) return
+  const content = await readContent(msg, normalizeMessageContent(msg.message) || {})
+  if (!content.text && !content.voice && !content.video) return
 
   await sock.readMessages([key]).catch(() => {})
   const delivered = emit({
@@ -196,8 +221,7 @@ async function onMessage(msg) {
     chat_id: key.remoteJid,
     sender: phone,
     name: msg.pushName || '',
-    text,
-    voice: voice || undefined,
+    ...content,
     ts: Number(msg.messageTimestamp || 0),
   })
 

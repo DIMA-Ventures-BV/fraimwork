@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# fraim-frames: save a few still pictures from one video next to it and print their paths.
+#
+#   fraim-frames FILE
+#
+# Exit codes: 0 ok, 1 failure (no file), 2 usage.
+set -uo pipefail
+
+[ $# -eq 1 ] || { echo "usage: fraim-frames FILE" >&2; exit 2; }
+
+file="$1"
+case "$file" in
+  \~/*) file="$HOME/${file#\~/}" ;;
+esac
+[ -f "$file" ] || { echo "fraim-frames: no such file: $file" >&2; exit 1; }
+
+exec nice -n 10 "${FRAIM_WHISPER_PYTHON:-/opt/fraim/whisper/venv/bin/python}" \
+  "${FRAIM_FRAMES_SCRIPT:-/opt/fraim/whisper/frames.py}" "$file"

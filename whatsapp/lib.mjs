@@ -50,10 +50,98 @@ export function allowedSender(key, allow) {
   return phone && allow.has(phone) ? phone : ''
 }
 
-// The audio part of a message: a voice note, or an audio file sent as a document.
-export function audioOf(inner) {
-  if (inner.audioMessage) return inner.audioMessage
-  return inner.documentMessage?.mimetype?.startsWith('audio/') ? inner.documentMessage : null
+const MEDIA_FIELDS = [
+  ['imageMessage', 'image'],
+  ['videoMessage', 'video'],
+  ['ptvMessage', 'video'],
+  ['audioMessage', 'audio'],
+  ['stickerMessage', 'sticker'],
+  ['documentMessage', 'document'],
+]
+
+// The file in a message and what kind it is. An audio or video file sent as a document counts
+// as audio or video.
+export function mediaOf(inner) {
+  for (const [field, kind] of MEDIA_FIELDS) {
+    const media = inner[field]
+    if (!media) continue
+    const type = String(media.mimetype || '')
+    if (kind === 'document' && type.startsWith('audio/')) return { media, kind: 'audio' }
+    if (kind === 'document' && type.startsWith('video/')) return { media, kind: 'video' }
+    return { media, kind }
+  }
+  return null
+}
+
+export const MAX_FILE_MB = 500
+
+// WhatsApp gives the size as a number or as a 64-bit object.
+export function tooLarge(media) {
+  return Number(String(media.fileLength ?? 0)) > MAX_FILE_MB * 1024 * 1024
+}
+
+const safeExtension = (ext) => (/^\.[A-Za-z0-9]{1,10}$/.test(ext) ? ext : '')
+
+function typeExtension(mimetype) {
+  const subtype = String(mimetype || '').split('/')[1]?.split(';')[0].trim() || ''
+  return safeExtension(`.${subtype}`) || '.bin'
+}
+
+// The name in the inbox. Claude may paste this path into a shell, and the sender chose the
+// original name, so only safe characters stay.
+export function mediaFileName(media, stamp) {
+  if (!media.fileName) return `${stamp}-attachment${typeExtension(media.mimetype)}`
+  const name = path.basename(String(media.fileName))
+  const ext = safeExtension(path.extname(name))
+  const base = (ext ? name.slice(0, -ext.length) : name).replace(/[^\w.-]+/g, '_').slice(0, 100)
+  return `${stamp}-${base}${ext || typeExtension(media.mimetype)}`
+}
+
+export function textOf(inner) {
+  return inner.conversation
+    || inner.extendedTextMessage?.text
+    || inner.imageMessage?.caption
+    || inner.documentMessage?.caption
+    || inner.videoMessage?.caption
+    || inner.ptvMessage?.caption
+    || ''
+}
+
+function describeContact(contact) {
+  return `[shared a contact: ${contact.displayName || 'no name'}]\n${contact.vcard || ''}`.trim()
+}
+
+function describeLocation(place) {
+  const named = [place.name, place.address].filter(Boolean).join(', ')
+  return `[shared a location: ${place.degreesLatitude}, ${place.degreesLongitude}${named ? ` (${named})` : ''}]`
+}
+
+// Things without a file or text that a sender can still share.
+export function describeShare(inner) {
+  if (inner.contactMessage) return describeContact(inner.contactMessage)
+  if (inner.contactsArrayMessage) return (inner.contactsArrayMessage.contacts || []).map(describeContact).join('\n')
+  const place = inner.locationMessage || inner.liveLocationMessage
+  if (place) return describeLocation(place)
+  const poll = inner.pollCreationMessage || inner.pollCreationMessageV2 || inner.pollCreationMessageV3
+  if (poll) return `[shared a poll: ${poll.name}: ${(poll.options || []).map((o) => o.optionName).join(', ')}]`
+  return ''
+}
+
+const userOf = (jid) => {
+  const [user, domain] = String(jid || '').split('@')
+  return `${user.split(':')[0]}@${domain}`
+}
+
+// The message this one replies to (a WhatsApp swipe-reply), or null. "server" means the sender
+// replied to something the server wrote, "sender" to their own message, "" when WhatsApp did
+// not say.
+export function quotedOf(inner, me, normalize = (m) => m) {
+  const info = Object.values(inner).find((part) => part?.contextInfo?.quotedMessage)?.contextInfo
+  if (!info) return null
+  const message = normalize(info.quotedMessage) || {}
+  const mine = new Set(me.filter(Boolean).map(userOf))
+  const from = !info.participant ? '' : mine.has(userOf(info.participant)) ? 'server' : 'sender'
+  return { id: info.stanzaId || '', from, text: textOf(message) || describeShare(message), message }
 }
 
 export function httpError(status, message) {

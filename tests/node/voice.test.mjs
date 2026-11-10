@@ -1,24 +1,9 @@
 // Voice messages on WhatsApp: which messages count as audio, and what Claude reads for them.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { audioOf } from '../../whatsapp/lib.mjs'
 import { inOrder, withTranscript } from '../../workspace/channel/voice.mjs'
 
 const voice = { type: 'message', text: '', voice: '~/fraim/inbox/memo.ogg' }
-
-test('a voice note and an audio file sent as a document count as audio', () => {
-  const note = { mimetype: 'audio/ogg; codecs=opus', ptt: true }
-  const file = { mimetype: 'audio/mp4', fileName: 'memo.m4a' }
-  assert.equal(audioOf({ audioMessage: note }), note)
-  assert.equal(audioOf({ documentMessage: file }), file)
-})
-
-test('other messages do not count as audio', () => {
-  assert.equal(audioOf({ conversation: 'hi' }), null)
-  assert.equal(audioOf({ imageMessage: { mimetype: 'image/jpeg' } }), null)
-  assert.equal(audioOf({ documentMessage: { mimetype: 'application/pdf' } }), null)
-  assert.equal(audioOf({ documentMessage: {} }), null)
-})
 
 test('a message without audio stays the same and is never transcribed', async () => {
   const event = { type: 'message', text: 'hello' }
