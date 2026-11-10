@@ -7,7 +7,7 @@ setup() {
   T="$BATS_TEST_TMPDIR"
   mkdir -p "$T/bin" "$T/home/fraim/jobs"
   export HOME="$T/home" SENT="$T/sent" CLAUDE_ARGS="$T/claude.args" FRAIM_QUEUE_QUIET=1 T_MARK="$T/trial-env"
-  export FRAIM_LEADS_DIR="$T/home/fraim/leads" FRAIM_CRONTAB="$T/home/fraim/jobs/crontab"
+  export FRAIM_LEADS_DIR="$T/home/fraim/leads"
   export FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_GOALS_DIR="$T/home/fraim/goals" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
   export FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations" FRAIM_FILES_DIR="$T/home/fraim"
   export FRAIM_AUTO_STATE_DIR="$T/home/.local/state/fraim/automations" FRAIM_AUTO_CRONTAB="$T/home/.local/state/fraim/automations.crontab"

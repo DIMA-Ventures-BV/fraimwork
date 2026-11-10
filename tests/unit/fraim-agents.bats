@@ -10,7 +10,7 @@ setup() {
   export FRAIM_FILES_DIR="$T/home/fraim" FRAIM_LEADS_DIR="$T/home/fraim/leads" FRAIM_GOALS_DIR="$T/home/fraim/goals"
   export FRAIM_SESSIONS_DIR="$T/home/fraim/sessions" FRAIM_RELAY_DIR="$T/home/fraim/relay"
   export FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
-  export FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations" FRAIM_CRONTAB="$T/home/fraim/jobs/crontab"
+  export FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations"
   export FRAIM_AUTO_STATE_DIR="$T/home/.local/state/fraim/automations" FRAIM_AUTO_CRONTAB="$T/home/.local/state/fraim/automations.crontab"
   export FRAIM_AUTO_KIT_DIR="$BATS_TEST_DIRNAME/../../workspace/automation-kit"
   export FRAIM_RELAY_SYNC=1 FRAIM_RELAY_WAIT=0 FRAIM_RELAY_GAP=0 WHATSAPP_OWNER=31600000000

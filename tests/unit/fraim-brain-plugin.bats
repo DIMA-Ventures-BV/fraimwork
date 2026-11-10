@@ -8,7 +8,7 @@ setup() {
   mkdir -p "$T/bin" "$T/home/fraim/automations/_brain"
   export HOME="$T/home" FRAIM_QUEUE_QUIET=1 FRAIM_RUNTIME_ENV=/dev/null FRAIM_BRAIN_RETRY=0 CALLS="$T/calls"
   export FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_GOALS_DIR="$T/home/fraim/goals" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
-  export FRAIM_SKILLS_DIR="$T/home/.claude/skills" FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations" FRAIM_AUTO_STATE_DIR="$T/state" FRAIM_CRONTAB="$T/crontab"
+  export FRAIM_SKILLS_DIR="$T/home/.claude/skills" FRAIM_AUTOMATIONS_DIR="$T/home/fraim/automations" FRAIM_AUTO_STATE_DIR="$T/state"
   unset FRAIM_HEADLESS FRAIM_BRAIN_BUILTIN FRAIM_AUTHORITY_DIR
   printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/fraim-notify"
   chmod +x "$T/bin/"*

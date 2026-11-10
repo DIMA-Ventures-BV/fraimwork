@@ -10,7 +10,7 @@ setup() {
   BIN="$REPO/workspace/bin"
   T="$BATS_TEST_TMPDIR"
   export FRAIM_LEADS_DIR="$HOME/fraim/leads" FRAIM_AUTOMATIONS_DIR="$HOME/fraim/automations" FRAIM_FILES_DIR="$HOME/fraim"
-  export FRAIM_PROJECTS_DIR="$HOME/fraim/projects" FRAIM_CRONTAB="$HOME/fraim/jobs/crontab" FRAIM_GOALS_DIR="$HOME/fraim/goals"
+  export FRAIM_PROJECTS_DIR="$HOME/fraim/projects" FRAIM_GOALS_DIR="$HOME/fraim/goals"
   export FRAIM_AUTO_STATE_DIR="$HOME/.local/state/fraim/automations" FRAIM_AUTO_CRONTAB="$HOME/.local/state/fraim/automations.crontab"
   export FRAIM_AUTO_KIT_DIR="$REPO/workspace/automation-kit" FRAIM_RUNTIME_ENV="$T/runtime.env"
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t

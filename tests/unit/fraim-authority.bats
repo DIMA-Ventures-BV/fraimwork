@@ -206,7 +206,7 @@ EOF
 # --- an agent cannot speak as someone else
 
 @test "a lead run cannot write a note as the owner or as another lead" {
-  export FRAIM_LEAD_NO_WAKE=1 FRAIM_CRONTAB="$T/crontab"
+  export FRAIM_LEAD_NO_WAKE=1
   lead sales '# x\n'
   FRAIM_HEADLESS=1 FRAIM_LEAD_NAME=ops run "$BIN/fraim-lead" tell sales -- hello
   grep -q 'from ops: hello' "$FRAIM_LEADS_DIR/sales/inbox.md"

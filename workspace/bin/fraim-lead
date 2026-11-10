@@ -40,7 +40,6 @@ set -uo pipefail
 
 leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
 export FRAIM_LEADS_DIR="$leads"
-crontab="${FRAIM_CRONTAB:-$HOME/fraim/jobs/crontab}"
 goals="${FRAIM_GOALS_DIR:-$HOME/fraim/goals}"
 autos="${FRAIM_AUTOMATIONS_DIR:-$HOME/fraim/automations}"
 has_auto() { [ -f "$autos/$1/automation.md" ] && grep -q "^lead: $1\$" "$autos/$1/automation.md"; }
@@ -145,17 +144,11 @@ cmd_new() {
   printf '# Notes of lead %s\n\nNothing yet.\n' "$name" > "$leads/$name/state.md"
   printf '%s\n' "$budget" > "$leads/$name/budget"
 
-  if command -v fraim-auto >/dev/null; then
-    fraim-auto lead "$name" "$at" || die "could not schedule lead $name as an automation"
-    [ "$chief" = 0 ] || cmd_events "$name" >/dev/null || die "could not wake the chief on queue events"
-    if [ "$off" = 1 ]; then
-      local a
-      for a in $(lead_autos "$name"); do fraim-auto pause "$a" >/dev/null; done
-    fi
-  else
-    mkdir -p "$(dirname "$crontab")"
-    [ -f "$crontab" ] || printf '# Your scheduled jobs. See fraim-job and fraim-lead.\n' > "$crontab"
-    grep -q "fraim-lead run $name\$" "$crontab" || printf '%s fraim-lead run %s\n' "$at" "$name" >> "$crontab"
+  fraim-auto lead "$name" "$at" || die "could not schedule lead $name as an automation"
+  [ "$chief" = 0 ] || cmd_events "$name" >/dev/null || die "could not wake the chief on queue events"
+  if [ "$off" = 1 ]; then
+    local a
+    for a in $(lead_autos "$name"); do fraim-auto pause "$a" >/dev/null; done
   fi
 
   echo "Lead $name created: $leads/$name/lead.md"
@@ -177,11 +170,8 @@ cmd_list() {
     [ -f "$dir/lead.md" ] || continue
     name="$(basename "$dir")"
     kind="$(fraim-authority role-of "$name" 2>/dev/null)"; kind="${kind:-lead}"
-    if has_auto "$name"; then
-      at="$(sed -n 's/^schedule:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$autos/$name/automation.md" | head -1)"
-    else
-      at="$(grep -E "fraim-lead run $name\$" "$crontab" 2>/dev/null | grep -v '^\s*#' | head -1 | cut -d' ' -f1-5)"
-    fi
+    at=""
+    ! has_auto "$name" || at="$(sed -n 's/^schedule:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$autos/$name/automation.md" | head -1)"
     [ ! -f "$dir/paused" ] || at="paused"
     last="$(cat "$dir/last" 2>/dev/null || echo 'never ran')"
     printf '%s  %s  %s  budget %s/day  last: %s\n' "$name" "$kind" "${at:-no schedule}" "$(cat "$dir/budget" 2>/dev/null || echo 3)" "$last"
