@@ -127,7 +127,7 @@ fake_claude_runner() {
 @test "the settings live outside the agents' folders and only the owner can read them" {
   agent sales
   "$A" set contact sales
-  [ "$(stat -f '%Lp' "$SETTINGS" 2>/dev/null || stat -c '%a' "$SETTINGS")" = 600 ]
+  [ "$(stat -c %a "$SETTINGS" 2>/dev/null || stat -f %Lp "$SETTINGS")" = 600 ]
   case "$SETTINGS" in "$FRAIM_LEADS_DIR"/*|"$FRAIM_FILES_DIR"/*) return 1 ;; esac
 }
 
