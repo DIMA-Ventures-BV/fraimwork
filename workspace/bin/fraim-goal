@@ -369,6 +369,29 @@ ${text:0:3500}"
   deliver "$chat" "$dir" "$summary"
 }
 
+# Sleeps until core reports a change in this terminal, FRAIM_GOAL_POLL seconds at most: the
+# timer still drives retries, the keep time and the time limit. `hc wait` cannot do this, it
+# returns at once for a terminal that is not working. The first line is core's snapshot, so a
+# change just before subscribing is not missed. Without a stream this is a plain sleep.
+await_change() {
+  local id="$1" seen="$2" poll="${FRAIM_GOAL_POLL:-60}" deadline left line fd pid rc
+  left="$poll"
+  deadline=$(( $(date +%s) + ${poll%.*} ))
+  exec {fd}< <(exec fraim-herdr hc events --terminal "$id" --json 2>/dev/null)
+  pid=$!
+  while IFS= read -r -t "$left" -u "$fd" line; rc=$?; [ "$rc" -eq 0 ]; do
+    case "$(jq -r '.params.type // .method // "snapshot"' <<<"$line" 2>/dev/null)" in
+      status|turn|finished|lost|removed|missed) break ;;
+      snapshot) [ "$(jq -r '.terminals[0] | "\(.status.state // "none") \(.turn // 0)"' <<<"$line" 2>/dev/null)" = "$seen" ] || break ;;
+    esac
+    left=$(( deadline - $(date +%s) ))
+    [ "$left" -gt 0 ] || break
+  done
+  exec {fd}<&-
+  kill "$pid" 2>/dev/null
+  if [ "$rc" -gt 0 ] && [ "$rc" -le 128 ]; then sleep "$poll"; fi
+}
+
 # The watcher. run: open the terminal and send the task first. follow: only watch.
 cmd_watch() {
   local id="$1" mode="$2" dir chat rec tstate st tturn reason idle_since="" busy_since="" deadline
@@ -378,7 +401,7 @@ cmd_watch() {
   # A watcher that ended is not alive, even within the heartbeat window. A message that never
   # went out lands in the alerts, which fraim status reports.
   trap 'rm -f "$dir/heartbeat"; printf "%s watcher ended (%s)\n" "$(date "+%H:%M:%S")" "${why:-?}" >> "$dir/log.txt"; if [ -s "$dir/unsent" ]; then fraim-notify "Not delivered earlier: $(cat "$dir/unsent")" >/dev/null 2>&1; rm -f "$dir/unsent"; fi' EXIT
-  local why="" rc misses=0
+  local why="" rc
   deadline=$(( $(date +%s) + ${FRAIM_GOAL_TIMEOUT:-14400} ))
   if [ "$mode" = run ]; then
     if ! launch "$id" "$dir"; then
@@ -397,12 +420,10 @@ cmd_watch() {
     rec="$(hc get "$id" --json 2>/dev/null)"
     rc=$?
     # Exit 3 is "no such terminal"; anything else (a busy or restarting core) is retried.
-    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ] && [ "$misses" -lt 10 ]; then
-      misses=$((misses + 1))
-      sleep "${FRAIM_GOAL_POLL:-15}"
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+      sleep "${FRAIM_GOAL_POLL:-60}"
       continue
     fi
-    misses=0
     [ -n "$rec" ] || rec='{}'
     tstate="$(jq -r '.state // "gone"' <<<"$rec")"
     st="$(jq -r '.status.state // "none"' <<<"$rec")"
@@ -427,7 +448,7 @@ cmd_watch() {
           [ -n "$busy_since" ] || busy_since="$(date +%s)"
           if [ $(( $(date +%s) - busy_since )) -lt "${FRAIM_GOAL_BUSY_MAX:-1800}" ]; then
             idle_since=""
-            sleep "${FRAIM_GOAL_POLL:-15}"
+            await_change "$id" "$st $tturn"
             continue
           fi
         fi
@@ -453,7 +474,7 @@ cmd_watch() {
           hc kill "$id" >/dev/null 2>&1; hc rm "$id" >/dev/null 2>&1
           exit 0
         fi
-        sleep "${FRAIM_GOAL_POLL:-15}"
+        await_change "$id" "$st $tturn"
         continue ;;
       error)
         reason="$(fail_reason "$(screen_text "$id")" screen)"
@@ -470,9 +491,9 @@ cmd_watch() {
           exit 1
         fi
         if [ "$st" = blocked ]; then
-          sleep "${FRAIM_GOAL_POLL:-15}"
+          await_change "$id" "$st $tturn"
         else
-          hc wait "$id" --timeout 60 --json >/dev/null 2>&1 || sleep "${FRAIM_GOAL_POLL:-15}"
+          hc wait "$id" --timeout 60 --json >/dev/null 2>&1 || sleep "${FRAIM_GOAL_POLL:-60}"
         fi ;;
     esac
   done

@@ -7,6 +7,8 @@
 #   FAKE_SEND_HOOK   a program to run on every send (to write files a real run writes)
 #   FAKE_BLOCK_KIND  status.kind after a send (question by default; permission for a menu)
 #   FAKE_EVENTS      a file of JSON-RPC event lines that `hc events` prints
+#   $HC_FAKE/events-down  `hc events --terminal` fails at once (no stream)
+#   $HC_FAKE/noise   `hc events --terminal` also prints heartbeats and title changes
 #   $HC_FAKE/get-fail  a count of gets that fail with exit 1 (a busy core), then work again
 # Every call is logged to $HC_FAKE/calls.
 set -u
@@ -95,7 +97,28 @@ case "$cmd" in
   rm) [ -f "$(file "$1")" ] && rm -f "$(file "$1")" ;;
   attach) need "$1"; echo "attached $1" ;;
   exec) [ ! -e "$d/busy" ] || echo bash ;;
-  events) [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS" ;;
+  events)
+    if [ "${1:-}" != --terminal ]; then
+      [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS"
+      exit 0
+    fi
+    [ ! -e "$d/events-down" ] || { echo '{"error":{"kind":"unavailable"}}' >&2; exit 1; }
+    need "$2"
+    printf '%s\n' "$$" >> "$d/events.pids"
+    f="$(file "$2")"
+    ev() { jq -cn --arg k "$1" --arg t "$2" --arg s "${3:-}" '{jsonrpc: "2.0", method: "event", params: {type: $k, terminal: $t, data: {status: {state: $s}}, seq: 2}}'; }
+    jq -c '{seq: 1, terminals: [.]}' "$f"
+    was="$(jq -r '"\(.state) \(.status.state // "none") \(.turn)"' "$f")"
+    for _ in $(seq 400); do
+      sleep 0.05
+      [ ! -e "$d/noise" ] || { echo '{"jsonrpc":"2.0","method":"heartbeat","params":{"seq":2}}'; ev title "$2"; }
+      [ -f "$f" ] || { ev removed "$2"; continue; }
+      now="$(jq -r '"\(.state) \(.status.state // "none") \(.turn)"' "$f")"
+      [ "$now" != "$was" ] || continue
+      read -r state status _ <<<"$now"
+      if [ "$state" = live ]; then ev status "$2" "$status"; else ev finished "$2"; fi
+      was="$now"
+    done ;;
   *) echo "fake hc: $cmd not faked" >&2; exit 2 ;;
 esac
 : "$json"
