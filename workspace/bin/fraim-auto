@@ -12,6 +12,7 @@
 #                                            lead made with --off); only the owner, not a headless run
 #   fraim-auto check [NAME]                  find mistakes in automation.md files
 #   fraim-auto catalog                       every trigger, output and example there is
+#   fraim-auto sources [--tools]             what the source plugins tell the chief of staff
 #   fraim-auto new NAME [--from EXAMPLE] [--off]  start an automation, empty or from an example
 #   fraim-auto sync                          write the scheduler's crontab from all automations
 #   fraim-auto migrate                       move ~/fraim/jobs into automations (runs at start)
@@ -369,6 +370,7 @@ record_ok() {
   # A delivery problem is cleared by the next good delivery, not by a good run.
   if [ -n "$last" ] && [ "${last#delivery: }" = "$last" ]; then
     alert "Automation $name works again."
+    ! command -v fraim-queue >/dev/null || fraim-queue recovered --source "automation $name" >/dev/null 2>&1 || true
     rm -f "$state_root/$name/last_alert"
   fi
   sset "$name" streak 0
@@ -847,6 +849,32 @@ cmd_sync() {
   [ "$quiet" = --quiet ] || echo "Scheduler already up to date: $count scheduled automation(s)."
 }
 
+# What the chief of staff knows beyond the queue. Each source is a plugin that prints plain text:
+# one new file gives the chief something new to know, and nothing else has to change. Only a
+# built-in source may name tools, because the engineer lead can write the owner's plugins.
+cmd_sources() {
+  local t p out code
+  if [ "${1:-}" = --tools ]; then
+    for t in $(plugin_types sources); do
+      p="$(plugin sources "$t")"
+      [ "$p" = "$kit/sources/$t" ] || continue
+      plugin_meta "$p" tools | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d'
+    done
+    return 0
+  fi
+  for t in $(plugin_types sources); do
+    p="$(plugin sources "$t")"
+    code=0
+    out="$(plugin_exec 45 "$p" 2>/dev/null </dev/null)" || code=$?
+    if [ "$code" != 0 ]; then
+      printf -- '--- %s (%s): could not run, so it proves nothing\n' "$t" "$(plugin_meta "$p" description)"
+    elif [ -n "$out" ]; then
+      printf -- '--- %s (%s)\n' "$t" "$(plugin_meta "$p" description)"
+    fi
+    [ -z "$out" ] || printf '%s\n' "${out:0:4000}"
+  done
+}
+
 cmd_catalog() {
   local t p src ex
   printf 'Triggers (trigger: TYPE: VALUE), checked every 5m or as often as "every:" says:\n'
@@ -987,6 +1015,7 @@ case "$action" in
   on) [ $# -eq 1 ] || usage "on NAME"; cmd_on "$1" ;;
   check) cmd_check "$@" ;;
   catalog|plugins|examples) cmd_catalog ;;
+  sources) cmd_sources "$@" ;;
   new) [ $# -ge 1 ] || usage "new NAME [--from EXAMPLE] [--off]"; cmd_new "$@" ;;
   lead)
     # What fraim-lead new calls: schedule an existing lead as an automation.

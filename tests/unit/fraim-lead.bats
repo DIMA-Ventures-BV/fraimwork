@@ -563,3 +563,102 @@ FAKE
   fraim-lead run web
   ! grep -q 'Grow the team' "$CLAUDE_ARGS"
 }
+
+@test "the chief reads every source and a broken source says so" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_sources"
+  printf '#!/usr/bin/env bash\n# description: Deploy notes\necho "deploy went out at 09:00"\n' > "$FRAIM_AUTOMATIONS_DIR/_sources/deploys"
+  printf '#!/usr/bin/env bash\n# description: Broken one\nexit 3\n' > "$FRAIM_AUTOMATIONS_DIR/_sources/broken"
+  printf '#!/usr/bin/env bash\n# description: Quiet one\nexit 0\n' > "$FRAIM_AUTOMATIONS_DIR/_sources/quiet"
+  chmod +x "$FRAIM_AUTOMATIONS_DIR/_sources/"*
+  fraim-lead new chief --chief
+  run fraim-lead run chief
+  [ "$status" -eq 0 ]
+  grep -q 'deploys (Deploy notes)' "$CLAUDE_ARGS"
+  grep -q 'deploy went out at 09:00' "$CLAUDE_ARGS"
+  grep -q 'broken (Broken one): could not run' "$CLAUDE_ARGS"
+  ! grep -q 'quiet (Quiet one)' "$CLAUDE_ARGS"
+  grep -q 'fraim-queue solved ID --proof' "$CLAUDE_ARGS"
+  grep -q 'Bash(fraim-queue solved:\*)' "$CLAUDE_ARGS"
+}
+
+@test "a normal lead gets no sources and cannot close cards" {
+  fraim-lead new web --area "the site"
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  ! grep -q 'What your sources report' "$CLAUDE_ARGS"
+  ! grep -q 'fraim-queue solved' "$CLAUDE_ARGS"
+}
+
+@test "only a built-in source can give the chief extra tools" {
+  mkdir -p "$FRAIM_AUTOMATIONS_DIR/_sources"
+  printf '#!/usr/bin/env bash\n# description: Mine\n# tools: Bash(rm:*)\necho hi\n' > "$FRAIM_AUTOMATIONS_DIR/_sources/mine"
+  # An owner file with the name of a built-in source replaces it, and loses its tools too.
+  printf '#!/usr/bin/env bash\n# description: Mine\n# tools: Bash(curl:*)\necho hi\n' > "$FRAIM_AUTOMATIONS_DIR/_sources/mail-replies"
+  run fraim-auto sources --tools
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"rm:"* ]]
+  [[ "$output" != *"curl:"* ]]
+  rm "$FRAIM_AUTOMATIONS_DIR/_sources/mail-replies"
+  run fraim-auto sources --tools
+  [[ "$output" == *"mcp__google__search_gmail_messages"* ]]
+}
+
+@test "the commits source fetches each repository once, from any machine" {
+  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+  git init -q -b main "$T/work"
+  git -C "$T/work" commit -q --allow-empty -m "first"
+  git clone -q --bare "$T/work" "$T/origin.git"
+  mkdir -p "$HOME/code/notrepo"
+  git clone -q "$T/origin.git" "$HOME/code/shop"
+  git clone -q "$T/origin.git" "$HOME/code/shop-g7"
+  # A commit from another machine: only a fetch can see it.
+  git -C "$T/work" remote add origin "$T/origin.git"
+  git -C "$T/work" commit -q --allow-empty -m "Allow the quiz host in publicOrigin"
+  git -C "$T/work" push -q origin main
+  run fraim-auto sources
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^origin:$' <<<"$output")" = 1 ]
+  [[ "$output" == *"Allow the quiz host"* ]]
+  [[ "$output" != *"shop"* ]]
+  [[ "$output" != *"notrepo"* ]]
+  git -C "$HOME/code/shop" remote set-url origin "$T/gone.git"
+  git -C "$HOME/code/shop-g7" remote set-url origin "$T/gone.git"
+  run fraim-auto sources
+  [[ "$output" == *"commits ("*"could not run"* ]]
+}
+
+@test "the mail source only speaks when a card came from mail" {
+  run fraim-auto sources
+  [[ "$output" != *"mail-replies"* ]]
+  fraim-queue add --quiet --source "automation mail-requests" --kind decision --title "Customer cannot log in" >/dev/null
+  run fraim-auto sources
+  [[ "$output" == *"mail-replies"* ]]
+  [[ "$output" == *"q1: Customer cannot log in"* ]]
+}
+
+@test "a run can close a card as solved, with proof, and starts nothing" {
+  fraim-queue add --quiet --source "automation mail-requests" --kind decision --title "Customer cannot log in" >/dev/null
+  run env FRAIM_HEADLESS=1 fraim-queue solved q1
+  [ "$status" -ne 0 ]
+  run env FRAIM_HEADLESS=1 fraim-queue solved q1 --proof "Commit 2ea38fa0 fixed the login link"
+  [ "$status" -eq 0 ]
+  run fraim-queue show q1 --json
+  [ "$(jq -r .state <<<"$output")" = dismissed ]
+  [ "$(jq -r .note <<<"$output")" = "Solved: Commit 2ea38fa0 fixed the login link" ]
+  [ "$(jq -r '.follow_up // ""' <<<"$output")" = "" ]
+  [ "$(jq -r .via <<<"$output")" = chief ]
+  run fraim-queue solved q1 --proof "Commit 2ea38fa0 fixed the login link"
+  [ "$status" -ne 0 ]
+}
+
+@test "solved refuses a card that still needs the owner, and goal results" {
+  fraim-queue add --quiet --source "automation mail-requests" --kind decision --title "Next step" --on-approve "Do it" >/dev/null
+  fraim-queue add --quiet --goal g9 --kind review --title "Goal result" >/dev/null
+  run fraim-queue solved q1 --proof "It looks fixed to me already"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs the owner"* ]]
+  run fraim-queue solved q2 --proof "It looks fixed to me already"
+  [ "$status" -ne 0 ]
+  [ "$(fraim-queue show q1 --json | jq -r .state)" = open ]
+  [ "$(fraim-queue show q2 --json | jq -r .state)" = open ]
+}

@@ -21,6 +21,8 @@
 //   fraim-queue reject ID --note TEXT      saves the reason for the brain; reworks the goal behind it
 //   fraim-queue dismiss ID                 closes the item, nothing else happens
 //   fraim-queue prio ID 1|2|3
+//   fraim-queue solved ID --proof TEXT   the chief closes a card that proved solved; nothing else happens
+//   fraim-queue recovered --source S     closes the failure cards of an automation that works again
 //   fraim-queue serve                      the web page (started by the workspace container)
 //   fraim-queue url                        the page address, with its access token
 //
@@ -457,6 +459,44 @@ export function supersedeFailed(origin, by) {
     item.decided = now()
     item.via = 'system'
     writeItem(item)
+    closed.push(item.id)
+  }
+  return closed
+}
+
+// Solved is not a decision: the problem on the card is gone, so nobody has to choose anything.
+// The chief may do this, unlike decide(). It starts nothing and teaches the brain nothing.
+function closeSolved(item, proof, via) {
+  item.state = 'dismissed'
+  item.note = `Solved: ${proof}`
+  item.decided = now()
+  item.via = via
+  writeItem(item)
+  return item
+}
+
+// A card with a next step still asks the owner something, and a goal result is the owner's to
+// review. Those stay open whatever a run believes.
+export function markSolved(id, proof) {
+  proof = String(proof || '').trim()
+  if (proof.length < 10) usage('solved ID --proof "<what proves it is solved>"')
+  const item = readItem(id)
+  if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
+  if (item.on_approve || item.switch_on || item.brain || item.skill) throw new Error(`${id} still needs the owner's decision`)
+  if (item.kind !== 'failed' && !/^automation /.test(item.source || '')) throw new Error(`${id} is for the owner to review`)
+  return closeSolved(item, proof, 'chief')
+}
+
+// The automation itself proved it works again, so even a card with a next step is out of date.
+export function closeRecovered(source) {
+  if (!/^automation [a-z0-9_-]+$/.test(source || '')) usage('recovered --source "automation NAME"')
+  const closed = []
+  for (const item of allItems()) {
+    if (item.state !== 'open' || item.kind !== 'failed' || item.source !== source) continue
+    let fresh
+    try { fresh = readItem(item.id) } catch { continue }
+    if (fresh.state !== 'open') continue
+    closeSolved(fresh, 'the automation works again', 'system')
     closed.push(item.id)
   }
   return closed
@@ -1382,6 +1422,15 @@ function main(argv) {
       const closed = supersedeFailed(args.origin, args.by)
       return console.log(closed.length ? `closed ${closed.join(' ')}` : 'nothing to close')
     }
+    case 'solved': {
+      if (!id) usage('solved ID --proof "<what proves it is solved>"')
+      const item = markSolved(id, args.proof)
+      return console.log(`${item.id} closed as solved`)
+    }
+    case 'recovered': {
+      const closed = closeRecovered(args.source)
+      return console.log(closed.length ? `closed ${closed.join(' ')}` : 'nothing to close')
+    }
     case 'prio': {
       if (!id || !args._[1]) usage('prio ID 1|2|3')
       const item = setPriority(id, args._[1])
@@ -1403,7 +1452,7 @@ function main(argv) {
       return
     }
     default:
-      usage('add | grant --title T | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | prio ID N | serve | url')
+      usage('add | grant --title T | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
   }
 }
 

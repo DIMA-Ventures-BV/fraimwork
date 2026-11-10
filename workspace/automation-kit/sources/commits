@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# description: Commits on the main branch of each repository in the last 3 days, from any machine
+# Source plugin: prints plain text, or nothing. It exits non-zero when it could not look.
+# ~/code holds many clones of one repository (one per goal), so each origin counts once.
+set -uo pipefail
+code="${FRAIM_CODE_DIR:-$HOME/code}"
+failed=0
+seen=""
+for dir in "$code"/*/; do
+  [ -e "$dir.git" ] || continue
+  url="$(git -C "$dir" remote get-url origin 2>/dev/null)" || continue
+  case "$seen" in *"|$url|"*) continue ;; esac
+  seen="$seen|$url|"
+  head="$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || head=origin/main
+  if ! git -C "$dir" fetch -q origin 2>/dev/null; then failed=1; continue; fi
+  commits="$(git -C "$dir" log -30 --since='3 days ago' --format='%cI %h %s' "$head" 2>/dev/null)" || { failed=1; continue; }
+  [ -z "$commits" ] || printf '%s:\n%s\n' "$(basename "$url" .git)" "$(printf '%s\n' "$commits" | cut -c1-160)"
+done
+exit "$failed"
