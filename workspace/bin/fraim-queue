@@ -25,6 +25,8 @@
 //   fraim-queue recovered --source S     closes the failure cards of an automation that works again
 //   fraim-queue serve                      the web page (started by the workspace container)
 //   fraim-queue url                        the page address, with its access token
+//   fraim-queue token new --name N --scope read|write|decide [--origin https://...]...   a token for an app (docs/api.md)
+//   fraim-queue token list | rm NAME       the owner only; a run nobody watches is refused
 //   fraim-queue thread mail GMAIL_THREAD_ID   save a mail chain as a conversation (--quiet: tell nobody)
 //   fraim-queue thread put [--kind K] [--key K] [--file F]   save anything else, JSON on stdin or in F
 //   fraim-queue thread say tN --from WHO [--to WHO] -- TEXT  add a line to the agents' chat
@@ -41,8 +43,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  UsageError, allItems, itemDir, queueUrl, rank, readItem, setServing, token, usage,
+  PORT, UsageError, allItems, itemDir, queueUrl, rank, readItem, setServing, token, usage,
 } from './fraim-queue-store.mjs'
+import { tokenCommand } from './fraim-queue-tokens.mjs'
 import {
   ADVICE_WORD, addItem, closeRecovered, decide, grantRequest, markSolved, setPriority, supersedeFailed, useYesForGoal,
 } from './fraim-queue-approve.mjs'
@@ -65,8 +68,6 @@ export { addWhatsApp, closeThread, dismissThread, putThread, restoreThread, sayI
 export { captureMail, parseGmailThread, splitQuote } from './fraim-queue-mail.mjs'
 export { draftReply, draftText, sendApproved } from './fraim-queue-replies.mjs'
 export { createServer } from './fraim-queue-server.mjs'
-
-const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
 
 function line(item) {
   const flag = item.state === 'open' ? `p${item.priority}` : item.state
@@ -148,7 +149,7 @@ function threadCommand(args) {
 
 function main(argv) {
   const [action, ...rest] = argv
-  const args = parseArgs(rest, ['link', 'media', 'why'])
+  const args = parseArgs(rest, action === 'token' ? ['origin'] : ['link', 'media', 'why'])
   const id = args._[0]
   switch (action) {
     case 'add': {
@@ -220,7 +221,7 @@ function main(argv) {
     case 'thread':
       return threadCommand(args)
     case 'token':
-      return console.log(token())
+      return id ? tokenCommand(args) : console.log(token())
     case 'serve': {
       setServing()
       const server = createServer()

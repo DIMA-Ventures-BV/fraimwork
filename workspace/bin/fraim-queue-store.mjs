@@ -19,6 +19,7 @@ export const MEDIA_TYPES = {
 
 export class UsageError extends Error {}
 export function usage(msg) { throw new UsageError(msg) }
+export class Refused extends Error {}
 
 // The page server answers one request at a time, so it never waits on a message to send: it
 // starts fraim-notify and fraim-lead tell and moves on. The command line waits for them.
@@ -157,10 +158,12 @@ export const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim
 export const AUTO_STATE = process.env.FRAIM_AUTO_STATE_DIR || path.join(HOME, '.local/state/fraim/automations')
 export const LEADS = process.env.FRAIM_LEADS_DIR || path.join(HOME, 'fraim/leads')
 
-export function isChief(lead) {
+export function roleOf(lead) {
   const res = spawnSync(tool('fraim-authority'), ['role-of', lead], { encoding: 'utf8', timeout: 10000, env: { ...process.env, FRAIM_LEADS_DIR: LEADS } })
-  return res.status === 0 && res.stdout.trim() === 'chief'
+  return res.status === 0 ? res.stdout.trim() : ''
 }
+
+export const isChief = (lead) => roleOf(lead) === 'chief'
 
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
 export function tellLead(lead, from, text, thread = '') {

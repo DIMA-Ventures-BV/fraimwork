@@ -8,6 +8,7 @@ import {
   HOME, MEDIA_TYPES, UsageError, allItems, itemDir, now, promptText, rank, readItem, readText, readThread, runtimeEnv,
   token, tool, usage, writeThread,
 } from './fraim-queue-store.mjs'
+import { createApi } from './fraim-queue-api.mjs'
 import { decide, setPriority } from './fraim-queue-approve.mjs'
 import { dismissThread, restoreThread, sayInThread, tellChief } from './fraim-queue-threads.mjs'
 import {
@@ -45,10 +46,12 @@ function readBody(req) {
 
 export function createServer(secret = token()) {
   const settings = createSettings({ employees, team, tool, runtimeEnv, send, readBody })
-  return http.createServer(async (req, res) => {
+  const api = createApi({ isPageCookie: (req) => sameToken(cookieToken(req), secret), send })
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://queue')
     try {
       if (url.pathname === '/health') return send(res, 200, { ok: true })
+      if (url.pathname.startsWith('/api/v1/')) return await api.handle(req, res, url)
       if (url.searchParams.has('t')) {
         if (!sameToken(url.searchParams.get('t'), secret)) return send(res, 403, 'Wrong link. Ask Claude for the queue link again.', 'text/plain')
         res.writeHead(303, {
@@ -140,6 +143,8 @@ export function createServer(secret = token()) {
       return send(res, code, { error: err.message })
     }
   })
+  server.on('close', api.close)
+  return server
 }
 
 // The pages are files the owner's chief can change (fraim-ui): the owner's file wins, and

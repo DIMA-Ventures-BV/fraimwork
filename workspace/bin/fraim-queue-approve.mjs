@@ -3,8 +3,8 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  ADVICE, GOALS, HOME, KINDS, LEADS, THREADS, UsageError, allItems, copyMedia, fire, isChief, itemDir, newId, now,
-  queueUrl, readItem, readText, runtimeEnv, tellLead, tool, usage, validThread, writeItem,
+  ADVICE, GOALS, HOME, KINDS, LEADS, Refused, THREADS, UsageError, allItems, copyMedia, fire, isChief, itemDir, newId,
+  now, promptText, queueUrl, readItem, readText, runtimeEnv, tellLead, tool, usage, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
@@ -185,35 +185,17 @@ function readGoalFile(goal, name, max = 4000) {
 export function reworkText(item, note) {
   const original = readGoalFile(item.goal, 'goal.md') || item.title
   const result = readGoalFile(item.goal, 'result.md') || item.summary
-  return [
-    `Rework after the owner's review of queue item ${item.id} ("${item.title}").`,
-    '',
-    'The original goal:',
-    original,
-    '',
-    'Your previous result:',
-    result,
-    '',
-    "The owner's feedback, which wins over anything above:",
-    note,
-    '',
-    item.goal ? `Earlier notes and files are in ~/fraim/goals/${item.goal}. Build on that work instead of starting over.` : '',
-  ].join('\n').trim()
+  return promptText('queue-rework', { id: item.id, title: item.title, original, result, note, goal: item.goal })
 }
 
 export function approveText(item, note) {
-  return [
-    `The owner approved queue item ${item.id} ("${item.title}"). Do this approved next step now:`,
-    item.on_approve,
-    note ? `\nThe owner added: ${note}` : '',
-    item.goal ? `\nContext and earlier work: ~/fraim/goals/${item.goal}.` : '',
-  ].join('\n').trim()
+  return promptText('queue-approved', { id: item.id, title: item.title, on_approve: item.on_approve, note, goal: item.goal })
 }
 
 // The one place where a decision has effects, used by the CLI, the page and WhatsApp.
 // Only the owner decides: a headless Claude run (goal, lead, automation) cannot.
 export function decide(id, verdict, note = '', via = 'cli', editedText = undefined) {
-  if (process.env.FRAIM_HEADLESS === '1') throw new Error('only the owner decides; a goal, lead or automation cannot approve, reject or dismiss')
+  if (process.env.FRAIM_HEADLESS === '1') throw new Refused('only the owner decides; a goal, lead or automation cannot approve, reject or dismiss')
   const item = readItem(id)
   if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
   note = String(note || '').trim()
@@ -320,7 +302,7 @@ function applyDecision(item, verdict, note, via, opts = {}) {
   // The sender reads the card, so it starts after the write. It never waits inside the page.
   if (verdict === 'approved' && item.reply) fire(tool('fraim-queue'), ['send-reply', item.id], runtimeEnv())
   // A change to the brain from the command line could come from an agent: tell the owner.
-  if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`, true)
+  if ((item.brain || item.skill) && verdict === 'approved' && (via === 'cli' || via.startsWith('api:'))) notify(`${item.id} was approved ${via === 'cli' ? 'from the command line' : `by the app "${via.slice(4)}"`}: ${outcome}\nNot you? Tell me and I undo it.`, true)
   if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead && via !== 'grant') {
     const covers = verdict === 'approved' && !item.reply ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''

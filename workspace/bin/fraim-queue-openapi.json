@@ -1,0 +1,281 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "fraimwork queue API",
+    "version": "1.0.0",
+    "description": "Raw data of a fraim server for a screen you build yourself. See docs/api.md."
+  },
+  "security": [{ "bearer": [] }],
+  "paths": {
+    "/api/v1/schema": {
+      "get": {
+        "summary": "This document",
+        "x-scope": "read",
+        "responses": { "200": { "description": "OpenAPI 3 JSON" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/v1/items": {
+      "get": {
+        "summary": "List items, most urgent first",
+        "x-scope": "read",
+        "parameters": [
+          { "name": "state", "in": "query", "schema": { "$ref": "#/components/schemas/State" } },
+          { "$ref": "#/components/parameters/limit" },
+          { "$ref": "#/components/parameters/offset" }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of items",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Item" } }, "total": { "type": "integer" }, "limit": { "type": "integer" }, "offset": { "type": "integer" } } } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "summary": "Add a question for the owner. It always waits for the owner",
+        "x-scope": "write",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewItem" } } }
+        },
+        "responses": {
+          "201": { "description": "The new item", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } } },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "413": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/items/{item}": {
+      "get": {
+        "summary": "One item",
+        "x-scope": "read",
+        "parameters": [{ "name": "item", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^q[0-9]{1,6}$" } }],
+        "responses": {
+          "200": { "description": "The item", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } } },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/items/{item}/decide": {
+      "post": {
+        "summary": "Approve, reject or dismiss an item, with the same effects as the owner's page",
+        "x-scope": "decide",
+        "parameters": [{ "name": "item", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^q[0-9]{1,6}$" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["verdict"],
+                "properties": {
+                  "verdict": { "enum": ["approved", "rejected", "dismissed"] },
+                  "note": { "type": "string", "description": "Required when rejecting" },
+                  "text": { "type": "string", "description": "A changed text, when approving a reply draft" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The decided item", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } } },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/items/{item}/media/{file}": {
+      "get": {
+        "summary": "An image or video attached to an item",
+        "x-scope": "read",
+        "parameters": [
+          { "name": "item", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^q[0-9]{1,6}$" } },
+          { "name": "file", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "The file" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/v1/threads": {
+      "get": {
+        "summary": "List conversations, latest first, without their text",
+        "x-scope": "read",
+        "parameters": [{ "$ref": "#/components/parameters/limit" }, { "$ref": "#/components/parameters/offset" }],
+        "responses": {
+          "200": {
+            "description": "One page of conversations",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "threads": { "type": "array", "items": { "type": "object" } }, "total": { "type": "integer" }, "limit": { "type": "integer" }, "offset": { "type": "integer" } } } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/threads/{thread}": {
+      "get": {
+        "summary": "One conversation with its chat and the ids of its items. Its html fields are untrusted mail",
+        "x-scope": "read",
+        "parameters": [{ "name": "thread", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^t[0-9]{1,6}$" } }],
+        "responses": {
+          "200": { "description": "The conversation", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Thread" } } } },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/threads/{thread}/say": {
+      "post": {
+        "summary": "Add a line to a conversation. The chief of staff is told. An app never speaks as the owner",
+        "x-scope": "write",
+        "parameters": [{ "name": "thread", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^t[0-9]{1,6}$" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Text" } } } },
+        "responses": {
+          "201": { "description": "Saved", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Sent" } } } },
+          "400": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "summary": "Leads, automations and what runs now",
+        "x-scope": "read",
+        "responses": {
+          "200": {
+            "description": "The agents",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "agents": { "type": "array", "items": { "$ref": "#/components/schemas/Agent" } } } } } }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent}/messages": {
+      "post": {
+        "summary": "Leave a note in a lead's inbox, which wakes it",
+        "x-scope": "write",
+        "parameters": [{ "name": "agent", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Text" } } } },
+        "responses": {
+          "202": { "description": "Delivered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Sent" } } } },
+          "404": { "$ref": "#/components/responses/Error" },
+          "502": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "summary": "Server-sent events: ready, item.changed and thread.changed, each with data {\"id\": ...}",
+        "x-scope": "read",
+        "responses": { "200": { "description": "text/event-stream" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer" } },
+    "parameters": {
+      "limit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+      "offset": { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+    },
+    "responses": {
+      "Error": {
+        "description": "An error",
+        "content": { "application/json": { "schema": { "type": "object", "required": ["error", "code"], "properties": { "error": { "type": "string" }, "code": { "type": "string" } } } } }
+      }
+    },
+    "schemas": {
+      "State": { "enum": ["open", "approved", "rejected", "dismissed"] },
+      "Text": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string", "maxLength": 4000 } } },
+      "Sent": { "type": "object", "properties": { "ok": { "type": "boolean" }, "from": { "type": "string" } } },
+      "NewItem": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 200 },
+          "ask": { "type": "string", "maxLength": 300 },
+          "advise": { "enum": ["approve", "reject", "dismiss"] },
+          "need": { "type": "string", "maxLength": 400 },
+          "if_yes": { "type": "string", "maxLength": 400 },
+          "if_no": { "type": "string", "maxLength": 400 },
+          "why": { "type": "array", "maxItems": 3, "items": { "type": "string" } },
+          "summary": { "type": "string", "maxLength": 20000 },
+          "kind": { "enum": ["review", "decision", "idea", "info", "failed"] },
+          "priority": { "enum": [1, 2, 3] },
+          "links": { "type": "array", "maxItems": 20, "items": { "type": "string" } },
+          "thread": { "type": "string" }
+        }
+      },
+      "Item": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "ask": { "type": "string" },
+          "advise": { "type": "string" },
+          "need": { "type": "string" },
+          "if_yes": { "type": "string" },
+          "if_no": { "type": "string" },
+          "why": { "type": "array", "items": { "type": "string" } },
+          "summary": { "type": "string" },
+          "kind": { "type": "string" },
+          "priority": { "type": "integer" },
+          "source": { "type": "string" },
+          "goal": { "type": "string" },
+          "lead": { "type": "string" },
+          "links": { "type": "array", "items": { "type": "string" } },
+          "media": { "type": "array", "items": { "type": "string" } },
+          "on_approve": { "type": "string" },
+          "switch_on": { "type": "string" },
+          "thread": { "type": "string" },
+          "state": { "$ref": "#/components/schemas/State" },
+          "note": { "type": "string" },
+          "created": { "type": "string" },
+          "decided": { "type": "string" },
+          "via": { "type": "string", "description": "cli, whatsapp, page, grant, system, chief, or api:TOKEN_NAME" },
+          "history": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "Thread": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string" },
+          "key": { "type": "string" },
+          "title": { "type": "string" },
+          "who": { "type": "string" },
+          "url": { "type": "string" },
+          "text": { "type": "string" },
+          "details": { "type": "string" },
+          "fields": { "type": "object" },
+          "messages": { "type": "array", "items": { "type": "object" } },
+          "comments": { "type": "array", "items": { "type": "object" } },
+          "chat": { "type": "array", "items": { "type": "object", "properties": { "time": { "type": "string" }, "from": { "type": "string" }, "to": { "type": "string" }, "text": { "type": "string" } } } },
+          "items": { "type": "array", "items": { "type": "string" } },
+          "created": { "type": "string" },
+          "changed": { "type": "string" },
+          "active": { "type": "string" },
+          "closed": { "type": "object" }
+        }
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "type": "string" },
+          "lead": { "type": "string" },
+          "role": { "type": "string" },
+          "description": { "type": "string" },
+          "schedule": { "type": "string" },
+          "every": { "type": "string" },
+          "trigger": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "status": { "type": "string" },
+          "last_run": { "type": "string" },
+          "detail": { "type": "string" },
+          "question": { "type": "string" },
+          "cwd": { "type": "string" },
+          "live": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
