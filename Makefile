@@ -13,10 +13,10 @@ lint:
 test: test-unit test-node
 
 # One job per core when GNU parallel is installed, otherwise one test at a time.
-JOBS ?= $(shell getconf _NPROCESSORS_ONLN)
+JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 
 test-unit:
-	@if command -v parallel >/dev/null; then bats --jobs $(JOBS) tests/unit; else bats tests/unit; fi
+	@if parallel --version 2>/dev/null | grep -q GNU; then bats --jobs $(JOBS) tests/unit; else bats tests/unit; fi
 
 test-node:
 	node --test tests/node/*.test.mjs
