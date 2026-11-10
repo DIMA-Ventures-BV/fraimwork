@@ -164,7 +164,8 @@ FAKE
   grep -q 'the web app' "$CLAUDE_ARGS"
   grep -q 'informal je' "$CLAUDE_ARGS"
   grep -q 'q1 \[rejected\] p2 idea: Old idea | owner: we tried that in May' "$CLAUDE_ARGS"
-  grep -q 'Goal budget: 0 of 3 used today' "$CLAUDE_ARGS"
+  run grep -q 'Goal budget' "$CLAUDE_ARGS"
+  [ "$status" -eq 1 ]
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" != *"fraim-goal start"* ]]
   [[ "$tools" == *"Edit(~/fraim/leads/web/**)"* ]]
@@ -223,7 +224,8 @@ FAKE
   [[ "$tools" == *"Bash(fraim-goal start --lead chief --approved-by:*)"* ]]
   [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
   [[ "$tools" != *"Bash,"* ]]
-  grep -q 'Goal budget: 0 of 2 used today' "$CLAUDE_ARGS"
+  run grep -q 'Goal budget' "$CLAUDE_ARGS"
+  [ "$status" -eq 1 ]
   grep -q 'daily digest' "$CLAUDE_ARGS"
   grep -q 'chief (lead)  \[on\]' "$CLAUDE_ARGS"
   rm -f "$SENT"
@@ -400,6 +402,19 @@ FAKE
   sleep 0.5
   [ ! -e "$CLAUDE_ARGS" ]
   [ "$(grep -c . "$FRAIM_LEADS_DIR/web/inbox.md")" -eq 3 ]
+}
+
+@test "notes a run that died was reading go back to the inbox" {
+  fraim-lead new web
+  mkdir "$FRAIM_LEADS_DIR/web/.running"
+  echo 999999 > "$FRAIM_LEADS_DIR/web/.running/pid"
+  echo "- from chief: never finished reading this" > "$FRAIM_LEADS_DIR/web/.running/inbox.md"
+  echo "- from chief: arrived after the crash" > "$FRAIM_LEADS_DIR/web/inbox.md"
+  run fraim-lead run web
+  [ "$status" -eq 0 ]
+  grep -q 'never finished reading this' "$CLAUDE_ARGS"
+  grep -q 'arrived after the crash' "$CLAUDE_ARGS"
+  [ ! -e "$FRAIM_LEADS_DIR/web/.running" ]
 }
 
 @test "every lead can talk to the chief and the other leads" {

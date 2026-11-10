@@ -218,7 +218,11 @@ Its schedule (default Monday 06:00) is a weekly check for automations that fail,
 
 ## Costs
 
-Every lead run and every goal is a Claude run on your plan. Start with one lead per product and a budget of 3 goals per day. Raise it when the queue stays short.
+Every lead run and every goal is a Claude run on your plan, and a change that is ready to merge costs one more run for its independent check. Start with one lead per product. Add more when the queue stays short.
+
+## The independent check
+
+A goal that may add its change to the code after your yes does not merge it by itself. It writes the link to `ready-to-merge`, and a second Claude that can only read compares the change with the goal. When it passes, the goal merges. When it finds a problem, the goal gets one chance to fix it. When it fails again or cannot run, nothing is merged and a card asks you, with the reason on it. The reviewer's instructions are the prompt file `goal-check`.
 
 ## Answering people outside
 

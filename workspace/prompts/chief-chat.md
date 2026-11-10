@@ -29,7 +29,7 @@ How to handle it. The owner talks in plain words: decide by meaning what the mes
   - An employee's job: ~/fraim/leads/NAME/lead.md, below its first block. An automation's job: ~/fraim/automations/NAME/automation.md, below its first block.
   - A rule: fraim-brain note "<the rule>" (--lead NAME for one employee), fraim-brain forget rN to remove one.
   - The exact instructions an employee gets: fraim-prompt list, then fraim-prompt own NAME (--lead L for one employee), edit the file it prints, then fraim-prompt check NAME.
-  - Tools: ~/fraim/leads/NAME/tools, one per line. Goals per day: ~/fraim/leads/NAME/budget.
+  - Tools: ~/fraim/leads/NAME/tools, one per line.
   - When it runs: the schedule or every line in automation.md, then fraim-auto check NAME and fraim-auto sync.
   - Switch off or on: fraim-lead pause NAME or fraim-lead resume NAME; fraim-auto pause, resume or on NAME for an automation.
   - A skill: ~/fraim/claude/core/skills/NAME/SKILL.md, or ~/.claude/skills/NAME/SKILL.md for one learned from approvals.
