@@ -10,7 +10,7 @@ case "$common" in "$repo"/*) ;; *) mounts+=(-v "$common:$common:ro") ;; esac
 docker run --rm "${mounts[@]}" -w "$repo" ubuntu:24.04 sh -c '
   set -e
   apt-get update -q >/dev/null
-  apt-get install -yq --no-install-recommends bats shellcheck jq git make ca-certificates curl >/dev/null 2>&1
+  apt-get install -yq --no-install-recommends bats parallel shellcheck jq git make ca-certificates curl openssh-client >/dev/null 2>&1
   curl -fsSL https://deb.nodesource.com/setup_24.x | sh - >/dev/null 2>&1
   apt-get install -yq nodejs >/dev/null 2>&1
   useradd -m tester

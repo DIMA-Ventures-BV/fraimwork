@@ -25,7 +25,7 @@ EOF
 [ -e "$OFFLINE" ] || printf 'notify%s %s\n' "${FRAIM_NOTIFY_CHAT:+ to $FRAIM_NOTIFY_CHAT}" "$*" >> "$SENT"
 EOF
   export OFFLINE="$T/offline" ALERTS="$T/alerts"
-  chmod +x "$T/bin/"*
+  find "$T/bin" -type f -exec chmod +x {} +
   printf 'FRAIM_MODULES=whatsapp,scheduler\n' > "$T/runtime.env"
   export PATH="$T/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
 }

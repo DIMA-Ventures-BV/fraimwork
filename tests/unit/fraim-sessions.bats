@@ -15,7 +15,7 @@ setup() {
 #!/usr/bin/env bash
 printf 'notify %s\n' "$*" >> "$SENT"
 EOF
-  chmod +x "$T/bin/"*
+  find "$T/bin" -type f -exec chmod +x {} +
   printf 'FRAIM_MODULES=whatsapp\n' > "$T/runtime.env"
   export PATH="$T/bin:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
 }
