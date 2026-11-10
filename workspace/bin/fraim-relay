@@ -8,6 +8,14 @@
 #   fraim-relay drain                          send what waits (one run at a time; add starts it)
 #   fraim-relay said [N]                       the last N messages and the notices behind them
 #   fraim-relay on                             true when a chief exists to write the messages
+#   fraim-relay log owner|me [--chat C] [--about "q4 g2"] -- TEXT
+#                                              add a line to the WhatsApp conversation with the owner
+#   fraim-relay context                        the conversation of the last day and the open decisions:
+#                                              what the chat, the chief and the brief read before they answer
+#
+# The conversation (~/fraim/relay/conversation.jsonl) holds every WhatsApp message between the owner
+# and the server: what the owner wrote, the chat's answers and the chief's messages, each with the
+# things it was about. So every voice of the server knows what the owner already said.
 #
 # Notices that arrive close together become one message (FRAIM_RELAY_WAIT seconds, default 20).
 # The owner gets at most one message per FRAIM_RELAY_GAP seconds (default 900): notices that come
@@ -25,6 +33,7 @@ goals="${FRAIM_GOALS_DIR:-$files/goals}"
 sessions="${FRAIM_SESSIONS_DIR:-$files/sessions}"
 pending="$relay/pending"
 said="$relay/said.md"
+convo="$relay/conversation.jsonl"
 
 usage() { echo "fraim-relay: $*" >&2; exit 2; }
 die() { echo "fraim-relay: $*" >&2; exit 1; }
@@ -135,12 +144,11 @@ background() {
 }
 
 prompt_for() {
-  local chief="$1" notices="$2" brief rules style recent queue
+  local chief="$1" notices="$2" brief rules style recent
   brief="$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")"
   rules="$(fraim-brain show --for "$chief" --all 2>/dev/null)"
   style="$(fraim-style prompt whatsapp 2>/dev/null)"
-  recent="$(tail -c 4000 "$said" 2>/dev/null)"
-  queue="$(fraim-queue list 2>/dev/null | head -30)"
+  recent="$(cmd_context 2>/dev/null)"
   cat <<EOF
 You are "$chief", the owner's chief of staff on their fraim server. The server's goals, coding
 sessions, leads and automations do not talk to the owner themselves: they send their notices to
@@ -153,11 +161,7 @@ EOF
   [ -z "$rules" ] || printf "\nThe owner's preferences, learned from reviews (follow them):\n\n%s\n" "$rules"
   cat <<EOF
 
-What you told the owner recently (newest last):
-${recent:-(nothing yet)}
-
-The owner's open queue:
-${queue:-(empty)}
+$recent
 
 Background on what the notices are about:
 $(background "$notices")
@@ -170,6 +174,9 @@ The owner gets too many messages. Each message costs their attention, so send on
 they need: a new decision, a finished result they asked for, or a real problem.
 
 Write the one WhatsApp message the owner reads now. Do the thinking for the owner:
+- Read the conversation first. When a notice follows from something the owner said (a yes, a
+  request, a correction), start from that: "You said yes to ..., so ...". Never ask again what
+  the owner already answered there; say what came of their answer instead.
 - Say what each thing is about in words the owner recognizes: the request they gave, not an id.
 - Say what happened, what it means for them, and your advice. Keep it short: a few lines.
 - Write it the way a person texts: whole sentences. Never copy labels from the notices
@@ -184,7 +191,8 @@ Write the one WhatsApp message the owner reads now. Do the thinking for the owne
 - Never write ids (g7, s2, q8, r3), file paths, file names, command syntax like "reply s2: ...",
   or words like goal, lead, session, queue.json. The server's Claude reads the owner's answer
   and routes it; the owner never types a code.
-- Write in the language the owner used for the request (Dutch when unsure).
+- Write in the language of the owner's latest message in the conversation (Dutch when there is
+  none), unless the owner's own rules below say otherwise.
 - Add a link (a PR, a preview) only when the owner needs it to decide.
 - You may look things up with your tools to check a claim, but change nothing.
 
@@ -245,14 +253,63 @@ relay_chat() {
       remember "$chat" "(held back)" "$notices"
       return 0
     fi
-    send "$chat" "${output:0:3500}" && { date +%s > "$relay/last-sent"; remember "$chat" "$output" "$notices"; return 0; }
+    send "$chat" "${output:0:3500}" && { date +%s > "$relay/last-sent"; remember "$chat" "$output" "$notices"; add_line me "$chat" "$(about_of "$notices")" "$output"; return 0; }
   fi
   # The chief could not write it: the owner gets the notices as they are.
   local raw
   raw="$(cat "$batch"/*.json | jq -rs --arg chat "$chat" 'map(select(.chat == $chat)) | sort_by(.time) | map(.text) | join("\n\n")')"
-  send "$chat" "${raw:0:3500}" && date +%s > "$relay/last-sent"
+  send "$chat" "${raw:0:3500}" && { date +%s > "$relay/last-sent"; add_line me "$chat" "$(about_of "$notices")" "$raw"; }
   remember "$chat" "(sent as it was; the chief could not write it)
 $raw" "$notices"
+}
+
+# The ids of what notices are about: the ids they name and the open decisions whose title they quote.
+about_of() {
+  local notices="$1" id title
+  {
+    printf '%s' "$notices" | grep -oE '[gsq][0-9]{1,6}' || true
+    command -v fraim-queue >/dev/null && fraim-queue list --json 2>/dev/null | jq -r '.[] | [.id, .title] | @tsv' 2>/dev/null |
+      while IFS=$'\t' read -r id title; do
+        [ -n "$title" ] && printf '%s' "$notices" | grep -qF -- "$title" && printf '%s\n' "$id"
+      done
+  } | awk '!seen[$0]++' | tr '\n' ' ' | sed 's/ *$//'
+}
+
+add_line() {
+  local who="$1" chat="$2" about="$3" text="$4" tmp
+  [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || return 0
+  mkdir -p "$relay"
+  jq -cn --arg time "$(date '+%Y-%m-%d %H:%M')" --arg who "$who" --arg chat "$chat" --arg about "$about" --arg text "${text:0:3000}" \
+    '{time: $time, who: $who, chat: $chat, about: $about, text: $text}' >> "$convo"
+  if [ "$(wc -l < "$convo")" -gt 400 ]; then
+    tmp="$(mktemp)"
+    tail -n 300 "$convo" > "$tmp" && cat "$tmp" > "$convo"
+    rm -f "$tmp"
+  fi
+}
+
+cmd_log() {
+  local who="${1:-}" chat="" about=""
+  case "$who" in owner|me) shift ;; *) usage 'log owner|me [--chat CHAT_ID] [--about "q4 g2"] -- TEXT' ;; esac
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --chat) chat="${2:-}"; shift 2 || usage "--chat needs a chat id" ;;
+      --about) about="${2:-}"; shift 2 || usage "--about needs ids" ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  add_line "$who" "$chat" "$about" "$*"
+}
+
+cmd_context() {
+  local since lines="" decisions=""
+  since="$(date -d '-24 hours' '+%Y-%m-%d %H:%M' 2>/dev/null || date -v-24H '+%Y-%m-%d %H:%M')"
+  [ ! -s "$convo" ] || lines="$(jq -Rr --arg since "$since" 'fromjson? | select(.time >= $since)
+    | "[\(.time[5:])] \(if .who == "owner" then "Owner" else "You" end)\(if (.about // "") != "" then " (about \(.about))" else "" end): \(.text | gsub("\n+"; " / ") | .[0:700])"' "$convo" 2>/dev/null | tail -n 24)"
+  printf 'The WhatsApp conversation with the owner in the last 24 hours, newest last. "You" is the server: the chat and the chief of staff are one voice to the owner. Ids in brackets are for commands, never for the owner.\n%s\n' "${lines:-(no messages)}"
+  ! command -v fraim-queue >/dev/null || decisions="$(fraim-queue list --json 2>/dev/null | jq -r '.[:15][] | "- \(.id): \(.title)" + (if (.ask // "") != "" then ". Asks: \(.ask)" else "" end)' 2>/dev/null)"
+  printf '\nDecisions that still wait for the owner (not answered yet):\n%s\n' "${decisions:-(none)}"
 }
 
 cmd_said() {
@@ -268,5 +325,7 @@ case "$action" in
   drain) cmd_drain ;;
   said) cmd_said "${1:-5}" ;;
   on) cmd_on ;;
-  *) usage 'add [--chat CHAT_ID] -- TEXT | drain | said [N] | on' ;;
+  log) cmd_log "$@" ;;
+  context) cmd_context ;;
+  *) usage 'add [--chat CHAT_ID] -- TEXT | drain | said [N] | on | log owner|me -- TEXT | context' ;;
 esac

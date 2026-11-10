@@ -102,6 +102,12 @@ You get one WhatsApp message per run, and none when the lead found nothing.
 
 `fraim lead new chief --chief` makes it. The chief is the one voice between you and everything technical. The WhatsApp chat talks as the chief: before it answers about work, it reads `fraim-lead brief` (the chief's brief and notes, what you were told, recent tasks with what they were for, coding sessions, leads, automations, open decisions and your rules) and tells you what each thing means, without ids. Every message you read also gets the plain-words rules from `fraim-style prompt`.
 
+One conversation: every WhatsApp message between you and the server (yours, the chat's answers and the chief's messages) goes into `~/fraim/relay/conversation.jsonl`. Each message you send arrives in the chat with the last day of that conversation and the decisions that still wait (`fraim-relay context`), and the chief reads the same before it writes. So a short "yes" is matched to the question you just saw and recorded on it, and no voice asks again what you already answered.
+
+One yes: a request you give in the chat is recorded as your yes (`fraim-queue grant`), and a yes in the queue covers the work that follows from it. What the engineer builds for it cites that yes (`fraim-queue add --approved-by qN`, within 14 days) and starts at once; you hear that it runs. Only work that reaches more than you said yes to (other people, money, new tools) asks again.
+
+Your voice: how the chief talks to you is yours to set. Say it on WhatsApp ("talk English to me", "don't call things agents") and it is saved in `~/fraim/styles/voice.md` (`fraim-style voice`, `voice add`, `voice remove N`). Those rules win over every other writing rule. Without them the chief writes in the language of your last message, says "je" in Dutch, and never uses the server's internal words (lead, engineer, goal, queue, merge, PR) without saying what they mean.
+
 Besides the chat, it has these runs.
 
 | Run | Starts when | It does | It tells you |

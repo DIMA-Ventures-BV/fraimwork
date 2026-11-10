@@ -76,3 +76,43 @@ setup() {
   run fraim-style prompt email
   [[ "$output" == *"default (detailed)"* ]]
 }
+
+@test "the owner's voice: add, list, remove, and it wins in every place" {
+  run fraim-style voice
+  [[ "$output" == "No own rules yet"* ]]
+  fraim-style voice add "Talk English to me"
+  fraim-style voice add "Call me Michael"
+  run fraim-style voice add "Talk English to me"
+  [[ "$output" == "Already a rule"* ]]
+  run fraim-style voice
+  [ "$output" = "1. Talk English to me
+2. Call me Michael" ]
+  for place in whatsapp queue default; do
+    run fraim-style prompt "$place"
+    [[ "$output" == *"The owner's own rules for how you talk to them. They win over every rule above:"* ]]
+    [[ "$output" == *"- Talk English to me"* ]]
+  done
+  fraim-style set whatsapp normal
+  run fraim-style prompt whatsapp
+  [[ "$output" == *"- Call me Michael"* ]]
+  run fraim-style voice remove 1
+  [ "$output" = "Removed: Talk English to me" ]
+  run fraim-style voice
+  [ "$output" = "1. Call me Michael" ]
+  run fraim-style voice remove 5
+  [ "$status" -eq 1 ]
+  run fraim-style
+  [[ "$output" == *"voice     1 own rules"* ]]
+  fraim-style voice clear
+  run fraim-style prompt whatsapp
+  [[ "$output" != *"own rules"* ]]
+}
+
+@test "plain words name no internal parts, translate developer words, and say je" {
+  run fraim-style prompt whatsapp
+  [[ "$output" == *'"de bouwer"'* ]]
+  [[ "$output" == *'merge/"gemerged" = "added to the code, not live yet"'* ]]
+  [[ "$output" == *'never "u"'* ]]
+  [[ "$output" == *"Never ask for a yes the owner already gave"* ]]
+  [[ "$output" == *"do not ask which part"* ]]
+}

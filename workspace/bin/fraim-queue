@@ -11,6 +11,10 @@
 //   fraim-queue show ID [--json]
 //   fraim-queue approve ID [--note TEXT]   switches on the item's automation (--switch-on) and runs its
 //                                          on-approve step as a goal, if it has them
+//   fraim-queue add ... --approved-by qN   the owner already approved qN (last 14 days): the new item
+//                                          is approved at once and the owner is told it started
+//   fraim-queue grant --title T [--note OWNER_WORDS] [--via whatsapp]
+//                                          record a request the owner gave in the chat as their yes
 //   fraim-queue reject ID --note TEXT      saves the reason for the brain; reworks the goal behind it
 //   fraim-queue dismiss ID                 closes the item, nothing else happens
 //   fraim-queue prio ID 1|2|3
@@ -205,6 +209,7 @@ export function addItem(opts) {
   if (opts.brain && !/^p\d{1,6}$/.test(opts.brain)) usage('--brain needs a proposal id (p1, p2, ...)')
   if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
   if (opts.switchOn && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(opts.switchOn)) usage('--switch-on needs an automation name')
+  if (opts.approvedBy && !/^q\d{1,6}$/.test(opts.approvedBy)) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
   const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
   if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
   const why = (Array.isArray(opts.why) ? opts.why : opts.why ? [opts.why] : []).map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
@@ -240,6 +245,14 @@ export function addItem(opts) {
     decided: '',
   }
   writeItem(item)
+  if (opts.approvedBy) {
+    try {
+      return approvedByGrant(item, String(opts.approvedBy))
+    } catch (err) {
+      if (err instanceof UsageError) throw err
+      process.stderr.write(`fraim-queue: ${err.message}. ${id} waits in the queue as a normal question.\n`)
+    }
+  }
   if (!opts.quiet) notify(newText(item))
   // A lead hears at once when a goal it started ends; the chief hears through its queue events.
   if (item.goal && item.lead && !isChief(item.lead)) {
@@ -262,8 +275,10 @@ function brainNote(item, verdict, note) {
   try { brain([...args, '--', note]) } catch (err) { process.stderr.write(`fraim-queue: the brain did not save the reason: ${err.message}\n`) }
 }
 
-function switchOn(name) {
-  const res = spawnSync(tool('fraim-auto'), ['on', name], { encoding: 'utf8', timeout: 30000 })
+function switchOn(name, granted = false) {
+  const env = { ...process.env }
+  if (granted) delete env.FRAIM_HEADLESS
+  const res = spawnSync(tool('fraim-auto'), ['on', name], { encoding: 'utf8', timeout: 30000, env })
   if (res.status !== 0) throw new Error(`could not switch on ${name}: ${(res.stderr || res.error?.message || '').trim().replace(/^fraim-auto: /, '')}`)
   return res.stdout.trim()
 }
@@ -320,6 +335,39 @@ export function decide(id, verdict, note = '', via = 'cli') {
   note = String(note || '').trim()
   if (verdict === 'rejected' && !note) usage('reject needs a reason (--note), so the agent knows what to change')
   if (!['approved', 'rejected', 'dismissed'].includes(verdict)) usage(`unknown decision ${verdict}`)
+  return applyDecision(item, verdict, note, via)
+}
+
+// The owner's yes covers the work that follows from it. An item added with --approved-by qN
+// (qN approved by the owner in the last 14 days) is approved at once: what was built for that
+// yes starts without a second question, and the owner hears that it runs.
+const GRANT_DAYS = 14
+export function approvedByGrant(item, grantId) {
+  if (!/^q\d{1,6}$/.test(grantId || '')) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
+  const grant = readItem(grantId)
+  if (grant.state !== 'approved' || grant.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
+  if (grant.brain || grant.skill) throw new Error(`${grantId} approved a brain change; ask the owner in the queue instead`)
+  const age = Date.now() - Date.parse(String(grant.decided).replace(' ', 'T'))
+  if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
+  item.approved_by = grantId
+  const done = applyDecision(item, 'approved', `The owner already said yes: "${grant.title}" (${grantId})${grant.note ? `: ${grant.note}` : ''}`, 'grant', { HEADLESS_OK: true })
+  grant.used_by = [...(grant.used_by || []), item.id]
+  writeItem(grant)
+  notify(`Started, because you already said yes to "${grant.title}": ${item.title}.${item.if_yes ? ` ${item.if_yes}` : ''}${done.follow_up ? ' A task for it has started.' : ''}`)
+  return done
+}
+
+// A request the owner gave in the chat is already their yes: record it as an approved item, so
+// what gets built for it can cite it with --approved-by and start without a second question.
+export function grantRequest(title, note, via = 'cli') {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Error('only the owner gives a yes; a goal, lead or automation cannot')
+  title = String(title || '').trim()
+  if (!title) usage('grant needs --title "<what the owner asked for>"')
+  const item = addItem({ title, kind: 'decision', source: 'the owner in the chat', quiet: true })
+  return applyDecision(item, 'approved', String(note || '').trim(), via)
+}
+
+function applyDecision(item, verdict, note, via, opts = {}) {
   let followUp = ''
   let outcome = ''
   // A brain proposal or a new skill changes nothing until the owner approves it here.
@@ -328,7 +376,7 @@ export function decide(id, verdict, note = '', via = 'cli') {
   } else if (item.skill) {
     outcome = verdict === 'approved' ? brain(['skill', 'install', item.skill]) : brain(['skill', 'discard', item.skill, '--note', note])
   } else if (verdict === 'approved' && (item.switch_on || item.on_approve)) {
-    if (item.switch_on) outcome = switchOn(item.switch_on)
+    if (item.switch_on) outcome = switchOn(item.switch_on, opts.HEADLESS_OK)
     if (item.on_approve) followUp = startGoal(approveText(item, note), item)
   } else if (verdict === 'rejected' && item.goal) {
     // A rejected idea only teaches the brain; a rejected piece of work is done again.
@@ -343,9 +391,10 @@ export function decide(id, verdict, note = '', via = 'cli') {
   writeItem(item)
   // A change to the brain from the command line could come from an agent: tell the owner.
   if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`, true)
-  if (verdict !== 'dismissed') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
-  if (item.lead) {
-    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}`)
+  if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
+  if (item.lead && via !== 'grant') {
+    const covers = verdict === 'approved' ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''
+    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}${covers}`)
   }
   return item
 }
@@ -1263,6 +1312,11 @@ function main(argv) {
       console.log(item.id)
       return
     }
+    case 'grant': {
+      const item = grantRequest(args.title, args.note, args.via === 'whatsapp' ? 'whatsapp' : 'cli')
+      console.log(item.id)
+      return
+    }
     case 'list': {
       let items = rank(allItems().filter((i) => args.all || i.state === 'open'))
       if (args.lead) items = items.filter((i) => i.lead === args.lead)
@@ -1308,7 +1362,7 @@ function main(argv) {
       return
     }
     default:
-      usage('add | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | prio ID N | serve | url')
+      usage('add | grant --title T | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | prio ID N | serve | url')
   }
 }
 
