@@ -11,6 +11,7 @@ test('an owner message carries the conversation and what to do with a yes', () =
   assert.match(out, /fraim-queue approve\|reject\|dismiss ID --via whatsapp/)
   assert.match(out, /Never answer a yes without recording it/)
   assert.match(out, /do not ask which part/)
+  assert.match(out, /Do not bring up the other waiting decisions/)
 })
 
 test('without context the message stays as it is', () => {
