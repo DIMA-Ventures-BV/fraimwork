@@ -50,3 +50,25 @@ print(msg['Subject'], '|', msg['In-Reply-To'], '|', msg['References'], '|', msg[
   run py "print(r.subject_of(m([], Subject='Login')))"
   [ "$output" = "Re: Login" ]
 }
+
+@test "events after a position, and the last number there is" {
+  export FRAIM_GOOGLE_DIR="$BATS_TEST_TMPDIR"
+  printf '%s\n' '{"seq":4,"id":"a","thread":"t1"}' '{"seq":5,"id":"b","thread":"t2"}' > "$BATS_TEST_TMPDIR/mail-events.jsonl"
+  run py "print(r.events({'after': 4})); print(r.events({'after': 9})); print(r.events({'after': 5}))"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "{'events': [{'seq': 5, 'id': 'b', 'thread': 't2'}], 'last': 5}" ]
+  [ "${lines[1]}" = "{'events': [], 'last': 5}" ]
+  [ "${lines[2]}" = "{'events': [], 'last': 5}" ]
+}
+
+@test "no mail yet is an empty list" {
+  export FRAIM_GOOGLE_DIR="$BATS_TEST_TMPDIR"
+  run py "print(r.events({}))"
+  [ "$output" = "{'events': [], 'last': 0}" ]
+}
+
+@test "status says nobody signed in without a login" {
+  export FRAIM_GOOGLE_DIR="$BATS_TEST_TMPDIR"
+  run py "print(r.status({}))"
+  [ "$output" = "{'signed_in': False, 'mode': 'check', 'last_check': 0}" ]
+}

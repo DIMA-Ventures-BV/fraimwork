@@ -13,6 +13,7 @@ export USER_GOOGLE_EMAIL
 # The reply sender holds the only send path for mail; the MCP server below offers agents drafts.
 if [ -n "${REPLY_TOKEN:-}" ]; then
   ( while :; do fraim-reply; sleep 5; done ) &
+  ( while :; do fraim-mail-watch; sleep 5; done ) &
 fi
 unset REPLY_TOKEN
 # shellcheck disable=SC2086  # GOOGLE_PERMISSIONS is a list of service:level words

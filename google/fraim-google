@@ -7,6 +7,8 @@
 #   fraim-google callback              the address from the browser after sign-in, on stdin
 #   fraim-google status                setup and sign-in state, no secrets
 #   fraim-google signout               delete the stored Google tokens
+#   fraim-google set-push TOPIC SUB    Google push for new mail; service account JSON on stdin
+#   fraim-google clear-push            back to looking at the mail every 30 seconds
 #   fraim-google health                container health check
 set -eu
 umask 077
@@ -14,6 +16,7 @@ DIR=/data/google
 CLIENT="$DIR/client_secret.json"
 EMAIL_FILE="$DIR/email"
 CREDS="$DIR/credentials"
+PUSH="$DIR/mail-push.json"
 
 die() { echo "fraim-google: $*" >&2; exit 1; }
 configured() { [ -s "$CLIENT" ] && [ -s "$EMAIL_FILE" ]; }
@@ -60,14 +63,32 @@ except urllib.error.HTTPError as e:
     if ! configured; then echo "setup: no OAuth client"; exit 0; fi
     echo "setup: OAuth client stored for $(cat "$EMAIL_FILE")"
     if signed_in; then echo "signed in: yes"; else echo "signed in: no"; fi
+    if [ -s "$PUSH" ]; then echo "new mail: Google push"; else echo "new mail: checked every 30 seconds"; fi
     ;;
   signout)
     rm -rf "${CREDS:?}"/*
     echo "Deleted the stored Google tokens."
     ;;
+  set-push)
+    printf '%s' "${2:-}" | grep -Eq '^projects/[a-z0-9-]+/topics/[A-Za-z0-9._~+%-]+$' || die "the topic looks like projects/PROJECT/topics/NAME"
+    printf '%s' "${3:-}" | grep -Eq '^projects/[a-z0-9-]+/subscriptions/[A-Za-z0-9._~+%-]+$' || die "the subscription looks like projects/PROJECT/subscriptions/NAME"
+    python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+if data.get("type") != "service_account" or not data.get("private_key") or not data.get("client_email"):
+    sys.exit("fraim-google: this is not a service account key file")
+json.dump({"topic": sys.argv[2], "subscription": sys.argv[3], "service_account": data}, open(sys.argv[1], "w"))
+' "$PUSH.new" "$2" "$3" || { rm -f "$PUSH.new"; exit 1; }
+    mv "$PUSH.new" "$PUSH"
+    echo "Google push is on: new mail arrives within seconds."
+    ;;
+  clear-push)
+    rm -f "$PUSH"
+    echo "Google push is off: the mail is checked every 30 seconds."
+    ;;
   health)
     configured || exit 0
     python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=4)'
     ;;
-  *) echo "usage: fraim-google configured|set-client EMAIL|callback|status|signout|health" >&2; exit 2 ;;
+  *) echo "usage: fraim-google configured|set-client EMAIL|callback|status|signout|set-push TOPIC SUBSCRIPTION|clear-push|health" >&2; exit 2 ;;
 esac
