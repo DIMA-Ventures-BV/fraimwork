@@ -27,6 +27,7 @@ import {
   contactChat,
   contactSender,
   digits,
+  guardConsole,
   httpError,
   isGroupOrBroadcast,
   parseAllowlist,
@@ -34,6 +35,8 @@ import {
   resolveChat as resolveChatFor,
   resolveSharedPath,
 } from './lib.mjs'
+
+guardConsole()
 
 const PORT = Number(process.env.PORT || 8080)
 const TOKEN = process.env.GATEWAY_TOKEN || ''
