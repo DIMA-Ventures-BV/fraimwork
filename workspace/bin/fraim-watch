@@ -28,6 +28,7 @@ const STATE = path.join(STORE, 'state.json')
 const SNAP = path.join(STORE, 'snap')
 const FILES = path.join(HOME, 'fraim')
 const MAX_BYTES = 256 * 1024
+const MAX_HASH_BYTES = 64 * 1024 * 1024
 const UNREADABLE = 'unreadable'
 const STALE_MS = 5 * 60 * 1000
 const MAX_EVENTS = 500
@@ -70,9 +71,13 @@ function readWatched(rel) {
   try {
     fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
     if (!fs.fstatSync(fd).isFile()) return UNREADABLE
+    const st = fs.fstatSync(fd)
+    if (st.size <= MAX_BYTES) return fs.readFileSync(fd, 'utf8')
+    // Too large to keep whole. The note makes any change anywhere in the file count as a change.
+    const whole = st.size <= MAX_HASH_BYTES ? sha(fs.readFileSync(fd)) : `${st.size} ${st.mtimeMs}`
     const buf = Buffer.alloc(MAX_BYTES)
     const n = fs.readSync(fd, buf, 0, MAX_BYTES, 0)
-    return buf.subarray(0, n).toString('utf8')
+    return `${buf.subarray(0, n).toString('utf8')}\n[fraim-watch: whole file ${whole}]`
   } catch { return UNREADABLE } finally { if (fd !== undefined) fs.closeSync(fd) }
 }
 
@@ -240,12 +245,12 @@ function restore(ev, stack) {
   if (currentHash(ev.path) !== ev.after) return `${label(ev.path)} was not touched: it changed again after this`
   if (ev.before === UNREADABLE) return `${label(ev.path)} cannot be put back: the earlier version could not be read`
   const full = path.join(HOME, ev.path)
-  if (ev.before === null) { fs.rmSync(full, { force: true }); return `${label(ev.path)} removed again` }
+  if (ev.before === null) { fs.rmSync(full, { recursive: true, force: true }); return `${label(ev.path)} removed again` }
   const text = snapshot(ev.before)
   if (text === null) return `${label(ev.path)} cannot be put back: the earlier version is gone`
   if (Buffer.byteLength(text) >= MAX_BYTES) return `${label(ev.path)} cannot be put back: it is too large`
   fs.mkdirSync(path.dirname(full), { recursive: true })
-  fs.rmSync(full, { force: true })
+  fs.rmSync(full, { recursive: true, force: true })
   fs.writeFileSync(full, text)
   return `${label(ev.path)} put back`
 }
@@ -257,7 +262,11 @@ function cmdUndo(id) {
   const open = (state?.events ?? []).filter((e) => ids.has(e.id))
   const chosen = id ? open.filter((e) => e.id === id) : open.filter((e) => e.batch === open.at(-1)?.batch)
   if (!chosen.length) die('there is nothing to undo')
-  for (const e of chosen.reverse()) process.stdout.write(`${restore(e, state.stack)}\n`)
+  for (const e of chosen.reverse()) {
+    let done
+    try { done = restore(e, state.stack) } catch (err) { done = `${label(e.path)} could not be put back: ${err.code ?? err.message}` }
+    process.stdout.write(`${done}\n`)
+  }
 }
 
 function cmdStatus() {

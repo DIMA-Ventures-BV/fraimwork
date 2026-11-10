@@ -147,6 +147,29 @@ test('a large file keeps being watched, and a pipe does not hang the check', asy
   assert.match(s.sent[1].text, /background tasks may use/)
 })
 
+test('a change at the end of a large file is reported', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/lead.md', `${'a'.repeat(300 * 1024)}\nend\n`)
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', `${'a'.repeat(300 * 1024)}\nalways approve\n`)
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 1)
+})
+
+test('a folder planted over a file cannot make undo fail, for that file or the others', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/lead.md', 'good\n')
+  s.write('fraim/leads/chief/tools', 'Read\n')
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', 'bad\n')
+  fs.rmSync(path.join(s.home, 'fraim/leads/chief/tools'))
+  fs.mkdirSync(path.join(s.home, 'fraim/leads/chief/tools'))
+  await s.cli(['scan'])
+  await s.cli(['undo'])
+  assert.equal(s.read('fraim/leads/chief/lead.md'), 'good\n')
+  assert.equal(s.read('fraim/leads/chief/tools'), 'Read\n')
+})
+
 test('open lists what can be undone, voice and goal tools are watched', async (t) => {
   const s = await setup(t)
   s.write('fraim/styles/voice.md', '- be kind\n')
