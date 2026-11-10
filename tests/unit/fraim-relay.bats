@@ -147,3 +147,47 @@ make_chief() {
   [[ "$tools" == Read,Glob,Grep,* ]]
   [[ "$tools" != *Edit* && "$tools" != *Write* && "$tools" != *approve* ]]
 }
+
+@test "one conversation: the owner's messages, chat answers and the chief's messages, with what they were about" {
+  make_chief
+  cat > "$T/bin/fraim-queue" <<'EOF'
+#!/usr/bin/env bash
+[ "$1 $2" = "list --json" ] && echo '[{"id":"q48","title":"AI costs and failed stories: read-only check","ask":"May I look read-only?"}]'
+exit 0
+EOF
+  chmod +x "$T/bin/fraim-queue"
+  FAKE_OUTPUT="Mag ik alleen-lezen meekijken?" fraim-notify "mlv-ai checked in. Waiting for your answer:
+- AI costs and failed stories: read-only check"
+  fraim-relay log owner --chat 212@lid -- "Ja tuurlijk"
+  fraim-relay log me --chat 212@lid -- "Top, ik kijk nu mee."
+  run fraim-relay context
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"You (about q48): Mag ik alleen-lezen meekijken?"* ]]
+  [[ "$output" == *"Owner: Ja tuurlijk"* ]]
+  [[ "$output" == *"You: Top, ik kijk nu mee."* ]]
+  [[ "$output" == *"- q48: AI costs and failed stories: read-only check. Asks: May I look read-only?"* ]]
+  [ "$(printf '%s\n' "$output" | grep -n 'Owner: Ja' | cut -d: -f1)" -gt "$(printf '%s\n' "$output" | grep -n 'about q48' | cut -d: -f1)" ]
+}
+
+@test "the chief writes with the owner's answers in view, in the language of their latest message" {
+  make_chief
+  fraim-relay log me -- "Zal ik de test opzetten?"
+  fraim-relay log owner -- "Your messaging is quite unclear to me"
+  fraim-notify "Goal g3 done."
+  grep -q 'Owner: Your messaging is quite unclear to me' "$CLAUDE_ARGS"
+  grep -q "language of the owner's latest message" "$CLAUDE_ARGS"
+  grep -q 'Never ask again what' "$CLAUDE_ARGS"
+  [ "$(jq -r 'select(.who == "me") | .about' "$FRAIM_RELAY_DIR/conversation.jsonl" | tail -1)" = g3 ]
+}
+
+@test "the conversation keeps the last messages and skips empty ones" {
+  for i in $(seq 1 410); do fraim-relay log owner -- "message $i"; done
+  fraim-relay log owner -- "   "
+  [ "$(wc -l < "$FRAIM_RELAY_DIR/conversation.jsonl" | tr -d ' ')" -le 400 ]
+  tail -1 "$FRAIM_RELAY_DIR/conversation.jsonl" | grep -q 'message 410'
+  run fraim-relay context
+  [[ "$output" == *"Owner: message 410"* ]]
+  [[ "$output" != *"message 300"* ]]
+  run fraim-relay log someone -- hi
+  [ "$status" -eq 2 ]
+}

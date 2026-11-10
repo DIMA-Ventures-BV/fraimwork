@@ -171,6 +171,74 @@ EOF
   [[ "$output" == *"only the owner decides"* ]]
 }
 
+@test "one yes: what is built for an approved item switches on at once, also from a headless run" {
+  cat > "$T/bin/fraim-auto" <<'EOF'
+#!/usr/bin/env bash
+[ "${FRAIM_HEADLESS:-}" != 1 ] || { echo "only the owner switches an automation on" >&2; exit 1; }
+printf '%s\n' "$*" >> "$AUTO_ARGS"
+echo "$2 is on."
+EOF
+  chmod +x "$T/bin/fraim-auto"
+  export AUTO_ARGS="$T/auto.args"
+  "$Q" add --quiet --lead mlv-ai --kind decision --title "AI costs: read-only check"
+  "$Q" approve q1 --note "ja tuurlijk"
+  rm -f "$SENT"
+  FRAIM_HEADLESS=1 run "$Q" add --quiet --lead engineer --kind decision --title "Daily AI cost report" --if-yes "Every morning you see what stories cost." --switch-on ai-costs --approved-by q1
+  [ "$status" -eq 0 ]
+  [ "$output" = q2 ]
+  [ "$(cat "$AUTO_ARGS")" = "on ai-costs" ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q2/item.json")" = approved ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q2/item.json")" = grant ]
+  [ "$(jq -r '.used_by[0]' "$FRAIM_QUEUE_DIR/q1/item.json")" = q2 ]
+  # The owner hears it runs, with no question.
+  grep -q 'already said yes to "AI costs: read-only check": Daily AI cost report' "$SENT"
+  run grep -q 'New in your queue' "$SENT"; [ "$status" -eq 1 ]
+}
+
+@test "a yes cannot be borrowed: no open, rejected, brain or chained item; the item then waits as a question" {
+  cat > "$T/bin/fraim-auto" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$AUTO_ARGS"
+EOF
+  chmod +x "$T/bin/fraim-auto"
+  export AUTO_ARGS="$T/auto.args"
+  "$Q" add --quiet --title "still open"
+  "$Q" add --quiet --title "said no"
+  "$Q" reject q2 --note "no"
+  "$Q" add --quiet --title "said yes"
+  "$Q" approve q3
+  for grant in q1 q2; do
+    run "$Q" add --quiet --title "built" --switch-on thing --approved-by "$grant"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"waits in the queue as a normal question"* ]]
+  done
+  "$Q" add --quiet --title "granted" --switch-on thing --approved-by q3
+  # A yes given by a grant is not the owner's yes; it cannot grant further.
+  run "$Q" add --quiet --title "chained" --switch-on other --approved-by q6
+  [[ "$output" == *"not a yes from the owner"* ]]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q7/item.json")" = open ]
+  [ "$(grep -c . "$AUTO_ARGS")" = 1 ]
+  run "$Q" add --title x --approved-by nope
+  [ "$status" -eq 2 ]
+  # An old yes does not count.
+  jq '.decided = "2026-01-01T00:00:00Z"' "$FRAIM_QUEUE_DIR/q3/item.json" > "$T/i" && mv "$T/i" "$FRAIM_QUEUE_DIR/q3/item.json"
+  run "$Q" add --quiet --title "late" --switch-on late --approved-by q3
+  [[ "$output" == *"older than 14 days"* ]]
+}
+
+@test "grant records a request from the chat as the owner's yes; a headless run cannot" {
+  run "$Q" grant --title "Daily security check" --note "doe maar elke dag" --via whatsapp
+  [ "$status" -eq 0 ]
+  [ "$output" = q1 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = approved ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = whatsapp ]
+  [ ! -e "$SENT" ]
+  FRAIM_HEADLESS=1 run "$Q" grant --title "sneaky"
+  [ "$status" -eq 1 ]
+  run "$Q" grant
+  [ "$status" -eq 2 ]
+}
+
 @test "supersede closes only open failures of the same decision, and only for a goal that finished it" {
   for g in g1 g2 g3 g4 g5; do mkdir -p "$FRAIM_GOALS_DIR/$g"; done
   echo q9 > "$FRAIM_GOALS_DIR/g1/queue"; echo q9 > "$FRAIM_GOALS_DIR/g2/queue"; echo q8 > "$FRAIM_GOALS_DIR/g3/queue"

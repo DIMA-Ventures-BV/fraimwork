@@ -10,13 +10,20 @@
 #   fraim-style set PLACE STYLE       change one place (PLACE all changes every place)
 #   fraim-style list                  the styles there are
 #   fraim-style show STYLE            the rules of one style
-#   fraim-style prompt PLACE          the block a prompt gets for that place (empty for normal)
+#   fraim-style prompt PLACE          the block a prompt gets for that place
+#   fraim-style voice                 the owner's own rules for how the chief talks to them
+#   fraim-style voice add RULE        add one ("Talk English to me", "Call me Michael")
+#   fraim-style voice remove N        drop rule N
+#   fraim-style voice clear           drop them all
 #
-# Settings live in ~/fraim/styles/settings as PLACE=STYLE lines. Exit codes: 0 ok, 1 failure, 2 usage.
+# Settings live in ~/fraim/styles/settings as PLACE=STYLE lines, the voice in ~/fraim/styles/voice.md
+# (one "- rule" per line; the owner may edit it by hand). The voice goes into every place and wins
+# over every other writing rule. Exit codes: 0 ok, 1 failure, 2 usage.
 set -euo pipefail
 
 dir="${FRAIM_STYLE_DIR:-${FRAIM_FILES_DIR:-$HOME/fraim}/styles}"
 settings="$dir/settings"
+voice="$dir/voice.md"
 PLACES="whatsapp queue default"
 DEFAULT_STYLE=adhd
 
@@ -72,7 +79,54 @@ Plain words, always (every style). The owner reads this and must understand it w
 - A question names what will happen when the owner says yes, so a yes is enough: "Shall I run the Dependabot updates for pupstar again?", not "Retry g5?".
 - Never ask the owner to do a manual step (log in, enter a code) when an agent can find another way; a yes must be enough.
 - A decision for the owner says, in business words, why it is needed, what changes when the owner says yes (and the risk), what happens on no, and your advice. Translate tools and packages into what they do: not "update sharp and puppeteer-core" but "fix security holes in the tools that make photos and PDF books".
+- The owner talks to one assistant. Never name the server's own parts (lead, engineer, builder, "de bouwer", agent, chief, goal, session, queue, automation, worker): say "I" for whatever they do, and name the work itself. Not "the builder is on it" but "I'm setting it up".
+- Translate developer words: merge/"gemerged" = "added to the code, not live yet"; deploy = "put live"; pull request/PR = "a proposed change"; built switched off = "ready, but not running yet"; dry run = "a test run"; repo = the product's name; dependency/package = what the tool does.
+- Write in the language of the owner's latest message. In Dutch, say "je", never "u".
+- Every yes gets its result: say what happens now and when the owner hears back. Never ask for a yes the owner already gave.
+- When the owner says a message was unclear, do not ask which part. Write it again from the start in plain words: what they asked or answered, what happened, what still waits for them.
 EOF
+}
+
+voice_rules() { [ -f "$voice" ] && grep -E '^- ' "$voice" || true; }
+
+voice_block() {
+  local rules
+  rules="$(voice_rules)"
+  [ -n "$rules" ] || return 0
+  printf "\nThe owner's own rules for how you talk to them. They win over every rule above:\n%s\n" "$rules"
+}
+
+cmd_voice() {
+  local sub="${1:-show}" tmp n
+  shift || true
+  case "$sub" in
+    show)
+      if [ -z "$(voice_rules)" ]; then echo "No own rules yet. Add one: fraim-style voice add \"Talk English to me\""; return 0; fi
+      voice_rules | awk '{ sub(/^- /, ""); printf "%d. %s\n", NR, $0 }' ;;
+    add)
+      [ $# -gt 0 ] || usage 'fraim-style voice add RULE'
+      local rule
+      rule="$(printf '%s' "$*" | tr '\n' ' ' | sed -e 's/^[[:space:]-]*//' -e 's/[[:space:]]*$//')"
+      [ -n "$rule" ] || usage 'fraim-style voice add RULE'
+      mkdir -p "$dir"
+      [ -f "$voice" ] || printf '# How the chief of staff talks to me\n\n' > "$voice"
+      if voice_rules | grep -qixF -- "- $rule"; then echo "Already a rule: $rule"; return 0; fi
+      printf -- '- %s\n' "$rule" >> "$voice"
+      echo "Added: $rule" ;;
+    remove)
+      n="${1:-}"
+      [[ "$n" =~ ^[0-9]+$ ]] || usage 'fraim-style voice remove N'
+      [ "$n" -ge 1 ] && [ "$n" -le "$(voice_rules | wc -l)" ] || { echo "no rule $n: run fraim-style voice" >&2; exit 1; }
+      tmp="$(mktemp "$dir/.voice.XXXXXX")"
+      awk -v n="$n" '/^- / { i++; if (i == n) { sub(/^- /, ""); print > "/dev/stderr"; next } } { print }' "$voice" > "$tmp" 2> "$tmp.gone"
+      mv "$tmp" "$voice"
+      echo "Removed: $(cat "$tmp.gone")"
+      rm -f "$tmp.gone" ;;
+    clear)
+      rm -f "$voice"
+      echo "No own rules now." ;;
+    *) usage 'fraim-style voice [add RULE | remove N | clear]' ;;
+  esac
 }
 
 valid_place() { case " $PLACES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -88,7 +142,8 @@ set_place() {
 cmd="${1:-status}"; shift || true
 case "$cmd" in
   status)
-    for p in $PLACES; do printf '%-9s %s\n' "$p" "$(style_of "$p")"; done ;;
+    for p in $PLACES; do printf '%-9s %s\n' "$p" "$(style_of "$p")"; done
+    printf '%-9s %s own rules (fraim-style voice)\n' voice "$(voice_rules | wc -l | tr -d ' ')" ;;
   set)
     [ $# -eq 2 ] || usage "fraim-style set whatsapp|queue|default|all STYLE"
     style_exists "$2" || { printf 'no style "%s": run fraim-style list\n' "$2" >&2; exit 1; }
@@ -113,6 +168,8 @@ case "$cmd" in
     style="$(style_of "$place")"
     rules="$(style_text "$style" 2>/dev/null || true)"
     [ -z "$rules" ] || printf 'Writing style for %s (%s). Follow it unless the owner asks for more or less detail in this message:\n%s\n\n' "$place" "$style" "$rules"
-    plain_words ;;
-  *) usage "fraim-style [set PLACE STYLE | list | show STYLE | prompt PLACE]" ;;
+    plain_words
+    voice_block ;;
+  voice) cmd_voice "$@" ;;
+  *) usage "fraim-style [set PLACE STYLE | list | show STYLE | prompt PLACE | voice [add RULE | remove N | clear]]" ;;
 esac
