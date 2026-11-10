@@ -544,3 +544,15 @@ Meta spent 400 euro this week for 3 orders." run "$AUTO" run ads
   [ "$(fraim-queue list --json | jq -r '.[].title')" = "Automation other failed" ]
   [ "$(fraim-queue show q1 --json | jq -r .note)" = "Solved: the automation works again" ]
 }
+
+@test "an automation that names a skill may use it, and one without keeps its list" {
+  make_auto withskill 'tools: Read
+skill: inbox-rules' 'Sort the mail.'
+  run "$AUTO" run withskill
+  [ "$status" -eq 0 ]
+  grep -qx 'Read,Skill' "$CLAUDE_ARGS"
+  make_auto noskill 'tools: Read' 'Sort the mail.'
+  run "$AUTO" run noskill
+  [ "$status" -eq 0 ]
+  grep -qx 'Read' "$CLAUDE_ARGS"
+}

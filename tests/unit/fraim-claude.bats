@@ -75,3 +75,31 @@ setup() {
   run fraim-claude --continue
   [[ "$output" == *"$HOME/.local/state/fraim/server-prompt.md"* ]]
 }
+
+@test "a run nobody watches that names its tools gets only those tools" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  run fraim-claude -p "hi" --allowedTools "Read"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--permission-mode" ]
+  [ "${lines[1]}" = "dontAsk" ]
+  [[ "$output" != *"--dangerously-skip-permissions"* ]]
+}
+
+@test "the tool lists are not enforced without a list, in a chat, or with TOOL_LISTS=open" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  run fraim-claude -p "hi"
+  [ "${lines[0]}" = "--dangerously-skip-permissions" ]
+  run fraim-claude --continue --allowedTools "Read"
+  [ "${lines[0]}" = "--dangerously-skip-permissions" ]
+  FRAIM_TOOL_LISTS=open run fraim-claude -p "hi" --allowedTools "Read"
+  [ "${lines[0]}" = "--dangerously-skip-permissions" ]
+  FRAIM_PERMISSIONS=ask run fraim-claude -p "hi" --allowedTools "Read"
+  [ "${lines[0]}" = "-p" ]
+}
+
+@test "the guard is a hook for every Claude, and a run nobody watches may not edit its own tool list" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  jq -e '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command == "/usr/local/bin/fraim-guard"' "$BATS_TEST_DIRNAME/../../workspace/managed-settings.json"
+  run fraim-claude -p "hi" --allowedTools "Read"
+  [[ "$output" == *"Edit(~/fraim/leads/*/tools)"* ]]
+}

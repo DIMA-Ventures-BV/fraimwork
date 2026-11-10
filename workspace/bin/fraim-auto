@@ -462,6 +462,7 @@ run_once() {
     tools="$(get "$f" tools)"; [ -n "$tools" ] || tools="$DEFAULT_TOOLS"
     tools="$(printf '%s' "$tools" | tr -d '\n' | sed 's/[[:space:]]*,[[:space:]]*/,/g')"
     model="$(get "$f" model)"; skill="$(get "$f" skill)"
+    [ -z "$skill" ] || tools="$tools,Skill"
     previous=""
     if is_true "$(get "$f" remember)"; then
       previous="$(sget "$name" previous_output)"

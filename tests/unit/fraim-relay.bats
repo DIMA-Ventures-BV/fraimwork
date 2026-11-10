@@ -227,3 +227,45 @@ EOF
   grep -q 'Goal g9 done' "$CLAUDE_ARGS"
   run grep -q 'Never write ids' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
 }
+
+@test "the owner sets how often the chief may message, and a run nobody watches cannot" {
+  run fraim-relay timing
+  [[ "$output" == *"gap 900 seconds"*"wait 20 seconds"* ]]
+  run fraim-relay timing gap 2
+  [ "$status" -eq 0 ]
+  run fraim-relay timing
+  [[ "$output" == *"gap 2 seconds"* ]]
+  run fraim-relay timing gap soon
+  [ "$status" -eq 2 ]
+  run fraim-relay timing often 3
+  [ "$status" -eq 2 ]
+  FRAIM_HEADLESS=1 run fraim-relay timing gap 5
+  [ "$status" -eq 1 ]
+  [ "$(cat "$FRAIM_RELAY_DIR/settings")" = "gap=2" ]
+}
+
+@test "the owner's gap is what the relay waits for" {
+  make_chief
+  fraim-relay timing gap 2
+  date +%s > "$FRAIM_RELAY_DIR/last-sent"
+  start=$(date +%s)
+  unset FRAIM_RELAY_GAP
+  run fraim-notify "Goal g8 done. Alpha."
+  [ "$status" -eq 0 ]
+  [ $(( $(date +%s) - start )) -ge 1 ]
+  grep -q 'Klaar' "$SENT"
+}
+
+@test "a number with a leading zero does not break the relay, and the wait is the owner's too" {
+  fraim-relay timing gap 0900
+  [ "$(cat "$FRAIM_RELAY_DIR/settings")" = "gap=900" ]
+  fraim-relay timing wait 2
+  run fraim-relay timing
+  [[ "$output" == *"wait 2 seconds"* ]]
+  make_chief
+  start=$(date +%s)
+  unset FRAIM_RELAY_WAIT
+  run fraim-notify "Goal g8 done. Alpha."
+  [ "$status" -eq 0 ]
+  [ $(( $(date +%s) - start )) -ge 1 ]
+}

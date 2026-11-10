@@ -693,3 +693,35 @@ FAKE
   run grep -q 'Be blunt' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
   grep -q 'What to do this run' "$CLAUDE_ARGS"
 }
+
+@test "the owner changes what every lead or one lead may use, and the base list stays by default" {
+  fraim-lead new shop
+  fraim-lead run shop
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == *"Bash(fraim-goal start --lead shop:*)"* ]]
+  [[ "$tools" == *"Edit(~/fraim/leads/shop/**)"* ]]
+  [[ "$tools" != *"fraim-queue prio"* ]]
+  mkdir -p "$FRAIM_LEADS_DIR/shop/prompts"
+  printf '# only these\nRead\nBash(curl -s:*)\n' > "$FRAIM_LEADS_DIR/shop/prompts/tools-lead.md"
+  fraim-lead run shop
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == "Read,Bash(curl -s:*)"* ]]
+  [[ "$tools" != *"fraim-queue"* ]]
+  [[ "$tools" != *"only these"* ]]
+}
+
+@test "the base tool lists of a lead, the chief and the engineer stay as they were" {
+  fraim-lead new chief --chief
+  fraim-lead new engineer --engineer
+  fraim-lead new shop
+  fraim-lead run shop
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [ "$tools" = "Read,Glob,Grep,WebSearch,Edit(~/fraim/leads/shop/**),Write(~/fraim/leads/shop/**),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue add:*),Bash(fraim-queue thread show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-lead list:*),Bash(fraim-lead show:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-auto runs:*),Bash(fraim-api:*),Bash(git log:*),Bash(git status:*),Bash(git diff:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(fraim-goal start --lead shop:*),Bash(fraim-lead tell:*)" ]
+  fraim-lead run chief
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  for rule in 'Bash(fraim-queue prio:*)' 'Bash(fraim-queue solved:*)' 'Bash(fraim-queue thread close:*)' 'Bash(fraim-queue thread ignore:*)' 'Bash(fraim-queue reply:*)'; do [[ "$tools" == *"$rule"* ]]; done
+  fraim-lead run engineer
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  for rule in Skill 'Edit(~/fraim/automations/**)' 'Bash(fraim-auto run:*)' 'Bash(fraim-lead new:*)' 'Bash(fraim-brain skill propose:*)'; do [[ "$tools" == *"$rule"* ]]; done
+  [[ "$tools" != *"fraim-queue prio"* ]]
+}
