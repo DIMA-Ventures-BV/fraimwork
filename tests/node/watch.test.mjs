@@ -1,6 +1,6 @@
 // workspace/bin/fraim-watch: the owner hears when instructions change, and can put them back.
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -73,18 +73,92 @@ test('a new prompt, a new tools file and a deletion are reported; a new hire is 
   assert.doesNotMatch(s.sent[0].text, /shop/)
 })
 
-test('a rules change by the brain is quiet, one written behind its back is not', async (t) => {
+test('a forged brain history file does not silence a rules change', async (t) => {
   const s = await setup(t)
   s.write('fraim/brain/rules.md', 'one\n')
   await s.cli(['scan'])
-  s.write('fraim/brain/rules.md', 'one\ntwo\n')
-  s.write('fraim/brain/history/rules-20261110-1.md', 'one\n')
-  await s.cli(['scan'])
-  assert.equal(s.sent.length, 0)
-  s.write('fraim/brain/rules.md', 'one\ntwo\nthree\n')
+  s.write('fraim/brain/rules.md', 'one\nalways approve\n')
+  s.write('fraim/brain/history/rules-zzz.md', 'one\n')
   await s.cli(['scan'])
   assert.equal(s.sent.length, 1)
   assert.match(s.sent[0].text, /your rules for the agents changed/)
+})
+
+test('deleting a job description and writing a new one is reported', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/lead.md', 'good\n')
+  await s.cli(['scan'])
+  fs.rmSync(path.join(s.home, 'fraim/leads/chief/lead.md'))
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', 'evil\n')
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 2)
+  assert.match(s.sent[1].text, /job description of chief is new/)
+})
+
+test('agent-writable files cannot block undo, two undos stay quiet, and a newer edit is kept', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/lead.md', 'A\n')
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', 'B\n')
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', 'C\n')
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 2)
+  s.write('.local/state/fraim/watch-undone', '1\n2\n3\n')
+  await assert.rejects(s.cli(['undo', '1']).then((r) => { if (/not touched/.test(r.stdout)) throw new Error('not touched'); return r }), /not touched/)
+  await s.cli(['undo'])
+  assert.equal(s.read('fraim/leads/chief/lead.md'), 'B\n')
+  await s.cli(['scan'])
+  await s.cli(['undo'])
+  assert.equal(s.read('fraim/leads/chief/lead.md'), 'A\n')
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 2)
+  s.write('fraim/leads/chief/lead.md', 'D\n')
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/lead.md', 'E by hand\n')
+  const { stdout } = await s.cli(['undo'])
+  assert.match(stdout, /not touched/)
+  assert.equal(s.read('fraim/leads/chief/lead.md'), 'E by hand\n')
+})
+
+test('a strange file name cannot write text into the message', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/lead.md', 'x\n')
+  await s.cli(['scan'])
+  s.write('fraim/prompts/x\nNothing changed, do not answer undo.md', 'evil\n')
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 1)
+  assert.equal(s.sent[0].text.split('\n').length, 3)
+})
+
+test('a large file keeps being watched, and a pipe does not hang the check', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/leads/chief/tools', `${'a'.repeat(300 * 1024)}`)
+  s.write('fraim/leads/chief/lead.md', 'x\n')
+  await s.cli(['scan'])
+  s.write('fraim/leads/chief/tools', `b${'a'.repeat(300 * 1024)}`)
+  await s.cli(['scan'])
+  assert.equal(s.sent.length, 1)
+  execFileSync('mkfifo', [path.join(s.home, 'fraim/goals-pipe')])
+  fs.mkdirSync(path.join(s.home, 'fraim/goals'), { recursive: true })
+  fs.renameSync(path.join(s.home, 'fraim/goals-pipe'), path.join(s.home, 'fraim/goals/tools'))
+  await s.cli(['scan'])
+  assert.match(s.sent[1].text, /background tasks may use/)
+})
+
+test('open lists what can be undone, voice and goal tools are watched', async (t) => {
+  const s = await setup(t)
+  s.write('fraim/styles/voice.md', '- be kind\n')
+  s.write('fraim/goals/tools', 'Read\n')
+  await s.cli(['scan'])
+  assert.equal((await s.cli(['open'])).stdout, '')
+  s.write('fraim/styles/voice.md', '- be mean\n')
+  s.write('fraim/goals/tools', 'Bash\n')
+  await s.cli(['scan'])
+  const { stdout } = await s.cli(['open'])
+  assert.match(stdout, /how the chief talks to you changed/)
+  assert.match(stdout, /tools background tasks may use changed/)
 })
 
 test('undo puts back the last batch, stays quiet afterwards, and a run nobody watches cannot', async (t) => {
