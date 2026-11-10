@@ -16,7 +16,7 @@ ENV LANG=C.UTF-8 \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      openssh-server mosh tmux git curl ca-certificates jq ripgrep less vim-tiny \
+      openssh-server mosh git curl ca-certificates jq ripgrep less vim-tiny \
       python3 python3-venv procps tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && echo 'LANG=C.UTF-8' > /etc/default/locale

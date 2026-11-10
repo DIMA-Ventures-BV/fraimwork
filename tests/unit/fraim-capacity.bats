@@ -16,7 +16,7 @@ setup() {
 #!/usr/bin/env bash
 case "$1 $2" in
   "ls --json") cat "$LIST" ;;
-  "hc get") jq -c --arg n "$3" '.[] | select(.name == $n) | {status: {state: .status}}' "$LIST" ;;
+  "status "*) jq -r --arg n "$2" '.[] | select(.name == $n) | .status' "$LIST" ;;
   "hc kill")
     [ "${FRAIM_HEADLESS:-}" != 1 ] || [[ "$3" == g* ]] || exit 1
     echo "$3" >> "$KILLS"
@@ -114,13 +114,11 @@ mem() { printf 'MemAvailable: %s kB\n' "$(( $1 * 1024 ))" > "$FRAIM_MEMINFO"; }
 @test "reclaim checks again right before closing: a session that started working stays" {
   mem 100
   # The list says done; by the time of the close the terminal works again.
-  cat > "$T/bin/fraim-herdr-get" <<'EOF'
-EOF
   jq '(.[] | select(.name == "s3") | .status) = "done"' "$LIST" > "$T/l" && mv "$T/l" "$LIST"
   cp "$T/bin/fraim-herdr" "$T/bin/fraim-herdr.orig"
   cat > "$T/bin/fraim-herdr" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1 $2" = "hc get" ] && [ "$3" = s3 ]; then echo '{"status": {"state": "working"}}'; exit 0; fi
+if [ "$1 $2" = "status s3" ]; then echo working; exit 0; fi
 exec "$(dirname "$0")/fraim-herdr.orig" "$@"
 EOF
   chmod +x "$T/bin/fraim-herdr"
