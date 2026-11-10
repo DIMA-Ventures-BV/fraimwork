@@ -28,6 +28,9 @@
 //   fraim-queue thread mail GMAIL_THREAD_ID   save a mail chain as a conversation (--quiet: tell nobody)
 //   fraim-queue thread put [--kind K] [--key K] [--file F]   save anything else, JSON on stdin or in F
 //   fraim-queue thread say tN --from WHO [--to WHO] -- TEXT  add a line to the agents' chat
+//   fraim-queue thread close tN --from WHO --reason TEXT    no work needed; refused while it waits for the owner
+//   fraim-queue thread ignore --from ADDRESS|@DOMAIN        keep a sender out for good (~/fraim/inbox-rules.md)
+//   fraim-queue thread ignore "RULE"                        an example of what does not belong
 //   fraim-queue thread show tN | list
 //
 // Items live in ~/fraim/queue/<id>/item.json, media next to it. Priority 1 is urgent.
@@ -851,7 +854,10 @@ export function putThread(data) {
     t.stats = { count: (t.stats?.count || 0) + n, first: t.stats?.first || now(), last: now() }
   }
   const news = isNew || before !== JSON.stringify([t.messages.length, t.comments.length, t.text])
-  if (news) t.changed = now()
+  if (news) {
+    t.changed = now()
+    delete t.closed
+  }
   writeThread(t)
   return { thread: t, isNew, news }
 }
@@ -861,6 +867,63 @@ export function sayInThread(id, from, to, text) {
   fs.appendFileSync(path.join(THREADS, id, 'chat.jsonl'), `${JSON.stringify({ time: now(), from: String(from), to: String(to || ''), text: String(text).slice(0, 4000) })}\n`)
   t.active = now()
   writeThread(t)
+}
+
+// What does not belong in the inbox, in a file the owner can read and change. "never:" lines keep
+// a sender out for good; "not relevant:" lines are examples the mail check learns from.
+const RULES = path.join(HOME, 'fraim/inbox-rules.md')
+const RULES_HEAD = '# What does not belong in the inbox. Change this file as you like.\n# never: an address or @domain that is kept out for good\n# not relevant: a mail you marked, an example for the mail check\n'
+
+function addRule(line) {
+  const clean = String(line).replace(/\s+/g, ' ').trim().slice(0, 200)
+  const old = readText(RULES, 200000) || RULES_HEAD
+  const lines = old.split('\n').filter(Boolean)
+  if (!lines.includes(`- ${clean}`)) lines.push(`- ${clean}`)
+  const head = lines.filter((l) => !l.startsWith('- '))
+  fs.writeFileSync(RULES, `${[...head, ...lines.filter((l) => l.startsWith('- ')).slice(-300)].join('\n')}\n`)
+  return clean
+}
+
+function removeRule(line) {
+  const old = readText(RULES, 200000)
+  if (old) fs.writeFileSync(RULES, old.split('\n').filter((l) => l !== `- ${line}`).join('\n'))
+}
+
+function neverShow(address) {
+  const a = String(address || '').toLowerCase()
+  if (!a) return false
+  return readText(RULES, 200000).split('\n').some((l) => {
+    const m = /^- never:\s*(\S+)/i.exec(l)
+    return m && (a === m[1].toLowerCase() || (m[1].startsWith('@') && a.endsWith(m[1].toLowerCase())))
+  })
+}
+
+// The owner's "Not relevant": gone from the list, questions about it closed, and the mail check learns.
+export function dismissThread(t) {
+  for (const i of allItems().filter((x) => x.thread === t.id && x.state === 'open')) decide(i.id, 'dismissed', 'Not relevant', 'page')
+  const last = t.messages.at(-1)
+  const rule = addRule(`not relevant: ${last?.from || t.who}${last?.address ? ` <${last.address}>` : ''}, "${t.title}"`)
+  t.closed = { by: 'owner', time: now(), rule }
+  writeThread(t)
+  if (t.active) tellChief(t, 'owner', promptText('thread-closed', { title: t.title }))
+}
+
+export function restoreThread(t) {
+  if (t.closed?.rule) removeRule(t.closed.rule)
+  delete t.closed
+  writeThread(t)
+}
+
+// An agent closes what needs no work. What still waits for the owner stays.
+export function closeThread(id, from, reason) {
+  const t = readThread(id)
+  const why = String(reason || '').trim()
+  if (!why) usage('thread close needs --reason')
+  if (allItems().some((i) => i.thread === id && i.state === 'open')) throw new Error('this conversation still needs the owner')
+  sayInThread(id, from || 'chief', '', why)
+  const fresh = readThread(id)
+  fresh.closed = { by: String(from || 'chief'), time: now() }
+  writeThread(fresh)
 }
 
 function readChat(id) {
@@ -961,6 +1024,7 @@ function workers() {
 
 const RECENT = 15 * 60 * 1000
 function threadState(t, open, working) {
+  if (t.closed) return 'done'
   if (open.length) return 'need'
   if (working?.length) return 'work'
   if (!t.active) return 'new'
@@ -985,7 +1049,8 @@ export function inboxRows() {
       snippet: open[0] ? `${asker}: ${open[0].ask || open[0].title}` : chat ? `${displayName(chat.from)}: ${firstWords(spoken(chat.text))}` : firstWords(last?.text || t.text),
       time: [t.changed, t.active, ...mine.map((i) => i.created)].sort().at(-1),
       state: threadState(t, open, working[t.id]),
-      unread: t.changed > (t.seen || ''),
+      closed: Boolean(t.closed),
+      unread: !t.closed && t.changed > (t.seen || ''),
     }
   })
   const loose = items.filter((i) => !i.thread)
@@ -1167,6 +1232,7 @@ export async function captureMail(gmailThread, quiet = false) {
   const html = await call('get_gmail_thread_content', { thread_id: gmailThread, body_format: 'html' })
   const parsed = parseGmailThread(text, html)
   if (!parsed.messages.length) throw new Error('that mail chain has no messages')
+  if (neverShow(parsed.messages.at(-1).address)) return { thread: null, isNew: false, news: false }
   const r = putThread({ kind: 'email', key: `gmail:${gmailThread}`, url: `https://mail.google.com/mail/u/0/#all/${gmailThread}`, ...parsed })
   if (r.news && !quiet) announce(r)
   return r
@@ -1242,11 +1308,16 @@ export function createServer(secret = token()) {
       }
       if (req.method === 'GET' && url.pathname === '/api/employees') return send(res, 200, employees())
       if (req.method === 'GET' && url.pathname === '/api/threads') return send(res, 200, inboxRows())
-      const conv = /^\/api\/threads\/([tq]\d{1,6})(?:\/(seen|say))?$/.exec(url.pathname)
+      const conv = /^\/api\/threads\/([tq]\d{1,6})(?:\/(seen|say|dismiss|restore))?$/.exec(url.pathname)
       if (conv && req.method === 'GET' && !conv[2]) return send(res, 200, threadDetail(conv[1]))
       if (conv && req.method === 'POST' && conv[2]) {
         if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
         const t = readThread(conv[1])
+        if (conv[2] === 'dismiss' || conv[2] === 'restore') {
+          if (conv[2] === 'dismiss') dismissThread(t)
+          else restoreThread(t)
+          return send(res, 200, { ok: true })
+        }
         if (conv[2] === 'seen') {
           t.seen = now()
           writeThread(t)
@@ -2086,6 +2157,9 @@ a { color:var(--accent); }
 .c .b { color:var(--soft); font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .ask { border:1px solid color-mix(in srgb, var(--yellow) 50%, var(--line)); border-radius:8px; padding:9px 11px; margin-top:5px; font-size:13.5px; }
 .ask.closed { border-color:var(--line); color:var(--soft); }
+.nr { float:right; background:none; border:1px solid var(--line2); border-radius:6px; color:var(--muted); font-size:12px; font-weight:500; padding:3px 9px; cursor:pointer; }
+.nr:hover { color:var(--ink); background:var(--hover); }
+.toast button { background:none; border:0; color:var(--accent); font-weight:600; cursor:pointer; margin-left:10px; padding:0; }
 .foryou { font-size:11px; font-weight:600; color:var(--yellow); margin-bottom:3px; }
 .c.side { grid-template-columns:22px minmax(0,1fr); gap:8px; margin-bottom:10px; }
 .c.side .av { width:22px; height:22px; font-size:9px; }
@@ -2160,7 +2234,7 @@ function when(d, short) {
   return short ? day : day + ', ' + hm
 }
 function toast(t) { var e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.style.display = 'none' }, 3000) }
-function shown() { return rows.filter(function (r) { return tab === 'all' ? !(r.kind === 'item' && r.state === 'done') : r.state === tab || (tab === 'work' && r.state === 'new') }) }
+function shown() { return rows.filter(function (r) { return tab === 'all' ? !r.closed && !(r.kind === 'item' && r.state === 'done') : r.state === tab || (tab === 'work' && r.state === 'new') }) }
 function drawList() {
   var key = JSON.stringify([rows, cur, tab, chief && chief.typing, chief && chief.messages.length]); if (key === listKey) return; listKey = key
   $('#tabs').innerHTML = TABS.map(function (x) { return '<button data-t="' + x[0] + '" class="' + (tab === x[0] ? 'on' : '') + '">' + x[1] + '</button>' }).join('')
@@ -2280,13 +2354,13 @@ function chatHtml(c) {
 }
 function drawAgents() {
   var t = data; if (!t) { $('#agents').innerHTML = ''; return }
-  var key = JSON.stringify([t.id, t.chat, t.working]); if (key === sideKey) return
+  var key = JSON.stringify([t.id, t.chat, t.working, Boolean(t.closed)]); if (key === sideKey) return
   var same = sideKey && JSON.parse(sideKey)[0] === t.id
   sideKey = key
   var waiting = t.chat.some(function (c) { return c.item && c.item.state === 'open' })
-  var status = waiting ? 'Needs your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it. Nothing needed from you.' : t.chat.length ? 'Nothing needed from you.' : 'No agent has picked this up yet'
+  var status = t.closed ? 'Closed' : waiting ? 'Needs your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it. Nothing needed from you.' : t.chat.length ? 'Nothing needed from you.' : 'No agent has picked this up yet'
   var old = $('#chat'), atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 30
-  $('#agents').innerHTML = '<div class="ah"><b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') + '</div></div>' +
+  $('#agents').innerHTML = '<div class="ah">' + (/^t/.test(t.id) ? '<button class="nr" id="nr">' + (t.closed ? 'Put back' : 'Not relevant') + '</button>' : '') + '<b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') + '</div></div>' +
     (t.working.length ? '<div class="working" role="status"><span class="bars"><i></i><i></i><i></i></span><span>' + esc(t.working.join(', ')) + (t.working.length > 1 ? ' are' : ' is') + ' working on it</span></div>' : '')
   var box = $('#chat'); if (!same || atEnd) box.scrollTop = box.scrollHeight
   $('#reply').style.display = /^t/.test(t.id) ? '' : 'none'
@@ -2331,6 +2405,17 @@ async function post(url, body) {
   if (!r || !r.ok) { toast('That did not work. Try again.'); return false }
   return true
 }
+async function markThread() {
+  var id = cur, closing = !data.closed
+  if (!await post('/api/threads/' + id + '/' + (closing ? 'dismiss' : 'restore'), {})) return
+  sideKey = ''
+  if (!closing) { toast('Put back in your inbox.'); await loadRows(); await loadDetail(); return }
+  var list = shown(), at = list.findIndex(function (r) { return r.id === id }), next = list[at + 1] || list[at - 1]
+  var e = $('#toast'); e.innerHTML = 'Removed. Mail like this stays out from now on.<button id="undo">Undo</button>'; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.style.display = 'none' }, 7000)
+  $('#undo').onclick = async function () { e.style.display = 'none'; if (await post('/api/threads/' + id + '/restore', {})) { await loadRows(); await pick(id) } }
+  await loadRows()
+  if (next && next.id !== id) await pick(next.id); else if (chief && chief.exists) await pick('chief')
+}
 function move(step) { var l = shown(), i = l.findIndex(function (r) { return r.id === cur }), n = l[i + step]; if (n) pick(n.id) }
 $('#list').addEventListener('click', function (e) { var b = e.target.closest('.msg'); if (b) pick(b.dataset.id) })
 $('#tabs').addEventListener('click', function (e) { var b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; var f = shown()[0]; if (f && !shown().some(function (r) { return r.id === cur })) pick(f.id); else drawList() })
@@ -2347,6 +2432,7 @@ $('#message').addEventListener('click', function (e) {
   drawMiddle(true)
 })
 $('#agents').addEventListener('click', async function (e) {
+  if (e.target.id === 'nr') { markThread(); return }
   var b = e.target.closest('button[data-v]'); if (!b) return
   if (await post('/api/items/' + b.dataset.item + '/decide', { verdict: b.dataset.v, note: '' })) { sideKey = ''; loadRows(); loadDetail() }
 })
@@ -2399,7 +2485,7 @@ function threadCommand(args) {
   const [what, id, ...words] = args._
   switch (what) {
     case 'mail':
-      return captureMail(id, args.quiet).then((r) => console.log(r.thread.id))
+      return captureMail(id, args.quiet).then((r) => console.log(r.thread ? r.thread.id : 'kept out by inbox-rules.md'))
     case 'put': {
       const data = JSON.parse(fs.readFileSync(args.file || 0, 'utf8'))
       if (args.kind) data.kind = args.kind
@@ -2408,6 +2494,12 @@ function threadCommand(args) {
       if (r.news && !args.quiet) announce(r)
       return console.log(r.thread.id)
     }
+    case 'close':
+      if (!id) usage('thread close tN --from WHO --reason TEXT')
+      return closeThread(id, args.from, args.reason)
+    case 'ignore':
+      if (!args.from && !id) usage('thread ignore --from ADDRESS|@DOMAIN, or thread ignore "RULE"')
+      return console.log(addRule(args.from ? `never: ${args.from}` : `not relevant: ${[id, ...words].join(' ')}`))
     case 'say':
       if (!id) usage('thread say tN --from WHO [--to WHO] -- TEXT')
       return sayInThread(id, args.from || 'owner', args.to || '', words.join(' '))
@@ -2417,7 +2509,7 @@ function threadCommand(args) {
     case 'list':
       return console.log(inboxRows().map((r) => `${r.id}  ${r.state}  ${r.who}  ${r.title}`).join('\n'))
     default:
-      usage('thread mail GMAIL_THREAD_ID | put [--kind K] [--key K] [--file F] | say tN --from WHO -- TEXT | show tN | list')
+      usage('thread mail GMAIL_THREAD_ID | put [--kind K] [--key K] [--file F] | say tN --from WHO -- TEXT | close tN --from WHO --reason TEXT | ignore --from ADDRESS | ignore "RULE" | show tN | list')
   }
 }
 

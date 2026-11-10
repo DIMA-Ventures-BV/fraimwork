@@ -162,6 +162,27 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   for (let i = 0; i < 50 && !fs.existsSync(asked); i++) await new Promise((r) => setTimeout(r, 100))
   assert.equal(fs.readFileSync(asked, 'utf8').trim(), 'chat -- Thanks')
 
+  const rules = path.join(home, 'fraim/inbox-rules.md')
+  assert.equal((await post('/api/threads/t3/dismiss', {})).status, 200)
+  let gone = (await get('/api/threads')).find((r) => r.id === 't3')
+  assert.deepEqual([gone.state, gone.closed, gone.unread], ['done', true, false])
+  assert.match(fs.readFileSync(rules, 'utf8'), /^- not relevant: Shop <news@example.com>, "Big news"$/m, 'the mail check learns from it')
+  assert.equal((await post('/api/threads/t3/restore', {})).status, 200)
+  gone = (await get('/api/threads')).find((r) => r.id === 't3')
+  assert.equal(gone.closed, false)
+  assert.doesNotMatch(fs.readFileSync(rules, 'utf8'), /Big news/, 'undo takes the example back')
+  assert.throws(() => cli('thread', 'close', 't1', '--from', 'chief'), /--reason/)
+  cli('add', '--title', 'Still open', '--ask', 'Yes?', '--kind', 'decision', '--thread', 't2', '--quiet')
+  assert.throws(() => execFileSync(process.execPath, [bin, 'thread', 'close', 't2', '--from', 'chief', '--reason', 'done'], { env, stdio: 'pipe' }), /needs the owner/)
+  cli('thread', 'close', 't4', '--from', 'chief', '--reason', 'Just a thank-you, nothing to do.')
+  assert.equal((await get('/api/threads')).find((r) => r.id === 't4').closed, true)
+  assert.match(cli('thread', 'ignore', '--from', '@spam.example'), /never: @spam.example/)
+  threads.spam00001 = { text: head('Buy now', 1) + message(1, 'Spam <a@spam.example>', 'Buy.') }
+  assert.equal(await mail('spam00001'), 'kept out by inbox-rules.md')
+  assert.equal(fs.existsSync(path.join(home, 'fraim/threads/t6')), false, 'a sender kept out leaves no trace')
+  cli('thread', 'ignore', 'newsletters about sales')
+  assert.match(fs.readFileSync(rules, 'utf8'), /^- not relevant: newsletters about sales$/m)
+
   const staff = await get('/api/employees')
   assert.deepEqual(staff.people.map((p) => [p.title, p.does, p.product, p.starts, p.tools]), [
     ['Platform', 'The whole web app.', 'shop', ['schedule 0 6 * * 1-5'], ['Github', 'Linear']],
