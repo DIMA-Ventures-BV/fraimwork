@@ -292,7 +292,7 @@ cmd_chat() {
       --set "recent=$(cmd_context 2>/dev/null)" \
       --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
       --set "text=$text")" \
-    --allowedTools "Read,Glob,Grep,Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style voice:*),Bash(fraim-relay said:*)" \
+    --allowedTools "Read,Glob,Grep,Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style voice:*),Bash(fraim-relay said:*)" \
     2>>"$relay/errors.log")"
   code=$?
   output="$(printf '%s' "$output" | sed -e 's/[[:space:]]*$//')"

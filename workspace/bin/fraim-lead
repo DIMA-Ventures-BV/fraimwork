@@ -274,7 +274,7 @@ tools_for() {
   t+=("Bash(fraim-goal start --lead $name:*)")
   t+=("Bash(fraim-lead tell:*)")
   if [ "$chief" = 1 ]; then
-    t+=("Bash(fraim-queue prio:*)" "Bash(fraim-queue solved:*)")
+    t+=("Bash(fraim-queue prio:*)" "Bash(fraim-queue solved:*)" "Bash(fraim-queue thread close:*)" "Bash(fraim-queue thread ignore:*)")
     while IFS= read -r repo; do [ -z "$repo" ] || t+=("$repo"); done < <(fraim-auto sources --tools 2>/dev/null)
   fi
   # The engineer builds: it writes automations, plugins, lead briefs and skill drafts, and tests
