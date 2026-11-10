@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# fraim-gate: carries stdin to the secrets gate and prints its answer. An invited laptop
+# calls this over SSH. It holds no token itself; see secrets/fraim-secret-gate.
+set -euo pipefail
+exec 3<>/dev/tcp/secrets/8081
+cat >&3
+cat <&3

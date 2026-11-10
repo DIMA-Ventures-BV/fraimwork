@@ -135,6 +135,15 @@ Triggers: the user says "a fraimwork update is available" (the server sends this
    Report them separately ("These were already broken before: ..."), then handle each with the table in "Health first".
 4. The checkout is a detached HEAD at the release tag after an update. Never `git pull`, `git checkout` or `git reset` in it: `$F update` is the only way to move it.
 
+## Invite someone to a server you run
+
+Use this when the server is for another person who keeps their own Claude on their own laptop. See docs/invite.md.
+
+1. Run `$F invite NAME`. It exits 3 with the Tailscale share step: pass it on and wait for the link.
+2. Run `$F invite NAME --share-url LINK`. The invite goes to a file and the clipboard. Never print the file.
+3. Tell the user to send that file by a private channel, with the one line the command printed.
+4. To end access: `$F invite revoke NAME`.
+
 ## Move to a new server
 
 1. Ask the user to create the new server (setting-up-fraim, Path B step 3; the SSH key `laptop` already exists, so they tick it instead of adding it) and give the IP.

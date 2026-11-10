@@ -91,6 +91,50 @@ if printf 'a b{c}' | dc exec -T secrets fraim-secret set echo >/dev/null 2>&1; t
   bad "a key with spaces or braces refused"
 else ok "a key with spaces or braces refused"; fi
 
+# The gate for invited laptops, through the real workspace client script.
+GATE_TOKEN="$(openssl rand -hex 32)"
+GATE_KEY="gk-real-$(openssl rand -hex 12)"
+docker pull -q bash:5.2 >/dev/null
+gate() { docker run --rm -i --network "${P}_secrets" -v "$PWD/workspace/bin/fraim-gate:/fraim-gate:ro" bash:5.2 bash /fraim-gate 2>&1; }
+tab="$(printf '\t')"
+
+out="$(printf '%s\nhas%secho\n' "$GATE_TOKEN" "$tab" | gate)"
+[[ "$out" == "error refused" ]] && ok "gate: refused while no laptop was invited" || bad "gate: refused while no laptop was invited" "$out"
+
+printf '%s' "$GATE_TOKEN" | sha256sum | cut -d' ' -f1 | dc exec -T secrets fraim-secret gate-add alice >/dev/null
+
+out="$(printf '%s\nhas%secho\n' "$SECRETS_TOKEN" "$tab" | gate)"
+[[ "$out" == "error refused" ]] && ok "gate: Claude's session token does not open it" || bad "gate: Claude's session token does not open it" "$out"
+
+out="$(printf '%s\nhas%secho\n' "$GATE_TOKEN" "$tab" | gate)"
+[[ "$out" == "ok yes" ]] && ok "gate: a laptop can see that a key exists" || bad "gate: a laptop can see that a key exists" "$out"
+
+out="$(printf '%s\nadd%sgated%shttp://echo:80%sAuthorization%sBearer %%s\n' "$GATE_TOKEN" "$tab" "$tab" "$tab" "$tab" | gate)"
+[[ "$out" == ok* ]] && ok "gate: a laptop can add a service" || bad "gate: a laptop can add a service" "$out"
+
+out="$(printf '%s\nset%sgated\n%s\n' "$GATE_TOKEN" "$tab" "$GATE_KEY" | gate)"
+[[ "$out" == ok* && "$out" != *"$GATE_KEY"* ]] && ok "gate: a laptop can store a key and gets no key back" || bad "gate: a laptop can store a key and gets no key back" "$out"
+
+for _ in 1 2 3 4 5; do
+  out="$(req client /gated/x "Authorization: Bearer $SECRETS_TOKEN")"
+  [[ "$out" == *"$GATE_KEY"* ]] && break
+  sleep 1
+done
+[[ "$out" == *"auth=[Bearer $GATE_KEY]"* ]] && ok "gate: the stored key reaches the API" || bad "gate: the stored key reaches the API" "$out"
+
+out="$(printf '%s\nget%sgated\n' "$GATE_TOKEN" "$tab" | gate)"
+[[ "$out" == "error usage" ]] && ok "gate: no command reads a key" || bad "gate: no command reads a key" "$out"
+
+out="$(printf '%s\nset%sgated%sextra\n' "$GATE_TOKEN" "$tab" "$tab" | gate)"
+[[ "$out" == "error usage" ]] && ok "gate: a malformed request is refused" || bad "gate: a malformed request is refused" "$out"
+
+out="$(printf '%s\nadd%sevil%shttp://evil.example%sAuthorization%s$(touch /tmp/pwned)%%s\n' "$GATE_TOKEN" "$tab" "$tab" "$tab" "$tab" | gate)"
+[[ "$out" == error* ]] && ! dc exec -T secrets test -e /tmp/pwned && ok "gate: shell text in a field does nothing" || bad "gate: shell text in a field does nothing" "$out"
+
+dc exec -T secrets fraim-secret gate-rm alice >/dev/null
+out="$(printf '%s\nhas%secho\n' "$GATE_TOKEN" "$tab" | gate)"
+[[ "$out" == "error refused" ]] && ok "gate: a revoked laptop is refused" || bad "gate: a revoked laptop is refused" "$out"
+
 dc exec -T secrets fraim-secret rm echo >/dev/null
 out="$(req client /echo/x "Authorization: Bearer $SECRETS_TOKEN")"
 [[ "$out" == *401* ]] && ok "removed service stops working" || bad "removed service stops working" "$out"
