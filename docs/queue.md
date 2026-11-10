@@ -63,6 +63,15 @@ Your decision has these effects, and only these:
 
 The ranking is: priority, then age, so nothing waits forever. The chief of staff changes priorities; it never decides for you.
 
+A card can also close because its problem is gone. That is not a decision, so nothing starts and the brain learns nothing:
+
+- A failure card closes by itself when that automation runs well again.
+- The chief closes a card as solved when one of its sources proves it (`fraim-queue solved q3 --proof "..."`). It only does this for failure cards and cards from automations, never for a card with a next step or a goal result. The proof is on the card in the history.
+
+### Sources: what the chief knows
+
+Each source is one small plugin that prints plain text. Built-in ones are in `/etc/fraim/automation-kit/sources`; put your own in `~/fraim/automations/_sources/NAME`. A new file gives the chief something new to know, and nothing else has to change. `fraim-auto sources` shows what the chief gets now. Built in: `commits` (the last 3 days on the main branch of each repository, from any machine) and `mail-replies` (which open cards came from mail, so the chief can look for a reply). A source that fails says so, and the chief then assumes nothing from it.
+
 ### Where you review
 
 - **Page:** `fraim queue` on the laptop opens it. Keys: `j`/`k` move, `a` approve, `r` reject, `d` dismiss, `n` write a note, `v` dictate a note, `1` `2` `3` priority. The page is on the tailnet only and needs the link with the token once (the browser then keeps a cookie). `fraim queue keep` makes it always available on a Mac: a launchd agent keeps an SSH tunnel open on `http://localhost:3109` through restarts of the Mac and the server, so a bookmark always works; `fraim queue keep --off` removes it.
