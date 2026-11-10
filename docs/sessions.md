@@ -120,10 +120,8 @@ stays open. Otherwise a goal that read a hostile page could have a session appro
 work. Like every `FRAIM_HEADLESS` check this is a guard for Claude's own tools, not a sandbox:
 a run with Bash could still call `hc` directly. The text of a finished session's last message
 is shortened and tokens or keys in it are hidden (`fraim-herdr redact`) before it goes to
-WhatsApp. At most
-`FRAIM_SESSIONS_MAX` run at once, because each Claude takes 300 to 500 MB. The default
-follows the server's memory: 1.5 GB stays free for main, the browser and WhatsApp, and every
-500 MB of the rest is one session (4 on a 4 GB server, about 12 on 8 GB, at most 20).
+WhatsApp. A new session opens only when the server has memory for one more Claude
+(`fraim-capacity`); `FRAIM_SESSIONS_MAX`, when set, also caps how many run at once.
 `stop` closes the terminal; `send` reopens it with `--resume`.
 
 ## Limits

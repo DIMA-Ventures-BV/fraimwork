@@ -92,6 +92,8 @@ hcx() {
 # Only gone or finished may be replaced: a busy core must never cost a running Claude.
 term_state() {
   local rec rc
+  # Outside the workspace (the scheduler) hc would start a core of its own: ask only a live one.
+  in_workspace || alive || { echo unknown; return; }
   rec="$(hc get "$1" --json 2>/dev/null)"
   rc=$?
   if [ "$rc" -eq 3 ]; then echo gone; return; fi
@@ -243,7 +245,7 @@ cmd_attach() {
 # its label, and ask the full record (hc get) only for a blocked one, for its question.
 cmd_ls() {
   local json='[]' kind part row name
-  for kind in main goal session shell service; do
+  for kind in main goal session shell; do
     part="$(hcx ls --label "fraim=$kind" --json 2>/dev/null)" || die "could not list the sessions"
     json="$(jq --arg k "$kind" --argjson p "$part" '. + [$p.terminals[] | {name: (.name // .address), kind: $k, status: (.status // "none"), question: "", cwd, turn}]' <<<"$json")"
   done
@@ -253,7 +255,7 @@ cmd_ls() {
   done
   if [ "${1:-}" = --json ]; then printf '%s\n' "$json"; return 0; fi
   [ "$(jq length <<<"$json")" -gt 0 ] || { echo "No sessions."; return 0; }
-  jq -r --arg h "$HOME/" '.[] | select(.kind != "service") | "\(.name)\t\(.kind)\t\(.status)\t\(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "\t" + .question else "" end)"' <<<"$json"
+  jq -r --arg h "$HOME/" '.[] | "\(.name)\t\(.kind)\t\(.status)\t\(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "\t" + .question else "" end)"' <<<"$json"
 }
 
 # Claude Code's transcript for a session id: the last text it wrote (empty when none yet).
