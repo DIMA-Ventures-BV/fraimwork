@@ -199,10 +199,15 @@ Guards:
 The chief and the engineer grow your team for you. A lead is an employee with one area of one of your companies or projects: a product, a repo, ads, sales, support, finance or ops.
 
 1. The chief notices work that no lead owns: three or more items or notes in two weeks, or one lead's area that is too big. It tells the engineer: "Hire: someone for <area> of <company> because <what it saw>". It sends at most one hire a week and never repeats one you turned down.
-2. The engineer creates the lead switched off and writes the brief from what is really on the server: repos, automations, APIs and your rules.
-3. You get one question: "Hire someone for ads of the shop: checks spend and sales every weekday morning?" When you approve, the lead is hired and starts working.
+2. The engineer creates the lead switched off, writes the brief from what is really on the server (repos, automations, APIs and your rules) and gives it only the tools its job needs.
+3. The engineer runs a trial: `fraim-lead try NAME` runs the employee once on real data. The trial reads and changes nothing: tools that write are held back, and `fraim-api` refuses anything but reads. It passes when the employee used its tools and says it could do its job.
+4. You get one question: "Hire someone for ads of the shop: checks spend and sales every weekday morning?" When you approve, the lead is hired and starts working. `fraim-queue add --switch-on` refuses this question without a passed trial of the current brief and tools.
 
-On a fresh server, with only the chief and the engineer, both suggest a first team of at most 3 leads for the areas with the most going on. You can also just say "I need someone for X". The chief passes it to the engineer in the same way.
+On a fresh server, with only the chief and the engineer, both suggest a first team of at most 3 leads for the areas with the most going on.
+
+You can also just say "I need someone for X", in plain words. The chief first finds what it can on the server and asks you only what is still unknown, such as which account or how often. When the engineer later finds something unclear, its question reaches you through the chief.
+
+The rules for all of this are one prompt file, `hiring`. Change it with `fraim-prompt own hiring`, or tell the chief. The trial's instructions are the prompt file `lead-trial`.
 
 Its schedule (default Monday 06:00) is a weekly check for automations that fail, are paused or answer nothing useful. All other runs start from a note.
 

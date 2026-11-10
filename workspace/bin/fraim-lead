@@ -17,6 +17,7 @@
 #   fraim-lead list
 #   fraim-lead show NAME
 #   fraim-lead run NAME          what its automation runs; also fine by hand
+#   fraim-lead try NAME [--status]  one trial run of a new employee on real data; changes nothing
 #   fraim-lead tell NAME [--from WHO] -- TEXT    leave a note in the lead's inbox and wake it now
 #   fraim-lead ask [NAME|--chief] -- TEXT        the owner asks a lead (the chief by default); it runs now
 #   fraim-lead brief                             what the chief knows, for the chat that talks as the chief
@@ -462,6 +463,83 @@ $(fraim-queue url 2>/dev/null)"
   fi
 }
 
+# A trial reads and changes nothing, so it keeps only the rules below. The engineer can write
+# in ~/fraim/leads, so the result lives where it cannot.
+trial_file() { printf '%s' "$HOME/.local/state/fraim/trials/$1.json"; }
+trial_hash() { { cat "$1/lead.md"; cat "$1/tools" 2>/dev/null; } | cksum | cut -d' ' -f1; }
+trial_tools() {
+  local rule out=()
+  while IFS= read -r rule; do
+    case "$rule" in
+      Read|Glob|Grep|WebSearch|WebFetch|ToolSearch) out+=("$rule") ;;
+      mcp__*__*)
+        printf '%s' "${rule##*__}" | grep -Eqi 'send|creat|updat|delet|post|put|patch|writ|remov|merge|push|publish|pay|reply|draft|save|modif|upload|cancel|archiv|label' || out+=("$rule") ;;
+      *)
+        printf '%s' "$rule" | grep -Eq '^Bash\((fraim-api|git( -C [^ ]+)? (log|status|diff|show|fetch)|gh [a-z]+ (list|view)|fraim-(queue|goal|lead|auto) (list|show|runs)|fraim-queue thread show)[: ]' && out+=("$rule") ;;
+    esac
+  done < <(printf '%s' "$1" | tr ',' '\n')
+  local IFS=,
+  printf '%s' "${out[*]}"
+}
+
+# try NAME: run a new employee once, switched off or not, and keep the verdict. --status only
+# says whether the last trial passed for the brief and tools it has now.
+cmd_try() {
+  local name="$1" status="${2:-}" dir file
+  dir="$(lead_dir "$name")" || exit $?
+  file="$(trial_file "$name")"
+  if [ "$status" = --status ]; then
+    [ -f "$file" ] || { echo "it has had no trial yet (fraim-lead try $name)"; exit 1; }
+    [ "$(jq -r .status "$file")" = passed ] || { echo "its last trial failed: $(jq -r .reason "$file")"; exit 1; }
+    [ "$(jq -r .hash "$file")" = "$(trial_hash "$dir")" ] || { echo "its brief or tools changed after the trial (fraim-lead try $name)"; exit 1; }
+    echo "passed $(jq -r .at "$file")"
+    return 0
+  fi
+  if is_chief "$dir" || is_engineer "$dir"; then die "only a new employee gets a trial; $name is the chief or the engineer"; fi
+  [ ! -d "$dir/.running" ] || die "lead $name is running now; try again when it is done"
+
+  local tmp hash live code=0 limit=() dirs=() reason="" verdict=failed answer last
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/fraim-trial.XXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
+  hash="$(trial_hash "$dir")"
+  live="$tmp/live.jsonl"
+  cd "$HOME/fraim" 2>/dev/null || cd "$HOME" || exit 1
+  ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_LEAD_TRIAL_TIMEOUT:-540}")
+  [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
+  unset FRAIM_LEAD_ROLE FRAIM_LEAD_INPUT FRAIM_THREAD
+  FRAIM_TRIAL=1 "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" 0; fraim-prompt render lead-trial --lead "$name")" \
+    --allowedTools "$(trial_tools "$(tools_for "$name" "$dir" 0)")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+    --output-format stream-json --verbose > "$live" 2>"$tmp/err" || code=$?
+
+  answer="$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .result // empty' "$live" 2>/dev/null)"
+  last="$(printf '%s\n' "$answer" | awk 'NF { l = $0 } END { print l }')"
+  if [ "$code" -eq 75 ]; then reason="the server had no free memory, so it did not start"
+  elif [ "$code" -eq 124 ]; then reason="it ran longer than ${FRAIM_LEAD_TRIAL_TIMEOUT:-540} seconds"
+  elif [ "$code" -ne 0 ] || [ "$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .is_error' "$live" 2>/dev/null)" != false ]; then
+    reason="the run stopped with an error: $(tail -3 "$tmp/err" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+  elif [ "$(jq -s '[.[] | select(type == "object" and .type == "assistant") | .message.content[]? | select(.type == "tool_use")] | length' "$live" 2>/dev/null)" = 0 ]; then
+    reason="it used no tool, so it looked at nothing"
+  else
+    case "$last" in
+      "TRIAL OK"*) verdict=passed ;;
+      "TRIAL BLOCKED"*) reason="$last" ;;
+      *) reason="its answer did not end with TRIAL OK" ;;
+    esac
+  fi
+
+  local refused
+  refused="$(jq -cs '[.[] | select(type == "object" and .type == "result") | .permission_denials[]? | if .tool_name == "Bash" then .tool_input.command else .tool_name end] | unique' "$live" 2>/dev/null)"
+  mkdir -p "$(dirname "$file")"
+  jq -n --arg status "$verdict" --arg hash "$hash" --arg at "$(date '+%Y-%m-%d %H:%M')" --arg reason "$reason" --arg answer "$answer" --argjson refused "${refused:-[]}" \
+    '{status: $status, hash: $hash, at: $at, reason: $reason, answer: $answer, refused: $refused}' > "$file.tmp"
+  mv "$file.tmp" "$file"
+
+  printf 'Trial of %s: %s%s\n\n%s\n' "$name" "$verdict" "${reason:+ ($reason)}" "$answer"
+  [ "${refused:-[]}" = "[]" ] || printf '\nRefused during the trial: %s\n' "$refused"
+  [ "$verdict" = passed ]
+}
+
 # wake NAME TEXT: run the lead now with TEXT as the reason. A lead that is running already
 # runs once more when it ends (fraim-auto queues it). FRAIM_LEAD_DEPTH counts notes that woke
 # a lead that then wrote a note; past FRAIM_LEAD_MAX_DEPTH hops a note waits for the next run,
@@ -627,6 +705,7 @@ case "$action" in
   list) cmd_list ;;
   show) [ $# -eq 1 ] || usage "show NAME"; cmd_show "$1" ;;
   run) [ $# -eq 1 ] || usage "run NAME"; cmd_run "$1" ;;
+  try) { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = --status ]; }; } || usage "try NAME [--status]"; cmd_try "$@" ;;
   pause)
     [ $# -eq 1 ] || usage "pause NAME"; dir="$(lead_dir "$1")" || exit $?
     touch "$dir/paused"
