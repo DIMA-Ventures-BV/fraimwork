@@ -305,8 +305,8 @@ function applyDecision(item, verdict, note, via, opts = {}) {
   if ((item.brain || item.skill) && verdict === 'approved' && (via === 'cli' || via.startsWith('api:'))) notify(`${item.id} was approved ${via === 'cli' ? 'from the command line' : `by the app "${via.slice(4)}"`}: ${outcome}\nNot you? Tell me and I undo it.`, true)
   if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead && via !== 'grant') {
-    const covers = verdict === 'approved' && !item.reply ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''
-    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}${covers}`, item.thread)
+    const covers = verdict === 'approved' && !item.reply ? '1' : ''
+    tellLead(item.lead, 'owner', promptText('queue-decided', { verdict, title: item.title, id: item.id, note, follow_up: followUp, covers }), item.thread)
   }
   return item
 }

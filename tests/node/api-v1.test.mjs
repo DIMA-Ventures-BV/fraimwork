@@ -278,3 +278,31 @@ test('what a goal is told on approve and rework comes from prompt files the owne
   s.cli('reject', 'q3', '--note', 'owner words')
   assert.match(s.log(), /Mine: owner words/, "the owner's file wins")
 })
+
+test('a run nobody watches gets neither the page secret nor the link that carries it', async (t) => {
+  const s = await setup(t)
+  const secret = s.cli('token')
+  assert.ok(secret)
+  for (const command of ['token', 'url']) {
+    const r = s.cliAs({ FRAIM_HEADLESS: '1' }, command)
+    assert.equal(r.status, 1, `headless ${command} is refused`)
+    assert.match(r.stderr, /only the owner/)
+    assert.equal(r.stdout, '')
+  }
+  assert.equal(s.cliAs({}, 'url').status, 0, 'the owner still gets it')
+})
+
+test('what the agent behind a card hears about the decision comes from a prompt file', async (t) => {
+  const s = await setup(t)
+  s.cli('add', '--title', 'Fix it', '--lead', 'web')
+  s.cli('approve', 'q1', '--note', 'go')
+  assert.match(s.log(), /lead tell web --from owner -- The owner approved "Fix it" \(q1\): go This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved q1", so it starts without a second question\.\n/)
+  s.cli('add', '--title', 'Drop it', '--lead', 'web')
+  s.cli('dismiss', 'q2')
+  assert.match(s.log(), /-- The owner dismissed "Drop it" \(q2\)\.\n/, 'no yes to cover anything')
+  await mkdir(path.join(s.home, 'fraim/prompts'), { recursive: true })
+  await writeFile(path.join(s.home, 'fraim/prompts/queue-decided.md'), 'Mine: {{verdict}} {{id}}\n')
+  s.cli('add', '--title', 'Again', '--lead', 'web')
+  s.cli('dismiss', 'q3')
+  assert.match(s.log(), /-- Mine: dismissed q3\n/, "the owner's file wins")
+})

@@ -337,7 +337,7 @@ fail_goal() {
 
 # A turn ended: its last words are the result. The first result goes to the queue.
 report_done() {
-  local id="$1" dir="$2" chat="$3" text reason qid review="" summary
+  local id="$1" dir="$2" chat="$3" text reason qid review="" summary link ending
   text="$(fraim-herdr last-text "$id" 2>/dev/null)"
   [ -n "$text" ] || text="$(screen_text "$id" 30 | grep -v '^\s*$' | tail -30)"
   reason="$(fail_reason "$text")"
@@ -354,9 +354,13 @@ report_done() {
     if [ -s "$dir/queue" ] && command -v fraim-queue >/dev/null; then
       fraim-queue supersede --origin "$(cat "$dir/queue")" --by "$id" >/dev/null 2>>"$dir/log.txt" || true
     fi
+    # A run nobody watches may start this watcher, and it gets no link; the message goes without.
+    link="$(fraim-queue url 2>/dev/null)"
+    ending="."
+    [ -z "$link" ] || ending=", or open the queue: $link"
     [ -z "$qid" ] || review="
 
-It waits for review as queue item $qid. Tell me what you think of it in your own words, or open the queue: $(fraim-queue url 2>/dev/null)"
+It waits for review as queue item $qid. Tell me what you think of it in your own words$ending"
     summary="Goal $id done.
 
 ${text:0:3500}$review"

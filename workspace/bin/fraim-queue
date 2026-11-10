@@ -43,7 +43,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  PORT, UsageError, allItems, itemDir, queueUrl, rank, readItem, setServing, token, usage,
+  PORT, Refused, UsageError, allItems, itemDir, queueUrl, rank, readItem, setServing, token, usage,
 } from './fraim-queue-store.mjs'
 import { tokenCommand } from './fraim-queue-tokens.mjs'
 import {
@@ -68,6 +68,11 @@ export { addWhatsApp, closeThread, dismissThread, putThread, restoreThread, sayI
 export { captureMail, parseGmailThread, splitQuote } from './fraim-queue-mail.mjs'
 export { draftReply, draftText, sendApproved } from './fraim-queue-replies.mjs'
 export { createServer } from './fraim-queue-server.mjs'
+
+// The page's secret can decide, so a run nobody watches does not get it.
+function ownerOnly(what) {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Refused(`only the owner gets ${what}; a goal, lead or automation cannot`)
+}
 
 function line(item) {
   const flag = item.state === 'open' ? `p${item.priority}` : item.state
@@ -216,12 +221,15 @@ function main(argv) {
       return console.log(`${item.id} priority ${item.priority}`)
     }
     case 'url':
+      ownerOnly('the page link')
       token()
       return console.log(queueUrl())
     case 'thread':
       return threadCommand(args)
     case 'token':
-      return id ? tokenCommand(args) : console.log(token())
+      if (id) return tokenCommand(args)
+      ownerOnly('the page token')
+      return console.log(token())
     case 'serve': {
       setServing()
       const server = createServer()

@@ -1,0 +1,2 @@
+{{! What the agent behind a card is told when the owner decides it. "covers" is set for a yes that covers the work after it. }}
+The owner {{verdict}} "{{title}}" ({{id}}){{#note}}: {{note}}{{/note}}{{^note}}.{{/note}}{{#follow_up}} Goal {{follow_up}} started for it.{{/follow_up}}{{#covers}} This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved {{id}}", so it starts without a second question.{{/covers}}

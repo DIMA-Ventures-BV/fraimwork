@@ -483,6 +483,34 @@ Not logged in · Please run /login"
   [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = system ]
 }
 
+fake_queue_url() {  # the command fraim-queue runs for "url"
+  cat > "$T/bin/fraim-queue" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  url) $1 ;;
+  add) echo q7 ;;
+esac
+EOF
+  chmod +x "$T/bin/fraim-queue"
+}
+
+@test "a goal's result names the page when the link is there" {
+  fake_queue_url 'echo http://page.test/'
+  "$GOAL" start -- "find flights"
+  wait_state g1 done
+  wait_sent "It waits for review as queue item q7"
+  grep -q "or open the queue: http://page.test/" "$SENT"
+}
+
+@test "a goal's result still goes out when the link is refused, and does not end on an empty link" {
+  fake_queue_url 'echo refused >&2; exit 1'
+  "$GOAL" start -- "find flights"
+  wait_state g1 done
+  wait_sent "It waits for review as queue item q7"
+  grep -q "in your own words\.$" "$SENT"
+  ! grep -q "open the queue" "$SENT"
+}
+
 @test "a goal from an approved card reports on that card, not on a new one" {
   export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
   fraim-queue add --quiet --title "Meta pixel tests" --ask "Rerun?" --on-approve "rerun" >/dev/null
