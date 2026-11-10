@@ -70,7 +70,7 @@ esac'
   run "$FRAIM" invite alice --share-url https://login.tailscale.com/share/x
   [ "$status" -eq 0 ]
   file="$CONF/invites/alice.invite"
-  [ "$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file")" = 600 ]
+  [ -n "$(find "$file" -perm 600)" ]
   json="$(cut -d: -f2- "$file" | base64 -d 2>/dev/null || cut -d: -f2- "$file" | base64 -D)"
   token="$(jq -r .token <<<"$json")"
   [[ "$output" != *"$token"* ]]
@@ -100,7 +100,7 @@ esac'
   grep -qx 'FRAIM_ADMIN=none' "$CONF/alice.config"
   grep -qx 'FRAIM_HOST=100.64.1.2' "$CONF/alice.config"
   [ "$(cat "$CONF/current")" = alice ]
-  [ "$(stat -f '%Lp' "$HOME/.ssh/fraim-alice" 2>/dev/null || stat -c '%a' "$HOME/.ssh/fraim-alice")" = 600 ]
+  [ -n "$(find "$HOME/.ssh/fraim-alice" -perm 600)" ]
   [ "$(cat "$CONF/alice.gate")" = "$TOKEN" ]
   grep -qxF "[100.64.1.2]:2222 $HOSTKEY" "$HOME/.fraim/known_hosts-alice"
   [[ "$output" != *"$TOKEN"* ]]
@@ -283,7 +283,7 @@ scan_output() {
   fake_claude_setup
   use_public_target
   env -u CLAUDE_CONFIG_DIR "$REPO/bin/fraim-scan" --out "$BATS_TEST_TMPDIR/me.mirror"
-  [ "$(stat -f '%Lp' "$BATS_TEST_TMPDIR/me.mirror" 2>/dev/null || stat -c '%a' "$BATS_TEST_TMPDIR/me.mirror")" = 600 ]
+  [ -n "$(find "$BATS_TEST_TMPDIR/me.mirror" -perm 600)" ]
   run "$FRAIM" mirror "$BATS_TEST_TMPDIR/me.mirror" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"stdio   add MCP server tool: runs npx -y some-mcp@1.2.3"* ]]
