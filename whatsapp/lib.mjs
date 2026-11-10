@@ -3,6 +3,25 @@
 import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 
+// The WhatsApp encryption library prints whole session objects, private keys included, with
+// console.info. Console output keeps text and error messages; every object is hidden.
+function safeLogArg(arg) {
+  if (arg instanceof Error) return `${arg.name}: ${arg.message}`
+  if (arg === null || typeof arg !== 'object' && typeof arg !== 'function') return arg
+  return '[hidden]'
+}
+
+export function guardConsole(target = console) {
+  for (const method of ['log', 'info', 'warn', 'error', 'debug', 'trace']) {
+    const write = target[method].bind(target)
+    target[method] = (...args) => write(...args.map(safeLogArg))
+  }
+  for (const method of ['dir', 'dirxml', 'table']) {
+    const write = target.log.bind(target)
+    target[method] = () => write('[hidden]')
+  }
+}
+
 export const digits = (value) => String(value || '').replace(/\D/g, '').replace(/^00/, '')
 
 export function parseAllowlist(owner, allow) {

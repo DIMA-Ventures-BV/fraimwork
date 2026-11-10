@@ -1,11 +1,12 @@
 // WhatsApp safety rules: the allowlist, reply targets, file sharing and owner-only approvals.
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
   allowedSender,
+  guardConsole,
   parseAllowlist,
   resolveChat,
   resolveSharedPath,
