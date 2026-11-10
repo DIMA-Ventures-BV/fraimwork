@@ -24,7 +24,8 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "$GATEWAY_STATUS"
 EOF
-  chmod +x "$FAKE/curl" "$FAKE/fraim-gateway"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE/fraim-channels"
+  chmod +x "$FAKE/curl" "$FAKE/fraim-gateway" "$FAKE/fraim-channels"
   MODS="$BATS_TEST_TMPDIR/modules"
   mkdir -p "$MODS"
   DOCTOR="$REPO/workspace/bin/fraim-doctor"
@@ -41,9 +42,10 @@ MODULE_CHECKS='server-browser|syncthing|whatsapp-connected|whatsapp-reaches-clau
 
 @test "the shipped manifests give exactly today's check names" {
   export FRAIM_MODULES_DIR="$REPO/modules" FRAIM_MODULES=whatsapp,browser,sync,scheduler,google
-  run bash -c "$(declare -f doctor_json); DOCTOR='$DOCTOR' doctor_json | grep -E -v '^(claude-|disk-|memory-|sessions-|queue-page|jobs-ok|plugins-ok)' | sort"
+  run bash -c "$(declare -f doctor_json); DOCTOR='$DOCTOR' doctor_json | grep -E -v '^(claude-|disk-|memory-|sessions-|queue-page|instructions-watch|jobs-ok|plugins-ok)' | sort"
   [ "$status" -eq 0 ]
-  [ "$output" = "server-browser true
+  [ "$output" = "mail-watch true
+server-browser true
 syncthing true
 whatsapp-connected true
 whatsapp-reaches-claude true" ]

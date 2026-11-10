@@ -1,6 +1,13 @@
 // The context that goes with every message from the owner: the conversation so far and the
 // decisions that wait (fraim-relay context), with what to do with it. Without it the session
 // reads a short "yes" or "unclear" against whatever it still remembers.
+// A message that waited while the server was away says so, or its "now" reads as this moment.
+export function catchUpNote(event) {
+  if (!event.catchup) return ''
+  const when = event.ts ? ` at ${new Date(event.ts * 1000).toTimeString().slice(0, 5)}` : ''
+  return `(Sent${when} while the server was offline; it arrived just now.)`
+}
+
 export function withContext(text, context) {
   if (!context) return text
   return [

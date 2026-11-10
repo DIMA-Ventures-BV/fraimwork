@@ -135,7 +135,7 @@ function threadCommand(args) {
       return sayInThread(id, args.from || 'owner', args.to || '', words.join(' '))
     case 'whatsapp': {
       const r = addWhatsApp(args.number, args.name, args._.slice(1).join(' '))
-      return console.log(r.thread.id)
+      return console.log(r.thread ? r.thread.id : 'kept out by inbox-rules.md')
     }
     case 'show':
       if (!id) usage('thread show tN')

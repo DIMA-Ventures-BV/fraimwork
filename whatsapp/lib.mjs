@@ -1,5 +1,6 @@
 // Pure gateway rules: who may reach Claude, who Claude may write to, which files may leave.
 // No WhatsApp or network imports, so tests can load this file directly.
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -19,6 +20,57 @@ export function guardConsole(target = console) {
   for (const method of ['dir', 'dirxml', 'table']) {
     const write = target.log.bind(target)
     target[method] = () => write('[hidden]')
+  }
+}
+
+// Messages that arrived while the gateway was away come as 'append'. They count when they are
+// recent; anything older than the window would be an answer to a question nobody remembers.
+export function readsUpsert(type, timestamp, nowSeconds, windowSeconds) {
+  if (type === 'notify') return true
+  return type === 'append' && timestamp > 0 && nowSeconds - timestamp <= windowSeconds
+}
+
+export const reconnectDelay = (attempt) => Math.min(3000 * 2 ** Math.max(0, attempt), 60000)
+
+// Down for this long with nothing to wait for: only a fresh start of the process helps.
+export function givesUp({ downSince, waitingForQr, loggedOut, now, limitMs }) {
+  return Boolean(downSince) && !waitingForQr && !loggedOut && now - downSince > limitMs
+}
+
+// Messages nobody listens for yet. On disk, so a restart of the gateway does not lose them.
+export class SavedQueue {
+  constructor(file, limit, onError = () => {}) {
+    Object.assign(this, { file, limit, onError, items: [] })
+    try {
+      const saved = JSON.parse(readFileSync(file, 'utf8'))
+      if (Array.isArray(saved)) this.items = saved.slice(-limit)
+    } catch (err) {
+      if (err.code !== 'ENOENT') onError(err)
+    }
+  }
+
+  get length() { return this.items.length }
+
+  save() {
+    try {
+      writeFileSync(`${this.file}.tmp`, JSON.stringify(this.items), { mode: 0o600 })
+      renameSync(`${this.file}.tmp`, this.file)
+    } catch (err) {
+      this.onError(err)
+    }
+  }
+
+  push(event) {
+    this.items.push(event)
+    if (this.items.length > this.limit) this.items.shift()
+    this.save()
+  }
+
+  drain() {
+    const out = this.items
+    this.items = []
+    this.save()
+    return out
   }
 }
 

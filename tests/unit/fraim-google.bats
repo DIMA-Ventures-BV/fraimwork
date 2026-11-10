@@ -59,3 +59,26 @@ setup() {
   run "$FRAIM" connect google --url https://example.com/mcp
   [ "$status" -eq 2 ]
 }
+
+@test "google push sends the key over stdin only" {
+  KEY_FILE="$BATS_TEST_TMPDIR/key.json"
+  printf '%s' '{"type":"service_account","private_key":"PRIVATE-4711"}' > "$KEY_FILE"
+  run "$FRAIM" google push --topic projects/p/topics/t --subscription projects/p/subscriptions/s --file "$KEY_FILE"
+  [ "$status" -eq 0 ]
+  grep -qF 'fraim-google set-push projects/p/topics/t projects/p/subscriptions/s' "$SSH_LOG"
+  grep -qF 'PRIVATE-4711' "$SSH_STDIN_LOG"
+  ! grep -qF 'PRIVATE-4711' "$SSH_LOG"
+}
+
+@test "google push needs a topic, a subscription and a key" {
+  run "$FRAIM" google push --subscription projects/p/subscriptions/s --file /dev/null
+  [ "$status" -eq 2 ]
+  run "$FRAIM" google push --topic projects/p/topics/t --subscription projects/p/subscriptions/s
+  [ "$status" -eq 2 ]
+}
+
+@test "google push --off goes back to checking" {
+  run "$FRAIM" google push --off
+  [ "$status" -eq 0 ]
+  grep -qF 'fraim-google clear-push' "$SSH_LOG"
+}

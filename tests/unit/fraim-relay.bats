@@ -269,3 +269,13 @@ EOF
   [ "$status" -eq 0 ]
   [ $(( $(date +%s) - start )) -ge 1 ]
 }
+
+@test "the chat knows which changes the owner can still undo, and says nothing when there are none" {
+  printf '#!/usr/bin/env bash\necho "7  the tools chief may use changed"\n' > "$T/bin/fraim-watch"
+  chmod +x "$T/bin/fraim-watch"
+  run fraim-relay context
+  [[ "$output" == *"can still undo"*"7  the tools chief may use changed"* ]]
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/fraim-watch"
+  run fraim-relay context
+  [[ "$output" != *"can still undo"* ]]
+}

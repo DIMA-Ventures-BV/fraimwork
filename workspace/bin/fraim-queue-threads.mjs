@@ -118,6 +118,7 @@ export function addWhatsApp(number, name, text) {
   if (!String(text || '').trim()) usage('thread whatsapp needs the text of the message')
   const key = `whatsapp:${phone}`
   const who = String(name || '').trim() || `+${phone}`
+  if (neverShow(`+${phone}`)) return { thread: null, isNew: false, news: false }
   const before = allThreads().find((t) => t.key === key)
   const message = { from: who, address: `+${phone}`, to: '', date: now(), text: String(text).slice(0, 40000), quoted: '', html: '', designed: false, attachments: [] }
   const r = putThread({ kind: 'whatsapp', key, title: `WhatsApp from ${who}`, who, messages: [...(before?.messages || []), message].slice(-200) })

@@ -1418,9 +1418,20 @@ cmd_secret() {
 cmd_google() {
   parse_flags "$@"
   local action="${POSITIONAL[0]:-}"
-  local usage_line="fraim google setup --email YOU@DOMAIN [--file client_secret.json | --stdin] | code [--stdin] | status | signout"
-  case "$action" in setup|code|status|signout) ;; *) usage "$usage_line" ;; esac
-  local client="" redirect=""
+  local usage_line="fraim google setup --email YOU@DOMAIN [--file client_secret.json | --stdin] | code [--stdin] | status | signout | push --topic projects/P/topics/T --subscription projects/P/subscriptions/S [--file key.json | --stdin] | push --off"
+  case "$action" in setup|code|status|signout|push) ;; *) usage "$usage_line" ;; esac
+  local client="" redirect="" key=""
+  if [ "$action" = push ] && [ -z "$(flag off)" ]; then
+    [ -n "$(flag topic)" ] && [ -n "$(flag subscription)" ] || usage "$usage_line"
+    if [ -n "$(flag file)" ]; then
+      [ -s "$(flag file)" ] || die "no file at $(flag file)"
+      key="$(cat "$(flag file)")"
+    elif [ -n "$(flag stdin)" ]; then
+      key="$(cat)"
+    else
+      usage "give the service account key: --file key.json"
+    fi
+  fi
   if [ "$action" = setup ]; then
     printf '%s' "$(flag email)" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[A-Za-z]{2,}$' || usage "$usage_line"
     if [ -n "$(flag file)" ]; then
@@ -1456,6 +1467,13 @@ cmd_google() {
       ;;
     status) admin "docker compose exec -T google fraim-google status" ;;
     signout) admin "docker compose exec -T google fraim-google signout" ;;
+    push)
+      if [ -n "$(flag off)" ]; then
+        admin "docker compose exec -T google fraim-google clear-push"
+      else
+        printf '%s' "$key" | admin_stdin "docker compose exec -T google fraim-google set-push $(printf '%q' "$(flag topic)") $(printf '%q' "$(flag subscription)")"
+      fi
+      ;;
   esac
 }
 
@@ -3164,6 +3182,7 @@ takes --space NAME; without it a command works on the main space. See docs/space
   fraim connect NAME --url URL --key [--header H] [--format F] [--stdin]   key in the secrets proxy
   fraim connect NAME --command 'CMD ARGS' | list [--json] | rm NAME
   fraim google setup --email E --file F | code | status | signout   Gmail, Drive, Calendar for any agent
+  fraim google push --topic T --subscription S --file KEY | --off   new mail within seconds (docs/channels.md)
   fraim preview [PORT] | stop [PORT|all] [--json]   show a dev server of the space on the phone
 EOF
 }

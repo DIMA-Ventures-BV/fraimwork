@@ -4,4 +4,4 @@ min_fraim_version: 0.1.0
 description: Gmail, Drive and Calendar as tools for any agent
 profile: google
 requires:
-# No check yet: a new check name that fails after an update counts as a regression and rolls the update back.
+check: mail-watch fraim-channels check email

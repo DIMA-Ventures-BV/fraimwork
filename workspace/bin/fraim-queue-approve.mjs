@@ -2,14 +2,14 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { channelWord } from './fraim-channels.mjs'
 import {
   ADVICE, GOALS, HOME, KINDS, LEADS, Refused, THREADS, UsageError, allItems, copyMedia, fire, isChief, itemDir, newId,
   now, promptText, queueUrl, readItem, readText, runtimeEnv, tellLead, tool, usage, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
-export const CHANNEL_WORD = { email: 'email', whatsapp: 'WhatsApp' }
-export const replySummary = (r) => `To: ${r.name} (${r.to}), by ${CHANNEL_WORD[r.channel]}${r.subject ? `\nSubject: ${r.subject}` : ''}\n\n${r.text}`
+export const replySummary = (r) => `To: ${r.name} (${r.to}), by ${channelWord(r.channel)}${r.subject ? `\nSubject: ${r.subject}` : ''}\n\n${r.text}`
 
 // direct: the owner reads it word for word (a security notice), not rewritten by the chief.
 export function notify(text, direct = false) {

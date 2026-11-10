@@ -27,11 +27,13 @@ import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
 import {
   MAX_FILE_MB,
+  SavedQueue,
   allowedSender,
   contactChat,
   contactSender,
   describeShare,
   digits,
+  givesUp,
   guardConsole,
   httpError,
   isGroupOrBroadcast,
@@ -40,6 +42,8 @@ import {
   parseAllowlist,
   parseContacts,
   quotedOf,
+  readsUpsert,
+  reconnectDelay,
   resolveChat as resolveChatFor,
   resolveSharedPath,
   textOf,
@@ -58,6 +62,9 @@ const ROOTS = { fraim: '/fraim', pc: '/pc', 'fraim/inbox': '/inbox', 'fraim/down
 const INBOX = '/inbox'
 const MAX_TEXT = 4000
 const QUEUE_LIMIT = 100
+const QUEUE_FILE = '/data/queue.json'
+const CATCHUP_SECONDS = Number(process.env.WHATSAPP_CATCHUP_HOURS || 12) * 3600
+const GIVE_UP_MS = 5 * 60 * 1000
 
 const OWNER = digits(process.env.WHATSAPP_OWNER)
 const ALLOW = parseAllowlist(OWNER, process.env.WHATSAPP_ALLOW)
@@ -82,15 +89,18 @@ if (ALLOW.size === 0) logger.warn('WHATSAPP_OWNER and WHATSAPP_ALLOW are empty; 
 let sock = null
 let connected = false
 let waitingForQr = false
+let loggedOut = false
+let downSince = Date.now()
+let attempts = 0
+let reconnectTimer = null
 const listeners = new Set()
-const queue = []
+const queue = new SavedQueue(QUEUE_FILE, QUEUE_LIMIT, (err) => logger.warn({ err: err.message }, 'could not keep the waiting messages on disk'))
 const knownChats = new Set([...ALLOW].map((d) => `${d}@s.whatsapp.net`))
 const lastQueuedNotice = new Map()
 
 function emit(event) {
   if (listeners.size === 0) {
     queue.push(event)
-    if (queue.length > QUEUE_LIMIT) queue.shift()
     return false
   }
   const frame = `data: ${JSON.stringify(event)}\n\n`
@@ -185,8 +195,9 @@ async function readContent(msg, inner) {
   return content
 }
 
-async function onMessage(msg) {
+async function onMessage(msg, catchup = false) {
   const key = msg.key || {}
+  const late = catchup ? { catchup: true } : {}
   if (key.fromMe || !key.remoteJid || isGroupOrBroadcast(key.remoteJid)) return
 
   const contact = contactSender(key, ALLOW, CONTACTS)
@@ -198,6 +209,7 @@ async function onMessage(msg) {
       sender: contact,
       name: msg.pushName || '',
       ...content,
+      ...late,
       text: content.text || (content.voice || content.video ? '' : '[sent something that cannot be read here]'),
       ts: Number(msg.messageTimestamp || 0),
     })
@@ -222,6 +234,7 @@ async function onMessage(msg) {
     sender: phone,
     name: msg.pushName || '',
     ...content,
+    ...late,
     ts: Number(msg.messageTimestamp || 0),
   })
 
@@ -232,6 +245,17 @@ async function onMessage(msg) {
       await sendText(key.remoteJid, 'Claude is not running right now. Your message is queued and will be handled when it is back.').catch(() => {})
     }
   }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    connect().catch((err) => {
+      logger.error({ err: err.message }, 'reconnect failed')
+      scheduleReconnect()
+    })
+  }, reconnectDelay(attempts++))
 }
 
 async function connect() {
@@ -260,25 +284,30 @@ async function connect() {
     if (connection === 'open') {
       connected = true
       waitingForQr = false
+      attempts = 0
+      downSince = null
       rm(QR_FILE, { force: true }).catch(() => {})
       logger.info({ me: sock.user?.id }, 'WhatsApp connected')
     }
     if (connection === 'close') {
       connected = false
+      downSince ??= Date.now()
       const code = lastDisconnect?.error?.output?.statusCode
       if (code === DisconnectReason.loggedOut) {
+        loggedOut = true
         logger.error('WhatsApp logged this device out. Run "fraim whatsapp relink" and scan a new QR code.')
         return
       }
       logger.warn({ code }, 'WhatsApp connection closed; reconnecting')
-      setTimeout(() => connect().catch((err) => logger.error({ err: err.message }, 'reconnect failed')), 3000)
+      scheduleReconnect()
     }
   })
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return
+    const now = Math.floor(Date.now() / 1000)
     for (const msg of messages) {
-      await onMessage(msg).catch((err) => logger.error({ err: err.message }, 'message handling failed'))
+      if (!readsUpsert(type, Number(msg.messageTimestamp || 0), now, CATCHUP_SECONDS)) continue
+      await onMessage(msg, type === 'append').catch((err) => logger.error({ err: err.message }, 'message handling failed'))
     }
   })
 }
@@ -325,7 +354,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
       res.write(': connected\n\n')
       listeners.add(res)
-      while (queue.length) res.write(`data: ${JSON.stringify(queue.shift())}\n\n`)
+      for (const event of queue.drain()) res.write(`data: ${JSON.stringify(event)}\n\n`)
       const ping = setInterval(() => res.write(': ping\n\n'), 25000)
       req.on('close', () => {
         clearInterval(ping)
@@ -372,6 +401,12 @@ connect().catch((err) => {
   logger.fatal({ err: err.message }, 'could not start WhatsApp')
   process.exit(1)
 })
+
+setInterval(() => {
+  if (!givesUp({ downSince, waitingForQr, loggedOut, now: Date.now(), limitMs: GIVE_UP_MS })) return
+  logger.error('WhatsApp stayed down for 5 minutes; restarting the gateway')
+  process.exit(1)
+}, 30000).unref()
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {

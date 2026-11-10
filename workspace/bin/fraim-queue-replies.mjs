@@ -2,37 +2,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { allItems, itemDir, now, queueUrl, readItem, readThread, runtimeEnv, usage, writeItem } from './fraim-queue-store.mjs'
-import { CHANNEL_WORD, MAX_REPLY, addItem, closeSolved, notify, replySummary } from './fraim-queue-approve.mjs'
+import { channelWord, replyTarget as channelTarget, sendReply } from './fraim-channels.mjs'
+import { MAX_REPLY, addItem, closeSolved, notify, replySummary } from './fraim-queue-approve.mjs'
 import { sayInThread } from './fraim-queue-threads.mjs'
-
-async function replyCall(channel, route, body) {
-  const env = runtimeEnv()
-  const base = channel === 'email' ? env.FRAIM_REPLY_MAIL_URL || 'http://google:8001' : env.FRAIM_GATEWAY_URL
-  if (!env.FRAIM_REPLY_TOKEN || !base) throw new Error('sending replies is not set up on this server; run fraim update')
-  const r = await fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.FRAIM_REPLY_TOKEN}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) })
-  const out = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(out.error || `the sender answered ${r.status}`)
-  return out
-}
 
 // Who the answer goes to comes from the conversation itself, never from the agent.
 async function replyTarget(t) {
-  const mail = /^gmail:([\w-]{6,64})$/.exec(t.key)
-  if (mail) {
-    const who = await replyCall('email', '/who', { thread_id: mail[1] })
-    return { channel: 'email', to: who.to, name: who.name || who.to, subject: who.subject, gmail_thread: mail[1] }
-  }
-  const phone = /^whatsapp:(\d{8,15})$/.exec(t.key)
-  if (phone) {
-    await replyCall('whatsapp', '/reply/check', { to: phone[1] })
-    return { channel: 'whatsapp', to: phone[1], name: t.who || `+${phone[1]}`, subject: '' }
-  }
-  usage('only a mail or a WhatsApp conversation has someone to answer')
+  return await channelTarget(t, runtimeEnv()) || usage('only a mail or a WhatsApp conversation has someone to answer')
 }
 
 export function draftText(item) {
   const r = item.reply
-  return [`Reply ready for ${r.name} (${r.to}), by ${CHANNEL_WORD[r.channel]}. Nothing has gone out.`, '', r.text, '', ...(item.need ? [`Why: ${item.need}`] : []), 'Send it? You can change it in the inbox first:', queueUrl()].join('\n')
+  return [`Reply ready for ${r.name} (${r.to}), by ${channelWord(r.channel)}. Nothing has gone out.`, '', r.text, '', ...(item.need ? [`Why: ${item.need}`] : []), 'Send it? You can change it in the inbox first:', queueUrl()].join('\n')
 }
 
 export async function draftReply(id, text, opts = {}) {
@@ -47,7 +28,7 @@ export async function draftReply(id, text, opts = {}) {
     if (old.thread === t.id && old.state === 'open' && old.reply) closeSolved(old, 'a newer draft took its place', 'system')
   }
   const item = addItem({
-    title: `Reply to ${reply.name}`, ask: `Send this ${CHANNEL_WORD[reply.channel]} to ${reply.name}?`, advise: 'approve', kind: 'decision',
+    title: `Reply to ${reply.name}`, ask: `Send this ${channelWord(reply.channel)} to ${reply.name}?`, advise: 'approve', kind: 'decision',
     need: opts.need, ifYes: `${reply.name} receives exactly this text.`, ifNo: 'Nothing goes out.', summary: replySummary(reply),
     priority: opts.priority || 2, lead: opts.lead, source: opts.lead ? `lead ${opts.lead}` : 'chief', thread: t.id, reply, quiet: true,
   })
@@ -70,8 +51,7 @@ export async function sendApproved(id) {
     writeItem(fresh)
   }
   try {
-    if (r.channel === 'email') await replyCall('email', '/reply', { thread_id: r.gmail_thread, to: r.to, text: r.text })
-    else await replyCall('whatsapp', '/reply', { to: r.to, text: r.text })
+    await sendReply(r, runtimeEnv())
   } catch (err) {
     if (err.name === 'TimeoutError') {
       finish({ status: 'unknown', error: 'no answer from the sender' })

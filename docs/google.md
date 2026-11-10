@@ -71,3 +71,4 @@ The MCP server is at `http://google:8000/mcp` inside the space (streamable HTTP,
 - `fraim google code`: finish the sign-in (in your own Terminal)
 - `fraim google status`: setup and sign-in state
 - `fraim google signout`: delete the stored Google token
+- `fraim google push --topic T --subscription S --file KEY | --off`: new mail within seconds ([channels.md](channels.md))

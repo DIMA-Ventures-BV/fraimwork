@@ -78,6 +78,7 @@ check "memory-headroom" memory_ok
 # herdr-core holds main, goals and coding sessions (docs/sessions.md).
 check "sessions-service" fraim-herdr alive
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "queue-page" curl -fsS --max-time 5 http://127.0.0.1:3109/health
+[ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "instructions-watch" fraim-watch status
 # An automation that failed or was blocked on its last run, or was paused after failures.
 # State of deleted automations (and of old-style jobs) is removed.
 jobs_ok() {
