@@ -158,12 +158,15 @@ export const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim
 export const AUTO_STATE = process.env.FRAIM_AUTO_STATE_DIR || path.join(HOME, '.local/state/fraim/automations')
 export const LEADS = process.env.FRAIM_LEADS_DIR || path.join(HOME, 'fraim/leads')
 
-export function roleOf(lead) {
-  const res = spawnSync(tool('fraim-authority'), ['role-of', lead], { encoding: 'utf8', timeout: 10000, env: { ...process.env, FRAIM_LEADS_DIR: LEADS } })
+function authority(...args) {
+  const res = spawnSync(tool('fraim-authority'), args, { encoding: 'utf8', timeout: 10000, env: { ...process.env, FRAIM_LEADS_DIR: LEADS } })
   return res.status === 0 ? res.stdout.trim() : ''
 }
 
-export const isChief = (lead) => roleOf(lead) === 'chief'
+export const roleOf = (lead) => authority('role-of', lead)
+export const capability = (lead, key) => authority('cap', lead, key)
+export const theContact = () => authority('get', 'contact')
+export const theChatAgent = () => authority('get', 'chat')
 
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
 export function tellLead(lead, from, text, thread = '') {
@@ -226,10 +229,6 @@ export function readChat(id) {
   return readText(path.join(THREADS, id, 'chat.jsonl'), 2000000).split('\n').flatMap((l) => {
     try { return l ? [JSON.parse(l)] : [] } catch { return [] }
   })
-}
-
-export function theChief() {
-  try { return fs.readdirSync(LEADS).find((n) => isChief(n)) || '' } catch { return '' }
 }
 
 // What an agent is told is a file the owner can change. A broken setup still passes the facts on.

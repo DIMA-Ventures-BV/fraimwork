@@ -2639,8 +2639,8 @@ cmd_lead() {
   load_config
   [ $# -gt 0 ] || set -- list
   case "$1" in
-    new|list|show|run|pause|resume|tell|ask|events) ;;
-    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief|--engineer] [--off] | list | show NAME | run NAME | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off] | pause NAME | resume NAME' ;;
+    new|list|show|run|pause|resume|tell|ask|events|rename) ;;
+    *) usage 'fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief|--engineer] [--off] | list | show NAME | run NAME | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off] | pause NAME | resume NAME | rename OLD NEW' ;;
   esac
   [ "$1" != run ] || server_logged_in || need_login_step
   workspace_ssh "fraim-lead $(printf '%q ' "$@")"

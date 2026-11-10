@@ -7,7 +7,7 @@
 #   fraim-relay add [--chat CHAT_ID] -- TEXT   queue a notice (fraim-notify does this) and send it soon
 #   fraim-relay drain                          send what waits (one run at a time; add starts it)
 #   fraim-relay said [N]                       the last N messages and the notices behind them
-#   fraim-relay on                             true when a chief exists to write the messages
+#   fraim-relay on                             false only with FRAIM_RELAY=off
 #   fraim-relay log owner|me [--chat C] [--about "q4 g2"] -- TEXT
 #                                              add a line to the WhatsApp conversation with the owner
 #   fraim-relay context                        the conversation of the last day and the open decisions:
@@ -44,14 +44,10 @@ die() { echo "fraim-relay: $*" >&2; exit 1; }
 # answer is silent when its last non-empty line is SILENT, with or without brackets or stars.
 is_silent() { [ "$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:][]*`.:')" = SILENT ]; }
 
-the_chief() { FRAIM_LEADS_DIR="$leads" fraim-authority role chief 2>/dev/null; }
+the_agent() { FRAIM_LEADS_DIR="$leads" fraim-authority get "$1" 2>/dev/null; }
 
-cmd_on() {
-  [ "${FRAIM_RELAY:-on}" != off ] || return 1
-  local chief
-  chief="$(the_chief)" || return 1
-  [ ! -f "$leads/$chief/paused" ]
-}
+# Without a contact the relay still batches and keeps the gap; relay_chat sends the notices raw.
+cmd_on() { [ "${FRAIM_RELAY:-on}" != off ]; }
 
 cmd_add() {
   local chat=""
@@ -164,11 +160,11 @@ background() {
 
 # How the chief writes to the owner is the prompt file "relay" (fraim-prompt).
 prompt_for() {
-  local chief="$1" notices="$2"
-  FRAIM_LEADS_DIR="$leads" fraim-prompt render relay --lead "$chief" \
-    --set "chief=$chief" --set "display=$(fraim-lead display "$chief" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
-    --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")" \
-    --set "rules=$(fraim-brain show --for "$chief" --all 2>/dev/null)" \
+  local agent="$1" notices="$2"
+  FRAIM_LEADS_DIR="$leads" fraim-prompt render relay --lead "$agent" \
+    --set "chief=$agent" --set "display=$(fraim-lead display "$agent" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
+    --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$agent/lead.md")" \
+    --set "rules=$(fraim-brain show --for "$agent" --all 2>/dev/null)" \
     --set "recent=$(cmd_context 2>/dev/null)" \
     --set "background=$(background "$notices")" \
     --set "notices=$notices" \
@@ -201,19 +197,19 @@ remember() {
 }
 
 relay_chat() {
-  local batch="$1" chat="$2" notices chief output code
+  local batch="$1" chat="$2" notices contact output code
   notices="$(notices_of "$batch" "$chat")"
   [ -n "$notices" ] || return 0
   output=""
   code=1
-  if chief="$(the_chief)" && [ ! -f "$leads/$chief/paused" ]; then
+  if contact="$(the_agent contact)" && [ ! -f "$leads/$contact/paused" ]; then
     local limit=() model=()
     ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_RELAY_TIMEOUT:-180}")
     [ -z "${FRAIM_RELAY_MODEL:-}" ] || model=(--model "$FRAIM_RELAY_MODEL")
     mkdir -p "$relay"
     # A message to the owner never waits for free memory (fraim-capacity): it is one short
     # run, and the reserve keeps room for it.
-    output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1; "${limit[@]}" fraim-claude -p "$(prompt_for "$chief" "$notices")" \
+    output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1; "${limit[@]}" fraim-claude -p "$(prompt_for "$contact" "$notices")" \
       ${model[@]+"${model[@]}"} --allowedTools "Read,Glob,Grep,Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-sessions list:*),Bash(fraim-lead list:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*)" \
       2>>"$relay/errors.log")"
     code=$?
@@ -226,11 +222,11 @@ relay_chat() {
     fi
     send "$chat" "${output:0:3500}" && { date +%s > "$relay/last-sent"; remember "$chat" "$output" "$notices"; add_line me "$chat" "$(about_of "$notices")" "$output"; return 0; }
   fi
-  # The chief could not write it: the owner gets the notices as they are.
+  # Nobody could write it: the owner gets the notices as they are.
   local raw
   raw="$(cat "$batch"/*.json | jq -rs --arg chat "$chat" 'map(select(.chat == $chat)) | sort_by(.time) | map(.text) | join("\n\n")')"
   send "$chat" "${raw:0:3500}" && { date +%s > "$relay/last-sent"; add_line me "$chat" "$(about_of "$notices")" "$raw"; }
-  remember "$chat" "(sent as it was; the chief could not write it)
+  remember "$chat" "(sent as it was; nobody could write it)
 $raw" "$notices"
 }
 
@@ -290,27 +286,30 @@ cmd_context() {
 # conversation as WhatsApp, so every voice knows what was said; the answer stays in the app.
 cmd_chat() {
   [ "${1:-}" != -- ] || shift
-  local text="$*" chief lock="$relay/chat.lock" output code waited=0
+  local text="$*" agent lock="$relay/chat.lock" output code waited=0
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage 'chat -- TEXT'
   [ "${FRAIM_HEADLESS:-}" != 1 ] || die "only the owner writes in this chat; a goal, lead or automation cannot"
-  chief="$(the_chief)" || die "there is no chief of staff yet"
   mkdir -p "$relay"
   add_line owner app "" "$text"
+  if ! agent="$(the_agent chat)"; then
+    add_line me app "" "$(fraim-prompt render chat-no-agent)"
+    return 0
+  fi
   until mkdir "$lock" 2>/dev/null; do
     [ -z "$(find "$lock" -maxdepth 0 -mmin +7 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
     sleep 2
     waited=$((waited + 2))
-    [ "$waited" -lt 400 ] || die "the chief is still busy with an earlier message"
+    [ "$waited" -lt 400 ] || die "$agent is still busy with an earlier message"
   done
   # shellcheck disable=SC2064
   trap "rmdir $(printf '%q' "$lock") 2>/dev/null" EXIT
   local limit=()
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_CHAT_TIMEOUT:-300}")
-  output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1 FRAIM_OWNER_CHAT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$chief" \
-      --set "chief=$chief" --set "display=$(fraim-lead display "$chief" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
-      --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")" \
-      --set "rules=$(fraim-brain show --for "$chief" --all 2>/dev/null)" \
-      --set "knows=$(fraim-lead brief 2>/dev/null | head -c 60000)" \
+  output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1 FRAIM_OWNER_CHAT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$agent" \
+      --set "chief=$agent" --set "display=$(fraim-lead display "$agent" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
+      --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$agent/lead.md")" \
+      --set "rules=$(fraim-brain show --for "$agent" --all 2>/dev/null)" \
+      --set "knows=$(fraim-lead brief "$agent" 2>/dev/null | head -c 60000)" \
       --set "recent=$(cmd_context 2>/dev/null)" \
       --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
       --set "text=$text")" \

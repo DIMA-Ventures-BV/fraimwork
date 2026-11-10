@@ -60,7 +60,7 @@ server_prompt="$prompt_dir/server-prompt.md"
 if command -v fraim-prompt >/dev/null; then
   mkdir -p "$prompt_dir" 2>/dev/null
   prompt_tmp="$(mktemp "$prompt_dir/.server-prompt.XXXXXX" 2>/dev/null)"
-  if [ -n "$prompt_tmp" ] && fraim-prompt render server --set "display=$(fraim-lead display 2>/dev/null)" > "$prompt_tmp" 2>/dev/null && [ -s "$prompt_tmp" ]; then
+  if [ -n "$prompt_tmp" ] && fraim-prompt render server --set "display=$(fraim-lead display 2>/dev/null)" --set "contact=$(fraim-authority get contact 2>/dev/null)" > "$prompt_tmp" 2>/dev/null && [ -s "$prompt_tmp" ]; then
     mv "$prompt_tmp" "$server_prompt"
   else
     rm -f "$prompt_tmp"
@@ -74,10 +74,12 @@ if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
   set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**),Edit(~/fraim/leads/*/tools),Write(~/fraim/leads/*/tools)"
   set -- "$@" --disallowedTools "Edit(~/fraim/ui/**),Write(~/fraim/ui/**)"
   set -- "$@" --disallowedTools "Edit(~/fraim/leads/*/budget),Write(~/fraim/leads/*/budget)"
-  # The chief's brief goes into the owner's own chat, so no unattended run may write it.
-  if chief="$(fraim-authority role chief 2>/dev/null)" && [ -n "$chief" ]; then
-    set -- "$@" --disallowedTools "Edit(~/fraim/leads/$chief/lead.md),Write(~/fraim/leads/$chief/lead.md)"
-  fi
+  set -- "$@" --disallowedTools "Edit(~/.config/fraim/authority/**),Write(~/.config/fraim/authority/**)"
+  # The brief of the chat and contact agents goes into the owner's own chat, so no unattended
+  # run may write it, also while its folder is gone.
+  for who in "$(fraim-authority get chat --recorded 2>/dev/null)" "$(fraim-authority get contact --recorded 2>/dev/null)"; do
+    [ -z "$who" ] || set -- "$@" --disallowedTools "Edit(~/fraim/leads/$who/lead.md),Write(~/fraim/leads/$who/lead.md)"
+  done
 fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
 if command -v fraim-config >/dev/null; then

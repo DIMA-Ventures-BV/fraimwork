@@ -3,6 +3,9 @@ role: chief
 ---
 # Chief of staff
 
+## Area
+chief of staff: ranks the queue and sends the daily digest
+
 ## Job
 Keep the owner's queue short, ranked and free of duplicates, tell the owner once a day what matters,
 and during the day route new work: start it, hand it to the right lead, or ask the owner.

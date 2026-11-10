@@ -5,19 +5,40 @@
 #   fraim-authority role chief|engineer       the name of the holder; exit 1 when there is none
 #   fraim-authority role-of NAME              chief, engineer or lead
 #   fraim-authority set-role chief|engineer NAME    the owner only
+#   fraim-authority get contact|fixer|chat [--recorded]   the agent, exit 1 when none or its folder
+#                                             is gone; --recorded also names one whose folder is gone
+#   fraim-authority set contact|fixer|chat NAME|none      the owner only
+#   fraim-authority cap NAME KEY              queue, rules, output, builds_off, source_tools, template
+#   fraim-authority set-cap NAME KEY VALUE    the owner only
+#   fraim-authority rename OLD NEW            the owner only; fraim-lead rename moves the folders
+#   fraim-authority holds NAME                exit 0 when NAME has a role or a setting
 #
 # The first read on a server that has no roles file yet takes the holders from the header of
 # each lead.md (the "key: value" lines between the first two --- lines), once.
+# What is not set follows from the roles: the chief is the contact, the engineer the fixer, and
+# a role gives its default capabilities. That is also the migration: a server with roles and no
+# settings file behaves as before.
 # Exit codes: 0 ok, 1 none or refused, 2 usage.
 set -uo pipefail
 
 dir="${FRAIM_AUTHORITY_DIR:-$HOME/.config/fraim/authority}"
 roles="$dir/roles"
+settings="$dir/settings"
 leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
 
 usage() { echo "fraim-authority: $*" >&2; exit 2; }
+refuse_unattended() { if [ "${FRAIM_HEADLESS:-}" = 1 ]; then echo "fraim-authority: $1" >&2; exit 1; fi; }
 valid_role() { [ "$1" = chief ] || [ "$1" = engineer ]; }
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]]; }
+valid_setting() { case "${1:-}" in contact|fixer|chat) ;; *) return 1 ;; esac; }
+valid_key() { case "$1" in queue|rules|output|builds_off|source_tools|template) ;; *) return 1 ;; esac; }
+valid_cap() {
+  case "$1:$2" in
+    queue:own|queue:all|rules:own|rules:all|output:direct|output:summary|builds_off:[01]|source_tools:[01]) ;;
+    template:*) [[ "$2" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
 
 header_role() {
   awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit }
@@ -43,12 +64,13 @@ migrate() {
   write_roles "$found"
 }
 
-write_roles() {
+write_file() {
   local tmp
   mkdir -p "$dir" && chmod 700 "$dir"
-  tmp="$(mktemp "$dir/.roles.XXXXXX")" || exit 1
-  printf '%s' "$1" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$roles"
+  tmp="$(mktemp "$dir/.write.XXXXXX")" || exit 1
+  printf '%s' "$2" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$1"
 }
+write_roles() { write_file "$roles" "$1"; }
 
 holder() { awk -v r="$1" '$1 == r { print $2; exit }' "$roles" 2>/dev/null; }
 
@@ -71,16 +93,108 @@ cmd_role_of() {
 
 cmd_set_role() {
   valid_role "${1:-}" && valid_name "${2:-}" || usage "set-role chief|engineer NAME"
-  if [ "${FRAIM_HEADLESS:-}" = 1 ]; then echo "fraim-authority: only the owner gives a role" >&2; return 1; fi
+  refuse_unattended "only the owner gives a role"
   migrate
   local rest
   rest="$(grep -v "^$1 " "$roles" 2>/dev/null || true)"
   write_roles "${rest:+$rest$'\n'}$1 $2"$'\n'
 }
 
+recorded() {
+  local v
+  v="$(awk -v k="$1" 'NF == 2 && $1 == k { v = $2 } END { if (v != "") print v }' "$settings" 2>/dev/null)"
+  if [ -z "$v" ]; then
+    case "$1" in
+      contact) v="$(holder chief)" ;;
+      fixer) v="$(holder engineer)" ;;
+      chat) v="$(recorded contact)" ;;
+    esac
+  fi
+  [ -n "$v" ] && [ "$v" != none ] && printf '%s\n' "$v"
+}
+
+cmd_get() {
+  valid_setting "${1:-}" || usage "get contact|fixer|chat [--recorded]"
+  migrate
+  local name
+  name="$(recorded "$1")" || return 1
+  [ "${2:-}" = --recorded ] || [ -f "$leads/$name/lead.md" ] || return 1
+  printf '%s\n' "$name"
+}
+
+need_agent() {
+  [ -f "$leads/$1/lead.md" ] || { echo "fraim-authority: there is no agent $1" >&2; exit 1; }
+}
+
+cmd_set() {
+  valid_setting "${1:-}" && valid_name "${2:-}" || usage "set contact|fixer|chat NAME|none"
+  refuse_unattended "only the owner changes this"
+  [ "$2" = none ] || need_agent "$2"
+  migrate
+  local rest
+  rest="$(awk -v k="$1" '!(NF == 2 && $1 == k)' "$settings" 2>/dev/null)"
+  write_file "$settings" "${rest:+$rest$'\n'}$1 $2"$'\n'
+}
+
+default_cap() {
+  case "$1:$2" in
+    chief:queue|chief:rules) echo all ;;
+    chief:output) echo direct ;;
+    chief:source_tools|engineer:builds_off) echo 1 ;;
+    chief:template) echo chief ;;
+    engineer:template) echo engineer ;;
+    *:queue|*:rules) echo own ;;
+    *:output) echo summary ;;
+    *:builds_off|*:source_tools) echo 0 ;;
+    *:template) echo lead ;;
+  esac
+}
+
+cmd_cap() {
+  valid_name "${1:-}" && valid_key "${2:-}" || usage "cap NAME queue|rules|output|builds_off|source_tools|template"
+  migrate
+  local v
+  v="$(awk -v n="$1" -v k="$2" 'NF == 4 && $1 == "cap" && $2 == n && $3 == k { v = $4 } END { if (v != "") print v }' "$settings" 2>/dev/null)"
+  printf '%s\n' "${v:-$(default_cap "$(cmd_role_of "$1")" "$2")}"
+}
+
+cmd_set_cap() {
+  valid_name "${1:-}" && valid_cap "${2:-}" "${3:-}" || usage "set-cap NAME KEY VALUE"
+  refuse_unattended "only the owner gives a capability"
+  need_agent "$1"
+  migrate
+  local rest
+  rest="$(awk -v n="$1" -v k="$2" '!(NF == 4 && $1 == "cap" && $2 == n && $3 == k)' "$settings" 2>/dev/null)"
+  write_file "$settings" "${rest:+$rest$'\n'}cap $1 $2 $3"$'\n'
+}
+
+cmd_rename() {
+  valid_name "${1:-}" && valid_name "${2:-}" || usage "rename OLD NEW"
+  refuse_unattended "only the owner renames an agent"
+  migrate
+  if [ -f "$roles" ]; then
+    write_roles "$(awk -v o="$1" -v n="$2" '$2 == o { $2 = n } { print }' "$roles")"$'\n'
+  fi
+  if [ -f "$settings" ]; then
+    write_file "$settings" "$(awk -v o="$1" -v n="$2" '(NF == 2 || $1 == "cap") && $2 == o { $2 = n } { print }' "$settings")"$'\n'
+  fi
+}
+
+cmd_holds() {
+  valid_name "${1:-}" || usage "holds NAME"
+  migrate
+  [ -n "$(cat "$roles" "$settings" 2>/dev/null | awk -v n="$1" '$2 == n { print; exit }')" ]
+}
+
 case "${1:-}" in
   role) shift; cmd_role "$@" ;;
   role-of) shift; cmd_role_of "$@" ;;
   set-role) shift; cmd_set_role "$@" ;;
-  *) usage "role | role-of | set-role" ;;
+  get) shift; cmd_get "$@" ;;
+  set) shift; cmd_set "$@" ;;
+  cap) shift; cmd_cap "$@" ;;
+  set-cap) shift; cmd_set_cap "$@" ;;
+  rename) shift; cmd_rename "$@" ;;
+  holds) shift; cmd_holds "$@" ;;
+  *) usage "role | role-of | set-role | get | set | cap | set-cap | rename | holds" ;;
 esac

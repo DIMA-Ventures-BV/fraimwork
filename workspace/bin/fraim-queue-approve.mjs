@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { channelWord } from './fraim-channels.mjs'
 import {
-  ADVICE, GOALS, HOME, KINDS, LEADS, Refused, THREADS, UsageError, allItems, copyMedia, fire, isChief, itemDir, newId,
-  now, promptText, queueUrl, readItem, readText, runtimeEnv, tellLead, tool, usage, validThread, writeItem,
+  ADVICE, GOALS, HOME, KINDS, LEADS, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId,
+  now, promptText, queueUrl, readItem, readText, runtimeEnv, tellLead, theContact, tool, usage, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
@@ -130,8 +130,8 @@ export function addItem(opts) {
     }
   }
   if (!opts.quiet && item.state === 'open') notify(newText(item))
-  // A lead hears at once when a goal it started ends; the chief hears through its queue events.
-  if (item.goal && item.lead && !isChief(item.lead)) {
+  // A lead hears at once when a goal it started ends; queue=all hears through its queue events.
+  if (item.goal && item.lead && capability(item.lead, 'queue') !== 'all') {
     tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`, item.thread)
   }
   return item
@@ -226,7 +226,7 @@ function grantAllowedForCaller(item, grantId) {
     if (!/^g\d{1,6}$/.test(goal) || readText(path.join(GOALS, goal, 'queue'), 40).trim() !== grantId) throw new Error(`${grantId} is not the yes this task was started from; ask the owner in the queue instead`)
     return
   }
-  if (process.env.FRAIM_LEAD_ROLE !== 'engineer') throw new Error(`only the owner can use ${grantId} for this; ask the owner in the queue instead`)
+  if (process.env.FRAIM_BUILDS_OFF !== '1') throw new Error(`only the owner can use ${grantId} for this; ask the owner in the queue instead`)
   if (item.on_approve) throw new Error(`a new task needs its own yes; ask the owner in the queue instead`)
 }
 
@@ -249,11 +249,11 @@ export function approvedByGrant(item, grantId) {
   return done
 }
 
-// The chief starts the task the owner asked for in the chat: that request covers one goal.
+// The default contact starts the task the owner asked for in the chat: that request covers one goal.
 export function useYesForGoal(grantId) {
   if (!/^q\d{1,6}$/.test(grantId || '')) usage('use-yes needs a queue id (q1, q2, ...)')
   const lead = process.env.FRAIM_LEAD_NAME || ''
-  if (!lead || !isChief(lead)) throw new Error('only the chief can start a task from the owner\'s request')
+  if (!lead || lead !== theContact()) throw new Error('only the default contact can start a task from the owner\'s request')
   const grant = readItem(grantId)
   if (grant.source !== 'the owner in the chat') throw new Error(`${grantId} is not a request from the owner's chat`)
   const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')

@@ -60,9 +60,11 @@ let sentStyle = replyStyle()
 // The owner can change this text: fraim-prompt own whatsapp.
 function channelInstructions() {
   let display = ''
+  let contact = ''
   try { display = execFileSync('fraim-lead', ['display'], { encoding: 'utf8', timeout: 5000 }).trim() } catch {}
+  try { contact = execFileSync('fraim-authority', ['get', 'contact'], { encoding: 'utf8', timeout: 5000 }).trim() } catch {}
   try {
-    return execFileSync('fraim-prompt', ['render', 'whatsapp', '--set', `view_url=${VIEW_URL}`, '--set', `display=${display}`], { encoding: 'utf8', timeout: 5000 }).trim()
+    return execFileSync('fraim-prompt', ['render', 'whatsapp', '--set', `view_url=${VIEW_URL}`, '--set', `display=${display}`, '--set', `contact=${contact}`], { encoding: 'utf8', timeout: 5000 }).trim()
   } catch {
     return 'WhatsApp messages arrive as <channel source="whatsapp" chat_id="...">. Answer with the reply tool and pass the chat_id from the tag.'
   }

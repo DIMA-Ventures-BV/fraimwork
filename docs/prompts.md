@@ -25,6 +25,8 @@ The first file that exists is used:
 | `whatsapp` | What the WhatsApp chat on the server is told |
 | `lead-run`, `lead-header` | What a lead does each run |
 | `engineer-run` | How the engineer builds, tests and asks to switch things on |
+| `fixer-failure` | What the agent that receives failed automations is told |
+| `chat-no-agent` | What the chat in the app says when no agent takes it |
 | `goal` | What a background task is told, and what its result looks like |
 | `automation` | The text around your own automation prompt |
 | `brain-review`, `brain-distill` | How the brain finds your preferences and proposes rules |

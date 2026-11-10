@@ -7,7 +7,7 @@ import {
   rank, readChat, readItem, readText, readThread, roleOf, validId, validThread,
 } from './fraim-queue-store.mjs'
 import { addItem, decide } from './fraim-queue-approve.mjs'
-import { sayInThread, tellChief } from './fraim-queue-threads.mjs'
+import { sayInThread, tellContact } from './fraim-queue-threads.mjs'
 import { active, header, lastStatus, run } from './fraim-queue-views.mjs'
 import { allows, findToken, originListed, stillValid } from './fraim-queue-tokens.mjs'
 
@@ -140,7 +140,7 @@ function say({ params, body, who }) {
   const text = requiredText(body)
   const t = readThread(params.thread)
   sayInThread(t.id, who.from, '', text)
-  tellChief(t, who.from, who.cookie ? promptText('thread-owner', { text }) : promptText('thread-app', { app: who.token.name, text }))
+  tellContact(t, who.from, who.cookie ? promptText('thread-owner', { text }) : promptText('thread-app', { app: who.token.name, text }))
   return [201, { ok: true, from: who.from }]
 }
 

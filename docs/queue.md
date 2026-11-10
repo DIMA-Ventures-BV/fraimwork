@@ -108,6 +108,22 @@ A lead cannot send mail, post, pay, merge or deploy. Its tools are narrow: read 
 
 You get one WhatsApp message per run, and none when the lead found nothing.
 
+## Agents and capabilities
+
+The engine knows agents, capabilities and a default contact. The chief and the engineer are the defaults a fresh install gets. Only you can change any of this, with `fraim-authority`:
+
+| Setting | Means | Default |
+|---|---|---|
+| `set contact NAME\|none` | The agent that writes your WhatsApp notices and takes your work (`fraim-lead ask`) | the chief |
+| `set fixer NAME\|none` | The agent that receives failed automations | the engineer |
+| `set chat NAME\|none` | The agent that answers the chat in the app | the contact |
+| `set-cap NAME queue own\|all`, `rules own\|all` | Sees its own or everyone's queue and rules | `all` for the chief, otherwise `own` |
+| `set-cap NAME output direct\|summary` | Its answer goes to you word for word, or as "checked in" | `direct` for the chief |
+| `set-cap NAME builds_off 1`, `source_tools 1` | What it makes starts switched off; it may use tools named by built-in sources | engineer; chief |
+| `set-cap NAME template X` | Uses the `X-run` and `tools-X` prompts | `chief`, `engineer`, otherwise `lead` |
+
+`fraim-lead rename OLD NEW` renames an agent and keeps all of this. With no contact, notices go out as they are at the normal gap, WhatsApp answers by itself, and the app chat says nobody is set up. A deleted agent's leftover automations stop without an alert.
+
 ## The chief of staff
 
 `fraim lead new chief --chief` makes it. The chief is the one voice between you and everything technical. The WhatsApp chat talks as the chief: before it answers about work, it reads `fraim-lead brief` (the chief's brief and notes, what you were told, recent tasks with what they were for, coding sessions, leads, automations, open decisions and your rules) and tells you what each thing means, without ids. Every message you read also gets the plain-words rules from `fraim-style prompt`.
@@ -190,7 +206,7 @@ you: "send me the Meta ad spend every Monday"
 
 Guards:
 
-- **New things start off.** While the engineer runs, `fraim-auto new` and `fraim-lead new` always make it switched off (`FRAIM_LEAD_ROLE=engineer`), even when it forgets `--off`.
+- **New things start off.** While an agent with `builds_off` runs, `fraim-auto new` and `fraim-lead new` always make it switched off (`FRAIM_BUILDS_OFF=1`), even when it forgets `--off`.
 - **Only you switch on.** Approving a `--switch-on NAME` item runs `fraim-auto on NAME`: it removes `enabled: false`, resumes a paused lead and updates the scheduler. A headless run (goal, lead, automation) cannot run `fraim-auto on`, and the engineer's tools do not include `resume`.
 - **No loops.** A failure of the engineer's own runs goes to the queue as before, not back to the engineer.
 - It cannot send mail or messages, post, pay, merge or deploy.

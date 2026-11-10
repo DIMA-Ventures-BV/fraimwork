@@ -61,7 +61,7 @@ export {
   setPriority, supersedeFailed, useYesForGoal,
 } from './fraim-queue-approve.mjs'
 export {
-  active, agentScreen, agentSend, chiefChat, describeThread, displayName, employees, inboxRows, member, runSteps, team,
+  active, agentScreen, agentSend, describeThread, displayName, employees, inboxRows, member, ownerChat, runSteps, team,
   threadDetail, transcript,
 } from './fraim-queue-views.mjs'
 export { addWhatsApp, closeThread, dismissThread, putThread, restoreThread, sayInThread } from './fraim-queue-threads.mjs'

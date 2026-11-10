@@ -4,8 +4,8 @@ import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  AUTOS, AUTO_STATE, GOALS, HOME, LEADS, allItems, allThreads, isChief, readChat, readItem, readText, readThread,
-  runtimeEnv, theChief, tool, usage, validId, validThread,
+  AUTOS, AUTO_STATE, GOALS, HOME, LEADS, allItems, allThreads, readChat, readItem, readText, readThread,
+  runtimeEnv, theChatAgent, theContact, tool, usage, validId, validThread,
 } from './fraim-queue-store.mjs'
 
 export function header(text) {
@@ -60,6 +60,7 @@ export function team() {
   const leads = []
   const automations = []
   let chief = null
+  const contact = theContact()
   let names = []
   try { names = fs.readdirSync(AUTOS).filter((n) => !n.startsWith('_') && !n.startsWith('.')).sort() } catch {}
   for (const name of names) {
@@ -68,9 +69,9 @@ export function team() {
     const when = h.schedule ? `schedule ${h.schedule}` : h.every ? `every ${h.every}` : h.trigger ? h.trigger : 'by hand'
     const base = { name, title: displayName(h.lead || name), when, description: (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''), off: /^(false|no|off|0)$/i.test(h.enabled || ''), ...lastStatus(name) }
     if (!h.lead) { automations.push(base); continue }
-    const role = isChief(h.lead) ? 'chief' : 'lead'
+    const role = h.lead === contact ? 'chief' : 'lead'
     leads.push({ ...base, lead: h.lead, role })
-    if (role === 'chief') chief = { name: h.lead, title: displayName(h.lead), schedule: h.schedule || '', ...(latestRun(path.join(LEADS, h.lead, 'runs')) || {}) }
+    if (h.lead === contact) chief = { name: h.lead, title: displayName(h.lead), schedule: h.schedule || '', ...(latestRun(path.join(LEADS, h.lead, 'runs')) || {}) }
   }
   return { chief, leads, automations }
 }
@@ -226,7 +227,7 @@ export function displayName(name) {
   if (/^automation /.test(n)) return displayName(n.slice(11))
   const own = header(readText(path.join(LEADS, n, 'lead.md'), 2000)).display
   if (own) return own
-  if (isChief(n)) return 'Chief of staff'
+  if (n && n === theContact()) return 'Chief of staff'
   const plain = n.replace(/-/g, ' ')
   return plain ? plain.charAt(0).toUpperCase() + plain.slice(1) : 'Someone'
 }
@@ -361,11 +362,11 @@ export function describeThread(id) {
   return parts.join('\n')
 }
 
-// --- the chat with the chief of staff: the same conversation as WhatsApp ---------------------
+// --- the owner's chat in the app: the same conversation as WhatsApp ----------------------------
 
 const RELAY = process.env.FRAIM_RELAY_DIR || path.join(HOME, 'fraim/relay')
 
-export function chiefChat() {
+export function ownerChat() {
   const items = allItems()
   const titles = Object.fromEntries(allThreads().map((t) => [t.id, t.title]))
   const lines = readText(path.join(RELAY, 'conversation.jsonl'), 4000000).split('\n').flatMap((l) => {
@@ -379,11 +380,12 @@ export function chiefChat() {
     }
     return { who: m.who === 'owner' ? 'owner' : 'chief', text: String(m.text || ''), time: String(m.time || ''), app: m.chat === 'app', refs: [...refs].slice(0, 3).map(([id, title]) => ({ id, title })) }
   })
-  return { exists: Boolean(theChief()), title: displayName(theChief()), typing: fs.existsSync(path.join(RELAY, 'chat.lock')), messages }
+  const agent = theChatAgent()
+  return { exists: true, title: agent ? displayName(agent) : displayName('manual'), typing: fs.existsSync(path.join(RELAY, 'chat.lock')), messages }
 }
 
-// A chief's answer takes longer than fire() allows, and the page does not wait for it.
-export function askChief(text) {
+// The answer takes longer than fire() allows, and the page does not wait for it.
+export function askChatAgent(text) {
   const child = spawn(tool('fraim-relay'), ['chat', '--', text], { env: runtimeEnv(), stdio: 'ignore', detached: true })
   child.on('error', () => {})
   child.unref()

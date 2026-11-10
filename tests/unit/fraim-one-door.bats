@@ -9,7 +9,7 @@ setup() {
   export HOME="$T/home" FRAIM_RUNTIME_ENV=/dev/null PATH="$T/bin:$BIN:$PATH" LOG="$T/log"
   export FRAIM_LEADS_DIR="$HOME/fraim/leads" FRAIM_GOALS_DIR="$HOME/fraim/goals" FRAIM_QUEUE_DIR="$HOME/fraim/queue" FRAIM_BRAIN_DIR="$HOME/fraim/brain"
   export FRAIM_AUTOMATIONS_DIR="$HOME/fraim/automations" FRAIM_AUTO_STATE_DIR="$T/state" FRAIM_AUTO_KIT_DIR="$T/kit" FRAIM_CRONTAB="$T/crontab"
-  unset FRAIM_HEADLESS FRAIM_GOAL FRAIM_LEAD_ROLE FRAIM_LEAD_NAME FRAIM_AUTHORITY_DIR
+  unset FRAIM_HEADLESS FRAIM_GOAL FRAIM_BUILDS_OFF FRAIM_LEAD_NAME FRAIM_AUTHORITY_DIR
   printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/fraim-notify"
   chmod +x "$T/bin/"*
   U="$HOME/.config/fraim/authority/unreviewed"
@@ -169,7 +169,7 @@ EOF
 }
 
 @test "an automation the engineer creates starts marked" {
-  FRAIM_HEADLESS=1 FRAIM_LEAD_ROLE=engineer run "$A" new built
+  FRAIM_HEADLESS=1 FRAIM_BUILDS_OFF=1 run "$A" new built
   [ "$status" -eq 0 ]
   [ -f "$U/built" ]
 }

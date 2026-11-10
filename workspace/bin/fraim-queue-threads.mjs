@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  HOME, THREADS, allItems, allThreads, fire, newThreadId, now, promptText, readText, readThread, theChief, usage, writeThread,
+  HOME, THREADS, allItems, allThreads, fire, newThreadId, now, promptText, readText, readThread, theContact, usage, writeThread,
 } from './fraim-queue-store.mjs'
 import { decide } from './fraim-queue-approve.mjs'
 
@@ -79,7 +79,7 @@ export function dismissThread(t) {
   const rule = addRule(`not relevant: ${last?.from || t.who}${last?.address ? ` <${last.address}>` : ''}, "${t.title}"`)
   t.closed = { by: 'owner', time: now(), rule }
   writeThread(t)
-  if (t.active) tellChief(t, 'owner', promptText('thread-closed', { title: t.title }))
+  if (t.active) tellContact(t, 'owner', promptText('thread-closed', { title: t.title }))
 }
 
 export function restoreThread(t) {
@@ -100,14 +100,14 @@ export function closeThread(id, from, reason) {
   writeThread(fresh)
 }
 
-export function tellChief(thread, from, text) {
-  const chief = theChief()
-  if (chief) fire('fraim-lead', ['tell', chief, '--from', from, '--thread', thread.id, '--', text])
+export function tellContact(thread, from, text) {
+  const contact = theContact()
+  if (contact) fire('fraim-lead', ['tell', contact, '--from', from, '--thread', thread.id, '--', text])
 }
 
 const SOURCE_WORD = { email: 'email', whatsapp: 'WhatsApp message', linear: 'Linear issue', error: 'website problem' }
 export function announce({ thread, isNew }) {
-  tellChief(thread, thread.kind, promptText('thread-new', { is_new: isNew ? '1' : '', what: SOURCE_WORD[thread.kind] || thread.kind, who: thread.messages.at(-1)?.from || thread.who || 'someone', title: thread.title, id: thread.id }))
+  tellContact(thread, thread.kind, promptText('thread-new', { is_new: isNew ? '1' : '', what: SOURCE_WORD[thread.kind] || thread.kind, who: thread.messages.at(-1)?.from || thread.who || 'someone', title: thread.title, id: thread.id }))
 }
 
 // A contact wrote on WhatsApp. Each number is one conversation, and the message never reaches a

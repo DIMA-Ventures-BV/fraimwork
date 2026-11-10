@@ -183,7 +183,7 @@ EOF
   "$Q" add --quiet --lead mlv-ai --kind decision --title "AI costs: read-only check"
   "$Q" approve q1 --note "ja tuurlijk"
   rm -f "$SENT"
-  FRAIM_HEADLESS=1 FRAIM_LEAD_ROLE=engineer run "$Q" add --quiet --lead engineer --kind decision --title "Daily AI cost report" --if-yes "Every morning you see what stories cost." --switch-on ai-costs --approved-by q1
+  FRAIM_HEADLESS=1 FRAIM_BUILDS_OFF=1 run "$Q" add --quiet --lead engineer --kind decision --title "Daily AI cost report" --if-yes "Every morning you see what stories cost." --switch-on ai-costs --approved-by q1
   [ "$status" -eq 0 ]
   [ "$output" = q2 ]
   [ "$(cat "$AUTO_ARGS")" = "on ai-costs" ]

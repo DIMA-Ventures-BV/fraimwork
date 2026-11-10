@@ -8,7 +8,7 @@ setup() {
   mkdir -p "$T/home/fraim/leads" "$T/bin"
   export HOME="$T/home" FRAIM_RUNTIME_ENV=/dev/null
   export FRAIM_LEADS_DIR="$T/home/fraim/leads" PATH="$T/bin:$BIN:$PATH"
-  unset FRAIM_HEADLESS FRAIM_GOAL FRAIM_LEAD_ROLE FRAIM_AUTHORITY_DIR
+  unset FRAIM_HEADLESS FRAIM_GOAL FRAIM_BUILDS_OFF FRAIM_AUTHORITY_DIR
   A="$BIN/fraim-authority"
   ROLES="$HOME/.config/fraim/authority/roles"
 }
@@ -114,10 +114,10 @@ state() { jq -r .state "$FRAIM_QUEUE_DIR/$1/item.json"; }
 
 @test "the engineer can switch on what it built, but cannot start a goal" {
   queue_setup
-  FRAIM_HEADLESS=1 FRAIM_LEAD_ROLE=engineer run "$Q" add --quiet --lead e --title "x" --switch-on thing --approved-by q1
+  FRAIM_HEADLESS=1 FRAIM_BUILDS_OFF=1 run "$Q" add --quiet --lead e --title "x" --switch-on thing --approved-by q1
   [ "$(state q2)" = approved ]
   grep -qx 'on thing' "$AUTO_ARGS"
-  FRAIM_HEADLESS=1 FRAIM_LEAD_ROLE=engineer run "$Q" add --quiet --lead e --title "y" --on-approve "do anything" --approved-by q1
+  FRAIM_HEADLESS=1 FRAIM_BUILDS_OFF=1 run "$Q" add --quiet --lead e --title "y" --on-approve "do anything" --approved-by q1
   [ "$(state q3)" = open ]
   [ ! -e "$GOAL_ARGS" ]
 }

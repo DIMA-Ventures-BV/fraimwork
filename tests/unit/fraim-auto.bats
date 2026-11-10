@@ -549,7 +549,7 @@ Meta spent 400 euro this week for 3 orders." run "$AUTO" run ads
   ! grep -q 'enabled' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
   grep -qx 'Say hi.' "$FRAIM_AUTOMATIONS_DIR/report/automation.md"
   grep -qx '0 8 \* \* \* fraim-auto fire report' "$FRAIM_AUTO_CRONTAB"
-  FRAIM_LEAD_ROLE=engineer fraim-auto new other >/dev/null
+  FRAIM_BUILDS_OFF=1 fraim-auto new other >/dev/null
   grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/other/automation.md"
 }
 

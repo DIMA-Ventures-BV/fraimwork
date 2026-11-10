@@ -10,9 +10,9 @@ import {
 } from './fraim-queue-store.mjs'
 import { createApi } from './fraim-queue-api.mjs'
 import { decide, setPriority } from './fraim-queue-approve.mjs'
-import { dismissThread, restoreThread, sayInThread, tellChief } from './fraim-queue-threads.mjs'
+import { dismissThread, restoreThread, sayInThread, tellContact } from './fraim-queue-threads.mjs'
 import {
-  active, agentScreen, agentSend, askChief, chiefChat, employees, inboxRows, member, team, threadDetail,
+  active, agentScreen, agentSend, askChatAgent, employees, ownerChat, inboxRows, member, team, threadDetail,
 } from './fraim-queue-views.mjs'
 
 function sameToken(a, b) {
@@ -71,12 +71,12 @@ export function createServer(secret = token()) {
         const extra = uiPage(url.pathname.slice(3))
         return extra.trim() ? send(res, 200, extra, 'text/html; charset=utf-8') : send(res, 404, { error: 'no such page' })
       }
-      if (req.method === 'GET' && url.pathname === '/api/chief') return send(res, 200, chiefChat())
+      if (req.method === 'GET' && url.pathname === '/api/chief') return send(res, 200, ownerChat())
       if (req.method === 'POST' && url.pathname === '/api/chief/say') {
         if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
         const text = String((await readBody(req)).text || '').trim()
         if (!text) usage('write a message first')
-        askChief(text)
+        askChatAgent(text)
         return send(res, 200, { ok: true })
       }
       if (req.method === 'GET' && url.pathname === '/api/employees') return send(res, 200, employees())
@@ -99,7 +99,7 @@ export function createServer(secret = token()) {
         const text = String((await readBody(req)).text || '').trim()
         if (!text) usage('write a message first')
         sayInThread(t.id, 'owner', '', text)
-        tellChief(t, 'owner', promptText('thread-owner', { text }))
+        tellContact(t, 'owner', promptText('thread-owner', { text }))
         return send(res, 200, { ok: true })
       }
       if (req.method === 'GET' && url.pathname === '/api/items') {

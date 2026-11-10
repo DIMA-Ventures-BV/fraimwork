@@ -2,7 +2,7 @@
 # Tells the owner something. Usage: fraim-notify "text"  or  echo text | fraim-notify
 # Every message is appended to ~/fraim/alerts.md (so owners without WhatsApp still see it,
 # and `fraim status --json` reports it); with the whatsapp module or a channel it is also sent there.
-# With a chief of staff, the notice goes to fraim-relay: the chief writes what the owner reads.
+# The notice goes to fraim-relay: the default contact, when there is one, writes what the owner reads.
 #   FRAIM_NOTIFY_NO_ALERT=1  a normal result (a job's answer), not something that went wrong
 #   FRAIM_NOTIFY_CHAT=ID     send to this chat instead of the owner's
 #   FRAIM_NOTIFY_DIRECT=1    send the text as it is (the chief's own words, security notices)
