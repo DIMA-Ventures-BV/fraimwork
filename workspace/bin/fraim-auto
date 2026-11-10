@@ -172,6 +172,7 @@ cmd_mark_unreviewed() {
     _triggers|_outputs|_sources)
       second="${rest#*/}"; second="${second%%/*}"
       valid_type "$second" && mark_unreviewed "$first.$second" ;;
+    _brain) mark_unreviewed _brain.brain ;;
     *) valid_name "$first" && mark_unreviewed "$first" ;;
   esac
 }
@@ -817,7 +818,7 @@ cmd_on() {
   fi
   rm -f "$state_root/$name/paused" "$state_root/$name/last_alert" "$state_root/$name/review_asked"
   # The yes covers this automation and the plug-ins that were built with it.
-  rm -f "$unreviewed/$name" "$unreviewed"/_triggers.* "$unreviewed"/_outputs.* "$unreviewed"/_sources.*
+  rm -f "$unreviewed/$name" "$unreviewed"/_triggers.* "$unreviewed"/_outputs.* "$unreviewed"/_sources.* "$unreviewed"/_brain.*
   sset "$name" streak 0
   lead="$(get "$f" lead)"
   if [ -n "$lead" ] && [ -f "$leads_dir/$lead/paused" ] && command -v fraim-lead >/dev/null; then

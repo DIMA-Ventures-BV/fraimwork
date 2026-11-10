@@ -51,6 +51,10 @@ const PROMPT_CHARS = 6000
 const SKILL_LIMITS = { files: 20, fileBytes: 64 * 1024, totalBytes: 256 * 1024, bodyChars: 24000 }
 const MARKER = '.fraim-brain.json'
 const KEEP_HISTORY = 50
+const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim/automations')
+const AUTHORITY = process.env.FRAIM_AUTHORITY_DIR || path.join(HOME, '.config/fraim/authority')
+const PLUGIN = path.join(AUTOS, '_brain/brain')
+const PLUGIN_MARK = path.join(AUTHORITY, 'unreviewed/_brain.brain')
 
 class UsageError extends Error {}
 const usage = (msg) => { throw new UsageError(msg) }
@@ -993,8 +997,22 @@ function parseArgs(argv) {
   return out
 }
 
+// The owner's own brain replaces this one (docs/brain.md). It runs with FRAIM_BRAIN_BUILTIN=1,
+// so a fraim-brain call inside it reaches this default and never itself.
+function handOffToPlugin(action, argv) {
+  if (process.env.FRAIM_BRAIN_BUILTIN === '1' || fs.existsSync(PLUGIN_MARK)) return
+  if (!fs.statSync(PLUGIN, { throwIfNoEntry: false })?.isFile()) return
+  if (['note', 'forget', 'undo', 'apply', 'discard'].includes(action)) ownerOnly('change the rules')
+  const res = spawnSync(PLUGIN, argv, { stdio: 'inherit', env: { ...process.env, FRAIM_BRAIN_BUILTIN: '1' } })
+  if (res.error) throw new Error(`the brain plug-in could not run: ${res.error.message}`)
+  // A queue card the default brain made must still close when the plug-in has no such action.
+  if (res.status === 2 && ['apply', 'discard'].includes(action)) return
+  process.exit(res.status ?? 1)
+}
+
 function main(argv) {
   const [action, ...rest] = argv
+  if (action !== 'skill') handOffToPlugin(action, argv)
   if (action === 'skill') {
     const [sub, ...more] = rest
     const args = parseArgs(more)

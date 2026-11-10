@@ -65,6 +65,30 @@ The brain only changes skills it installed itself. Your own skills and plugin sk
 - The chat review uses Sonnet (`FRAIM_BRAIN_MODEL` changes it). A preference it misses still reaches the weekly distill only through the queue, so check `rules` now and then.
 - Whether it helps: `fraim brain stats` (or ask on WhatsApp how the rules are doing) shows how much work you sent back per week. Brain proposals and skills do not count. That share should go down as the rules grow.
 
+## Replacing the brain
+
+The brain is content: you can run your own instead of this one. Put an executable at `~/fraim/automations/_brain/brain` (`FRAIM_AUTOMATIONS_DIR` moves the folder). `fraim-brain` stays the command everyone calls and hands over to your program, with the same arguments, the same input and output, and its exit code.
+
+What your program must do:
+
+| Action | Contract |
+|---|---|
+| `show [--for LEAD] [--all] [--plain]` | Required. Prints the text that goes into a prompt, at most 6000 characters. Empty is valid. `--for` names the lead; `--all` adds every lead's rules. `show --plain` without `--for` is also called. |
+
+Optional: `note`, `forget`, `undo`, `why`, `history`, `stats`, `review`, `distill`, `log`, `apply`, `discard`, with the arguments listed at the top of `workspace/bin/fraim-brain`. An action you do not have exits 2, and callers cope with that: the review and distill cron jobs do nothing, a reason you give in the queue is not saved, and a rule change from Settings shows an error. Without `apply` and `discard`, the default brain handles them, so a proposal that waited in the queue before you switched can still be closed.
+
+Plain `show` (no options) is what Settings reads and what `fraim brain show` prints. To list rules on the Settings page, print `## Section` headings and `- text [r1]` lines; other lines are ignored. Changing a rule from Settings calls `note`, `forget` and `undo`.
+
+What stays with the engine:
+
+- `fraim-brain skill ...` never goes to your program. Installing a skill needs your yes, and that stays in the engine.
+- `note`, `forget`, `undo`, `apply` and `discard` are refused for a run nobody watches, before your program starts.
+- A program written by a run nobody watches, or any other file in that folder changed by one, is marked and ignored until your yes (`fraim-auto on`); the default brain runs meanwhile. What you write or ask for in the chat goes live at once.
+
+If your program crashes on `show`, prompts go out without rules: every caller discards the error and carries on. If it exists but cannot start, other actions fail with an error instead of quietly writing to the default brain.
+
+To build on the default, call `fraim-brain` from your program. Your program runs with `FRAIM_BRAIN_BUILTIN=1`, so that call reaches the default and not your program again. Set the same variable yourself to skip your program from outside.
+
 ## Where the design comes from
 
 The memory split (evidence, rules, skills), the patch-style edits, the size limits and the approval gate follow Nous Research's [Hermes Agent](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory). Treating a generalization as a guess until more evidence supports it, and keeping each rule linked to its evidence, follow [current work on agent memory](https://alpeshnakrani.com/books/memory-systems-for-agents/reflection-consolidation-and-the-summaries-that-lie/).
