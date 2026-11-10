@@ -43,6 +43,9 @@ has_auto() { [ -f "$autos/$1/automation.md" ] && grep -q "^lead: $1\$" "$autos/$
 
 usage() { echo "fraim-lead: $*" >&2; exit 2; }
 die() { echo "fraim-lead: $*" >&2; exit 1; }
+# SILENT means nothing to report. Models sometimes explain first ("None today, so: SILENT"), so the
+# answer is silent when its last non-empty line is SILENT, with or without brackets or stars.
+is_silent() { [ "$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:][]*`.:')" = SILENT ]; }
 
 valid_name() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,39}$'; }
 lead_dir() {
@@ -607,7 +610,7 @@ cmd_run() {
   printf '%s\n' "$output"
 
   if [ "$chief" = 1 ]; then
-    [ "$(printf '%s' "$output" | tr -d '[:space:]')" = SILENT ] && return 0
+    is_silent "$output" && return 0
     # A run woken by queue events goes through the relay, which knows what the owner was
     # already told about the same results; the digest and answers to the owner go as they are.
     if [ -n "${FRAIM_LEAD_INPUT:-}" ] && [ "${FRAIM_LEAD_TRIGGER:-manual}" != manual ]; then

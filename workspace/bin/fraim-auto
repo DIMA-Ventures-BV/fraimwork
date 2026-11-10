@@ -45,6 +45,9 @@ LATER_KEYS=" whatsapp webhook mail "
 
 usage() { echo "fraim-auto: $*" >&2; exit 2; }
 die() { echo "fraim-auto: $*" >&2; exit 1; }
+# SILENT means nothing to report. Models sometimes explain first ("None today, so: SILENT"), so the
+# answer is silent when its last non-empty line is SILENT, with or without brackets or stars.
+is_silent() { [ "$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:][]*`.:')" = SILENT ]; }
 now_human() { date '+%Y-%m-%d %H:%M'; }
 
 valid_name() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,47}$'; }
@@ -524,7 +527,7 @@ run_once() {
   if [ "$dry" = 1 ]; then RUN_STATUS=dry; echo dry > "$run/status"; return 0; fi
   sset "$name" previous_output "$text"
 
-  if [ "$(printf '%s' "$text" | tr -d '[:space:]')" = SILENT ] || [ "$(printf '%s' "$text" | tr -d '[:space:]')" = "[SILENT]" ]; then
+  if is_silent "$text"; then
     RUN_STATUS=silent
     echo silent > "$run/status"
     record_ok "$name" silent
