@@ -161,6 +161,8 @@ $(brain_rules "$(cat "$goals/$id/lead" 2>/dev/null)")
 The owner reviews your result in a queue, so make it easy to judge:
 - If you changed something a person can see (a page, an app, a document), save screenshots as PNG in ~/fraim/goals/$id/media/, before and after when that helps. Use the browser tools (mcp__browser) for web pages. A short screen recording (.webm or .mp4) in the same folder helps when a flow matters more than one screen.
 - Write ~/fraim/goals/$id/queue.json: {"title": "<the topic, at most 60 characters>", "ask": "<one question the owner answers with yes or no, in plain words, e.g. \"Merge the new checkout text?\">", "advise": "approve", "reject" or "dismiss" (your advice), "need": "<why this is needed: the problem it solves or what the owner gains, one sentence in the owner's words>", "if_yes": "<what changes for the owner, the customers or the site when the owner approves, and any risk>", "if_no": "<what happens when the owner says no or waits>", "why": ["<at most 3 reasons for your advice, one short sentence each>"], "priority": 1, 2 or 3 (1 = the owner should look today), "kind": "review" or "decision", "links": ["<PR or preview URLs>"], "on_approve": "<the one next step to take when the owner approves, in plain words, for example: merge PR #12; empty when there is none>"}. The owner reads the question, your advice, why it is needed, what yes and no change, and the reasons first, and must be able to decide from those alone; your final answer below is the full report behind them.
+  - queue.json is the only way into the queue: never run fraim-queue add yourself. When the job continues an earlier queue item, your result lands on that item.
+  - When the owner has nothing to decide, do not write queue.json and do not invent a question such as "Is this OK?". Your final answer is the report, and nothing waits for the owner.
   - One decision per item: "ask" is the only thing Approve decides, and "on_approve" does exactly that. Put any other question for the owner in queue.json as "more": ["<question in plain words, with your advice>", ...]; the server makes each its own queue item.
   - "need", "if_yes" and "if_no" translate the work into what it means for the owner's business. Not "updates sharp and puppeteer-core" but "fixes known security holes in the tools that make photos and PDF books"; not "30 to 20 audit findings" but "the serious holes are gone, a few small ones stay". Name the real risk of yes ("the PDF book could look different; check one before it goes live") and the real cost of no ("the holes stay open on the live site").
   - Write "ask", "need", "if_yes", "if_no" and "why" for someone who did not follow this goal: name the product or site, no internal names (no event, table, log or API names: write "the Meta pixel" or "the order page", not InitiateCheckout or CAPI), and say any number in words.
@@ -219,8 +221,9 @@ to_queue() {
   case "$priority" in 1|2|3) ;; *) priority=2 ;; esac
   on_approve="$(jq -r '.on_approve // "" | tostring' <<<"$meta")"
   if [ "$failed" = 1 ]; then kind=failed priority=1 on_approve="" title="Failed: $title"; fi
-  local args=(add --quiet --goal "$id" --title "$title" --kind "$kind" --priority "$priority" --summary-file "$dir/result.md")
+  local args=(add --quiet --result --goal "$id" --title "$title" --kind "$kind" --priority "$priority" --summary-file "$dir/result.md")
   [ ! -s "$dir/lead" ] || args+=(--lead "$(cat "$dir/lead")")
+  [ ! -s "$dir/queue" ] || args+=(--continues "$(cat "$dir/queue")")
   [ -z "$on_approve" ] || args+=(--on-approve "$on_approve")
   if [ "$failed" != 1 ]; then
     local ask advise why f v
@@ -249,7 +252,7 @@ to_queue() {
   done
   fraim-queue "${args[@]}" 2>>"$dir/log.txt" || true
   [ "$failed" = 1 ] && return 0
-  local question extra=(--quiet --goal "$id" --kind decision --priority "$priority")
+  local question extra=(--quiet --result --goal "$id" --kind decision --priority "$priority")
   [ ! -s "$dir/lead" ] || extra+=(--lead "$(cat "$dir/lead")")
   while IFS= read -r question; do
     [ -n "$question" ] || continue
