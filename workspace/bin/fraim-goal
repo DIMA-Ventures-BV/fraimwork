@@ -295,9 +295,7 @@ launch() {
   args+=(--permission-mode acceptEdits --allowedTools "$(tools)")
   fraim-herdr trust "$dir" 2>>"$dir/log.txt" || true
   wait_for_room "$dir" || return 1
-  hc rm "$id" >/dev/null 2>&1 || true
-  hc run --bg --name "$id" --cwd "$dir" --label fraim=goal --no-parent --no-notify -- "${args[@]}" \
-    >/dev/null 2>>"$dir/log.txt" || return 1
+  fraim-herdr open "$id" goal "$dir" -- "${args[@]}" 2>>"$dir/log.txt" || return 1
   echo 0 > "$dir/turn"
   # Ready when Claude Code first reports its status.
   hc wait "$id" --timeout "${FRAIM_GOAL_READY:-90}" --json >/dev/null 2>&1 || true
@@ -624,24 +622,16 @@ reopen() {
 }
 
 cmd_send() {
-  local id="$1" dir text status force=()
+  local id="$1" dir text
   shift
   dir="$(goal_dir "$id")" || exit $?
   text="$*"
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "send ID \"message\""
   case "$(state_of "$dir")" in stopped|failed) [ -s "$dir/session-id" ] || die "goal $id has ended" ;; esac
   reopen "$id" "$dir"
-  # On a question (AskUserQuestion) the text is the answer. A permission prompt is never
-  # answered this way: typed text plus Enter would pick its default, "Yes".
-  status="$(term_get "$id" | jq -c '.status // {}')"
-  if [ "$(jq -r '.state // ""' <<<"$status")" = blocked ]; then
-    [ "$(jq -r '.kind // ""' <<<"$status")" = question ] \
-      || die "goal $id waits for a permission, not a question; the owner answers it on the screen (fraim shell $id)"
-    force=(--force)
-  fi
   # Before the send: the watcher must not close the terminal while this message is in it.
   touch "$dir/last-send"
-  hc send "${force[@]}" "$id" "$text" >/dev/null || die "the message did not reach goal $id"
+  fraim-herdr send "$id" "$text" || die "the message did not reach goal $id"
   printf 'running %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
   alive "$dir" || { touch "$dir/heartbeat"; spawn_watcher "$id" follow; }
   echo "Sent to $id."
