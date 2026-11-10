@@ -22,6 +22,7 @@
 #   fraim-lead brief                             what the chief knows, for the chat that talks as the chief
 #   fraim-lead events NAME [--every 15m] [--off] wake the lead on new queue events (the chief has it)
 #   fraim-lead pause NAME | resume NAME
+#   fraim-lead display [NAME|--chief] [--clear] [-- TEXT]  the name people see for an agent (default: the chief)
 #
 # Each lead lives in ~/fraim/leads/<name>/: lead.md (its brief, the owner edits it),
 # state.md (its own notes between runs), budget (goals per day), tools (extra tools,
@@ -69,6 +70,40 @@ the_chief() {
     grep -q '^role: chief' "$f" 2>/dev/null && { basename "$(dirname "$f")"; return 0; }
   done
   return 1
+}
+# The name the owner gave an agent: the display: line at the top of its lead.md.
+lead_display() {
+  awk 'NR == 1 && /^---$/ { f = 1; next } f && /^---$/ { exit } f && sub(/^display:[[:space:]]*/, "") { print; exit }' "$1" 2>/dev/null
+}
+cmd_display() {
+  local who="" value="" clear=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --chief) shift ;;
+      --clear) clear=1; shift ;;
+      --) shift; value="$*"; break ;;
+      -*) usage 'display [NAME|--chief] [--clear] [-- TEXT]' ;;
+      *) who="$1"; shift ;;
+    esac
+  done
+  if [ -z "$who" ]; then
+    who="$(the_chief)" || { [ "$clear" = 0 ] && [ -z "$value" ] && return 0; die "there is no chief of staff yet"; }
+  fi
+  local dir file
+  dir="$(lead_dir "$who")"
+  file="$dir/lead.md"
+  if [ "$clear" = 0 ] && [ -z "$value" ]; then lead_display "$file"; return 0; fi
+  [ "${FRAIM_HEADLESS:-}" != 1 ] || die "only the owner changes a name; this run has no owner watching"
+  if [ "$clear" = 0 ]; then
+    case "$value" in *$'\n'*) usage "the name must be one line" ;; esac
+    printf '%s' "$value" | grep -Eq '^[^{}<>"`\\]{1,40}$' || usage "the name must be 1 to 40 characters, without { } < > quotes or backslashes"
+  fi
+  local tmp
+  tmp="$(mktemp "$dir/.lead.XXXXXX")"
+  { [ "$(head -1 "$file")" = "---" ] || printf -- '---\n---\n'; cat "$file"; } \
+    | V="$value" awk 'NR == 1 && $0 == "---" { f = 1; print; if (ENVIRON["V"] != "") print "display: " ENVIRON["V"]; next } f && /^display:/ { next } f && $0 == "---" { f = 0 } { print }' > "$tmp"
+  mv "$tmp" "$file"
+  if [ "$clear" = 1 ]; then echo "$who has its default name again."; else echo "$who is now called $value."; fi
 }
 # Every automation that runs lead NAME: its schedule, and its events automation.
 lead_autos() {
@@ -207,6 +242,7 @@ prompt_for() {
   [ ! -s "$dir/.running/inbox.md" ] || inbox="$(head -c 6000 "$dir/.running/inbox.md")"
   local args=(--lead "$name"
     --set "name=$name" --set "today=$(date '+%A %Y-%m-%d %H:%M')"
+    --set "display=$(lead_display "$dir/lead.md")"
     --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$dir/lead.md")"
     --set "state=$(head -c 8000 "$dir/state.md" 2>/dev/null)"
     --set "inbox=$inbox" --set "rules=$rules"
@@ -613,6 +649,7 @@ case "$action" in
   tell) cmd_tell "$@" ;;
   ask) cmd_ask "$@" ;;
   brief) cmd_brief ;;
+  display) cmd_display "$@" ;;
   events) cmd_events "$@" ;;
-  *) usage 'new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME [--later] -- TEXT | ask [NAME] -- TEXT | events NAME [--every 15m] [--off] | pause NAME | resume NAME' ;;
+  *) usage 'new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME [--later] -- TEXT | ask [NAME] -- TEXT | events NAME [--every 15m] [--off] | pause NAME | resume NAME | display [NAME|--chief] [--clear] [-- TEXT]' ;;
 esac

@@ -10,6 +10,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import vm from 'node:vm'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const bin = path.join(here, '../../workspace/bin/fraim-queue')
@@ -118,6 +119,22 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   assert.doesNotMatch(page, />(Reply|Forward|Comment)</, 'the middle pane only shows what came in')
   assert.match(await (await fetch(`${base}/team`, { headers: { cookie } })).text(), /Automations/)
 
+  const pageAt = (p) => fetch(`${base}${p}`, { headers: { cookie } })
+  for (const p of ['/', '/team', '/settings']) {
+    for (const [, code] of (await (await pageAt(p)).text()).matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(code)
+  }
+  await mkdir(path.join(home, 'fraim/ui'), { recursive: true })
+  await writeFile(path.join(home, 'fraim/ui/inbox.html'), '<html>my inbox</html>')
+  await writeFile(path.join(home, 'fraim/ui/orders.html'), '<html>my orders</html>')
+  assert.equal(await (await pageAt('/')).text(), '<html>my inbox</html>', 'the owner page wins, without a restart')
+  assert.notEqual(await (await pageAt('/?builtin=1')).text(), '<html>my inbox</html>', 'the default is always one address away')
+  assert.equal(await (await pageAt('/p/orders')).text(), '<html>my orders</html>', 'a new page of the owner')
+  assert.equal((await pageAt('/p/nothing')).status, 404)
+  assert.notEqual((await fetch(`${base}/p/orders`, { redirect: 'manual' })).status, 200, 'a page needs the login')
+  await writeFile(path.join(home, 'fraim/ui/inbox.html'), '   ')
+  assert.notEqual((await (await pageAt('/')).text()).trim(), '', 'an empty file falls back to the default')
+  fs.rmSync(path.join(home, 'fraim/ui'), { recursive: true })
+
   const chain = await get('/api/threads/t1')
   assert.equal(chain.url, 'https://mail.google.com/mail/u/owner@example.com/#all/chain0001', 'the link opens the mailbox of this space')
   assert.equal(chain.title, 'Login', 'no Re: in front')
@@ -157,6 +174,10 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
     { time: '2026-11-10 09:00', who: 'owner', chat: '316@lid', about: '', text: 'How is Anna?' },
     { time: '2026-11-10 09:01', who: 'me', chat: '', about: `g4 ${q}`, text: 'She waits for your yes.' },
   ].map((l) => JSON.stringify(l)).join('\n') + '\n')
+  assert.equal((await get('/api/chief')).title, 'Chief of staff', 'the name when nobody chose one')
+  await writeFile(path.join(home, 'fraim/leads/chief/lead.md'), '---\nrole: chief\ndisplay: Winston\n---\n')
+  assert.equal((await get('/api/chief')).title, 'Winston', 'the name the owner chose')
+  await writeFile(path.join(home, 'fraim/leads/chief/lead.md'), '---\nrole: chief\n---\n')
   const talk = await get('/api/chief')
   assert.deepEqual([talk.exists, talk.typing, talk.messages.map((m) => [m.who, m.text, m.app])], [true, true, [['owner', 'How is Anna?', false], ['chief', 'She waits for your yes.', false]]])
   assert.deepEqual(talk.messages[1].refs, [{ id: 't1', title: 'Login' }], 'a mention opens its conversation')
