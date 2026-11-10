@@ -1,7 +1,7 @@
 // One shape for every channel: who an answer goes to, repeats, and picking up new mail.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -36,13 +36,9 @@ async function service(t, answer) {
 async function home(url) {
   const dir = await mkdtemp(path.join(tmpdir(), 'fraim-channels-'))
   await mkdir(path.join(dir, 'bin'))
-  await mkdir(path.join(dir, 'fraim/automations/mail-requests'), { recursive: true })
-  await writeFile(path.join(dir, 'fraim/automations/mail-requests/automation.md'), 'x')
-  await writeFile(path.join(dir, 'bin/fraim-auto'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${dir}/auto.log"\n`)
-  await chmod(path.join(dir, 'bin/fraim-auto'), 0o755)
   return {
     dir,
-    env: { ...process.env, HOME: dir, PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, FRAIM_RUNTIME_ENV: '/dev/null', FRAIM_MODULES: 'google,whatsapp', FRAIM_MAIL_AUTOMATION: 'mail-requests', FRAIM_REPLY_TOKEN: 'reply-secret', FRAIM_GATEWAY_TOKEN: 'gw-secret', FRAIM_REPLY_MAIL_URL: url, FRAIM_GATEWAY_URL: url },
+    env: { ...process.env, HOME: dir, PATH: `${path.join(dir, 'bin')}:${process.env.PATH}`, FRAIM_RUNTIME_ENV: '/dev/null', FRAIM_MODULES: 'google,whatsapp', FRAIM_REPLY_TOKEN: 'reply-secret', FRAIM_GATEWAY_TOKEN: 'gw-secret', FRAIM_REPLY_MAIL_URL: url, FRAIM_GATEWAY_URL: url },
   }
 }
 
@@ -83,43 +79,21 @@ test('a message counts once per channel, across processes', async () => {
   assert.equal(claim('email', '', dir), true)
 })
 
-test('by default new mail starts nothing and nobody follows the channel', async (t) => {
-  const s = await service(t, () => ({ events: [{ seq: 1, id: 'm1', thread: 'thread11' }], last: 1 }))
-  const { env, dir } = await home(s.url)
-  const { FRAIM_MAIL_AUTOMATION: _switchedOn, ...untouched } = env
-  await run(process.execPath, [bin, 'listen', '--once'], { env: untouched })
-  assert.equal(s.calls.length, 0)
-  await assert.rejects(readFile(path.join(dir, 'auto.log')))
-})
-
-test('a switched-on trigger hands only Thread IDs to its automation, once', async (t) => {
-  const s = await service(t, () => ({ events: [{ seq: 1, id: 'm1', thread: 'thread11' }, { seq: 2, id: 'm2', thread: 'thread11' }, { seq: 3, id: 'm3', thread: 'thread22' }], last: 3 }))
-  const { env, dir } = await home(s.url)
-  await run(process.execPath, [bin, 'listen', '--once'], { env })
-  assert.equal(await readFile(path.join(dir, 'auto.log'), 'utf8'), 'run mail-requests --input thread11 thread22\n')
-  assert.equal((await readFile(path.join(dir, '.local/state/fraim/channels/email.cursor'), 'utf8')).trim(), '3')
+test('events reads what a channel reported, and never waits', async (t) => {
+  const s = await service(t, () => ({ events: [{ seq: 5, id: 'm5', thread: 'thread55', from: 'a@b.nl' }], last: 5 }))
+  const { env } = await home(s.url)
+  const { stdout } = await run(process.execPath, [bin, 'events', 'email', '--after', '4'], { env })
+  assert.equal(JSON.parse(stdout).last, 5)
+  assert.deepEqual(s.calls[0].body, { after: 4, wait: 0 })
   assert.equal(s.calls[0].auth, 'Bearer reply-secret')
-
-  await writeFile(path.join(dir, '.local/state/fraim/channels/email.cursor'), '0\n')
-  await run(process.execPath, [bin, 'listen', '--once'], { env })
-  assert.equal((await readFile(path.join(dir, 'auto.log'), 'utf8')).trim().split('\n').length, 1)
 })
 
-test('a list of mail that restarted is read from the start', async (t) => {
-  const s = await service(t, (_route, body) => (body.after > 2 ? { events: [], last: 2 } : { events: [{ seq: 2, id: 'm9', thread: 'thread99' }], last: 2 }))
-  const { env, dir } = await home(s.url)
-  await mkdir(path.join(dir, '.local/state/fraim/channels'), { recursive: true })
-  await writeFile(path.join(dir, '.local/state/fraim/channels/email.cursor'), '40\n')
-  await run(process.execPath, [bin, 'listen', '--once'], { env })
-  assert.match(await readFile(path.join(dir, 'auto.log'), 'utf8'), /thread99/)
-})
-
-test('without the mail automation the mail is noted and nothing runs', async (t) => {
-  const s = await service(t, () => ({ events: [{ seq: 1, id: 'm1', thread: 'thread11' }], last: 1 }))
-  const { env, dir } = await home(s.url)
-  const out = await run(process.execPath, [bin, 'listen', '--once'], { env: { ...env, FRAIM_MAIL_AUTOMATION: 'nope' } })
-  assert.match(out.stderr, /no automation nope/)
-  await assert.rejects(readFile(path.join(dir, 'auto.log')))
+test('events fails plainly when the channel is off or has no events', async (t) => {
+  const s = await service(t, () => ({ events: [], last: 0 }))
+  const { env } = await home(s.url)
+  await assert.rejects(run(process.execPath, [bin, 'events', 'email'], { env: { ...env, FRAIM_MODULES: '' } }), /google module is off/)
+  await assert.rejects(run(process.execPath, [bin, 'events', 'whatsapp'], { env }), (e) => e.code === 2)
+  assert.equal(s.calls.length, 0)
 })
 
 test('check fails when the mail watcher stopped looking, not when nobody signed in', async (t) => {

@@ -75,6 +75,7 @@ Placeholders in the prompt: `{{since}}` (the last good run), `{{now}}`, `{{input
 | `trigger: after: <name>` | Right after automation `<name>` sent an answer (not after SILENT or a failure) | that answer |
 | `trigger: queue: events` | New items in the review queue: `events` (goal results, failures, automation answers, priority 1), `urgent` or `all` | one line per item |
 | `trigger: slack: channel-name` | New messages in a Slack channel (a public one by name, any one by id C...), such as production error alerts: for those, start from the example `production-errors` (`fraim-auto new NAME --from production-errors`, then set the channel and repo at the top of its `check.sh`). Needs the secrets service `slack` (`fraim-api` lists it); without it, tell the owner what the laptop's Claude must set up | one line per message, oldest first |
+| `trigger: mail: from:@mollie.com,anna@example.com` or `trigger: mail: all` | New mail in the inbox from those senders (lowercase addresses or @domains) or from anyone. Promotions, Social and Forums never count. Only when the owner asks for it: arriving mail starts nothing by default. Start from the example `mail-from` | one Thread ID per line |
 | `trigger: <your-type>: ...` | Whatever the owner's own plugin in `_triggers/` reports | its lines |
 
 A check that finds nothing costs no tokens. Claude runs only when something happened, once per check with all events together.
