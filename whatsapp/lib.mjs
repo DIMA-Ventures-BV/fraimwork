@@ -50,6 +50,12 @@ export function allowedSender(key, allow) {
   return phone && allow.has(phone) ? phone : ''
 }
 
+// The audio part of a message: a voice note, or an audio file sent as a document.
+export function audioOf(inner) {
+  if (inner.audioMessage) return inner.audioMessage
+  return inner.documentMessage?.mimetype?.startsWith('audio/') ? inner.documentMessage : null
+}
+
 export function httpError(status, message) {
   return Object.assign(new Error(message), { status })
 }

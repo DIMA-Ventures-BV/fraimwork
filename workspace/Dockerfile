@@ -65,7 +65,17 @@ RUN groupmod -n claude node \
 
 COPY channel/package.json channel/package-lock.json /opt/fraim/channel/
 RUN cd /opt/fraim/channel && npm ci --omit=dev && npm cache clean --force
-COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs channel/goal-command.mjs channel/unanswered.mjs channel/context.mjs /opt/fraim/channel/
+COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs channel/goal-command.mjs channel/unanswered.mjs channel/context.mjs channel/voice.mjs /opt/fraim/channel/
+
+# Speech to text for WhatsApp voice messages (fraim-transcribe). The model is part of the
+# image, so a voice message never waits for a download. "base" needs about 500 MB while it
+# runs; "small" is more exact but needs 1.2 GB, too much next to Claude on a 4 GB server.
+ARG FASTER_WHISPER_VERSION=1.2.1
+ARG WHISPER_MODEL=base
+RUN python3 -m venv /opt/fraim/whisper/venv \
+ && /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" \
+ && /opt/fraim/whisper/venv/bin/python -c "from faster_whisper import download_model; download_model('${WHISPER_MODEL}', output_dir='/opt/fraim/whisper/model')"
+COPY whisper/transcribe.py /opt/fraim/whisper/transcribe.py
 
 COPY sshd_config /etc/ssh/sshd_config.d/fraim.conf
 COPY managed-settings.json /etc/claude-code/managed-settings.json

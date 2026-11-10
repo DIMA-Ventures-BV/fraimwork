@@ -14,6 +14,7 @@ import { withContext } from './context.mjs'
 import { Unanswered, lastAnswer } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
 import { startedByMainSession } from './main-session.mjs'
+import { inOrder, withTranscript } from './voice.mjs'
 
 function loadEnvFile(file) {
   const out = {}
@@ -226,8 +227,19 @@ function runTool(command, args, timeout = 30000) {
   })
 }
 
+// A long memo on a small server takes minutes; the engine waits up to 2 minutes for memory.
+const TRANSCRIBE_TIMEOUT_MS = 17 * 60 * 1000
+
+async function transcribe(file) {
+  const result = await runTool('fraim-transcribe', [file], TRANSCRIBE_TIMEOUT_MS)
+  if (result.ok) return result.out
+  log('could not transcribe a voice message:', result.err)
+  throw new Error(result.err)
+}
+
 async function handleEvent(event) {
   if (event.type === 'contact') {
+    event = await withTranscript(event, transcribe)
     execFile('fraim-queue', ['thread', 'whatsapp', '--number', String(event.sender), '--name', String(event.name || ''), '--', String(event.text || '')], { timeout: 30000 }, (err) => {
       if (err) process.stderr.write(`fraim-channel: could not save a message from a contact: ${err.message}\n`)
     })
@@ -239,6 +251,7 @@ async function handleEvent(event) {
     await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
     return
   }
+  event = await withTranscript(event, transcribe)
   const fromOwner = Boolean(OWNER) && event.sender === OWNER
   if (fromOwner) ownerChats.add(event.chat_id)
   let content = event.text || '(empty message)'
@@ -317,6 +330,8 @@ setInterval(async () => {
   }
 }, 15000).unref()
 
+const inTurn = inOrder((err) => log('could not handle event:', err.message))
+
 async function listen() {
   let delay = 1000
   for (;;) {
@@ -340,7 +355,10 @@ async function listen() {
             .join('\n')
           if (!data) continue
           try {
-            await handleEvent(JSON.parse(data))
+            const event = JSON.parse(data)
+            // An approval never waits behind a voice message that is being transcribed.
+            if (parseVerdict(event, OWNER)) await handleEvent(event)
+            else inTurn(() => handleEvent(event))
           } catch (err) {
             log('could not handle event:', err.message)
           }

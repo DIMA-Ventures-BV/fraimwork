@@ -24,6 +24,7 @@ import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
 import {
   allowedSender,
+  audioOf,
   contactChat,
   contactSender,
   digits,
@@ -150,12 +151,16 @@ async function onMessage(msg) {
   const contact = contactSender(key, ALLOW, CONTACTS)
   if (contact) {
     const said = unwrap(msg.message)
+    const voice = audioOf(said)
+      ? await saveMedia(msg, said).catch((err) => { logger.warn({ err: err.message }, 'could not download a voice message'); return '' })
+      : ''
     emit({
       type: 'contact',
       id: key.id,
       sender: contact,
       name: msg.pushName || '',
-      text: said.conversation || said.extendedTextMessage?.text || said.imageMessage?.caption || said.documentMessage?.caption || said.videoMessage?.caption || '[sent a file or a voice message]',
+      text: said.conversation || said.extendedTextMessage?.text || said.imageMessage?.caption || said.documentMessage?.caption || said.videoMessage?.caption || (voice ? '' : '[sent a file or a voice message]'),
+      voice: voice || undefined,
       ts: Number(msg.messageTimestamp || 0),
     })
     return
@@ -173,14 +178,16 @@ async function onMessage(msg) {
   const caption = inner.imageMessage?.caption || inner.documentMessage?.caption || inner.videoMessage?.caption
   if (caption) text = text ? `${text}\n${caption}` : caption
 
+  let voice = ''
   try {
     const saved = await saveMedia(msg, inner)
-    if (saved) text = `${text}\n[attachment saved to ${saved}]`.trim()
+    if (saved && audioOf(inner)) voice = saved
+    else if (saved) text = `${text}\n[attachment saved to ${saved}]`.trim()
   } catch (err) {
     logger.warn({ err: err.message }, 'could not download attachment')
     text = `${text}\n[an attachment could not be downloaded]`.trim()
   }
-  if (!text) return
+  if (!text && !voice) return
 
   await sock.readMessages([key]).catch(() => {})
   const delivered = emit({
@@ -190,6 +197,7 @@ async function onMessage(msg) {
     sender: phone,
     name: msg.pushName || '',
     text,
+    voice: voice || undefined,
     ts: Number(msg.messageTimestamp || 0),
   })
 
