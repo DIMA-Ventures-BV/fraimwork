@@ -174,7 +174,7 @@ export async function active() {
   if (herd) {
     try {
       for (const a of JSON.parse(herd)) {
-        if (!a || !a.name || a.kind === 'shell') continue
+        if (!a || !a.name || a.kind === 'shell' || a.kind === 'service') continue
         out.push({ name: String(a.name), kind: String(a.kind || 'session'), status: String(a.status || 'none'), question: String(a.question || ''), cwd: String(a.cwd || ''), turn: String(a.turn || ''), live: true })
       }
     } catch {}

@@ -135,7 +135,7 @@ candidates() {
 close_if_idle() {
   local kind="$1" name="$2" dir st
   case "$kind" in goal) dir="$goals/$name" ;; *) dir="$sessions/$name" ;; esac
-  st="$(fraim-herdr hc get "$name" --json 2>/dev/null | jq -r '.status.state // ""')"
+  st="$(fraim-herdr status "$name")"
   case "$st" in done|idle) ;; *) return 1 ;; esac
   [ $(( $(date +%s) - $(last_activity "$dir") )) -ge "${FRAIM_RECLAIM_QUIET:-300}" ] || return 1
   fraim-herdr hc kill "$name" >/dev/null 2>&1 || return 1
