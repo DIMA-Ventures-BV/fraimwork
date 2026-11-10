@@ -92,6 +92,10 @@ Production hosts: installing the key changes the host's `authorized_keys`, and t
 
 `$F mirror FILE --space S` runs every line of a mirror file (docs/mirror.md): plugins, repos, tools, keys from this laptop, MCP servers and SSH hosts. Without `--yes` it prints the plan (where each key goes) and exits 3: show the plan to the user, and on yes run it again with `--yes`. Lines that are done are skipped, so after a human step run it again. `--only KIND,...` runs a part.
 
+## A product's own setup (fraim project)
+
+A repo can carry a `.fraim/` folder with its leads, automations and needs (docs/projects.md). `$F project add OWNER/REPO --space S` prints the plan and exits 3: show the plan to the user, and on yes run the `--yes --commit SHA` line it prints. New items arrive switched off. Ask the user which to start, then `$F project on REPO ITEM...`. Later: `$F project update REPO`. To move leads that already run into a repo: `$F project export ITEM... --to REPO/.fraim`, and have the user read the files before they are committed.
+
 ## Previews on the phone
 
 A dev server in a space (on any port) shows on the user's phone or laptop:
