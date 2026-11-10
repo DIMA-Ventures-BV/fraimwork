@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+// PreToolUse hook for Bash: refuses a force push and deleting the home folder, for every Claude
+// on the server, also with permissions bypassed. It reads the command like a shell would, so
+// spelling does not matter (git -C repo push -f, rm -r -f "$HOME", bash -c "..."). It stops
+// mistakes, not an attacker: a script or another language is not read.
+// Exit 2 refuses the command and tells Claude why. Anything unexpected lets the command run.
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import fs from 'node:fs'
+
+// Words of each simple command. Quotes keep text together; ; & | and newlines end a command.
+export function commands(line) {
+  const out = []
+  let words = []
+  let word = null
+  let quote = ''
+  const end = () => { if (word !== null) { words.push(word); word = null } }
+  const next = () => { end(); if (words.length) out.push(words); words = [] }
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quote) {
+      if (c === quote) quote = ''
+      else if (c === '\\' && quote === '"' && i + 1 < line.length) word += line[++i]
+      else word += c
+    } else if (c === '"' || c === "'") { quote = c; word = word ?? '' }
+    else if (c === '\\' && i + 1 < line.length) word = (word ?? '') + line[++i]
+    else if (c === ' ' || c === '\t') end()
+    else if (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')') next()
+    else word = (word ?? '') + c
+  }
+  next()
+  return out
+}
+
+const WRAPPERS = new Set(['command', 'exec', 'sudo', 'env', 'nice', 'nohup', 'time', 'builtin'])
+const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
+
+function program(words) {
+  let i = 0
+  while (i < words.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
+    else if (WRAPPERS.has(path.basename(words[i]))) i++
+    else if (path.basename(words[i]) === 'timeout' && i + 1 < words.length) i += 2
+    else break
+  }
+  return words.slice(i)
+}
+
+function forcePush(args) {
+  let i = 0
+  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTIONS.has(args[i]) ? 2 : 1
+  if (args[i] !== 'push') return false
+  const rest = args.slice(i + 1)
+  if (rest.some((a) => a === '--force' || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(a))) return true
+  const positional = rest.filter((a) => !a.startsWith('-'))
+  return positional.slice(1).some((a) => a.startsWith('+'))
+}
+
+function expand(word, home) {
+  return word.replace(/^~(?=$|\/)/, home).replace(/\$\{HOME\}|\$HOME/g, home)
+}
+
+function deletesHome(args, cwd, home) {
+  let recursive = false
+  const targets = []
+  let flags = true
+  for (const a of args) {
+    if (flags && a === '--') flags = false
+    else if (flags && a.startsWith('--')) recursive ||= a === '--recursive'
+    else if (flags && a.startsWith('-') && a.length > 1) recursive ||= /[rR]/.test(a)
+    else targets.push(a)
+  }
+  if (!recursive) return false
+  const keep = [path.join(home, 'fraim')]
+  return targets.some((t) => {
+    const raw = expand(t, home).replace(/\/\*$/, '/').replace(/^\*$/, '.')
+    const full = path.resolve(cwd, raw)
+    return full === home || home.startsWith(full === '/' ? '/' : `${full}/`) || keep.includes(full)
+  })
+}
+
+// Why this command must not run, or an empty string.
+export function refusal(line, cwd, home, depth = 0) {
+  for (const words of commands(String(line))) {
+    const [cmd, ...args] = program(words)
+    if (!cmd) continue
+    const name = path.basename(cmd)
+    if (name === 'git' && forcePush(args)) {
+      return 'A force push can destroy other people\'s work, so it is refused. Push normally, or use --force-with-lease on your own branch.'
+    }
+    if (name === 'rm' && deletesHome(args, cwd, home)) {
+      return 'This would delete the home folder or everything in ~/fraim, so it is refused. Delete the specific folder you mean.'
+    }
+    if (SHELLS.has(name) && depth < 3) {
+      const c = args.findIndex((a) => /^-[a-z]*c$/.test(a))
+      if (c >= 0 && args[c + 1]) {
+        const inner = refusal(args[c + 1], cwd, home, depth + 1)
+        if (inner) return inner
+      }
+    }
+  }
+  return ''
+}
+
+function main() {
+  let why = ''
+  try {
+    const input = JSON.parse(fs.readFileSync(0, 'utf8'))
+    if (input.tool_name !== 'Bash') return
+    why = refusal(input.tool_input?.command ?? '', input.cwd || process.cwd(), process.env.HOME || os.homedir())
+  } catch { return }
+  if (why) { process.stderr.write(`${why}\n`); process.exit(2) }
+}
+
+if (import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) main()

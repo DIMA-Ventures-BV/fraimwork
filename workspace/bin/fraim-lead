@@ -296,34 +296,25 @@ repos_note() {
   printf 'Read-only git: git -C <repo> fetch|log|status|diff|show, with the full path above. A cd before git is refused. Other repo commands your tools allow (such as npm audit): cd <repo> && <command>.\n'
 }
 
+# A lead's base tools are prompt files the owner can change (fraim-prompt), one rule per line.
+tool_lines() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) ;; *) t+=("$line") ;; esac
+  done < <(fraim-prompt render "$1" --lead "$2" --set "name=$2")
+}
+
 tools_for() {
   local name="$1" dir="$2" chief="$3" repo verb
-  local t=(Read Glob Grep WebSearch
-    "Edit(~/fraim/leads/$name/**)" "Write(~/fraim/leads/$name/**)"
-    "Bash(fraim-queue list:*)" "Bash(fraim-queue show:*)" "Bash(fraim-queue add:*)" "Bash(fraim-queue thread show:*)"
-    "Bash(fraim-goal list:*)" "Bash(fraim-goal show:*)"
-    "Bash(fraim-lead list:*)" "Bash(fraim-lead show:*)"
-    "Bash(fraim-auto list:*)" "Bash(fraim-auto show:*)" "Bash(fraim-auto runs:*)"
-    "Bash(fraim-api:*)"
-    "Bash(git log:*)" "Bash(git status:*)" "Bash(git diff:*)"
-    "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh pr list:*)" "Bash(gh pr view:*)" "Bash(gh run list:*)")
-  t+=("Bash(fraim-goal start --lead $name:*)")
-  t+=("Bash(fraim-lead tell:*)")
+  local t=()
+  tool_lines tools-lead "$name"
   if [ "$chief" = 1 ]; then
-    t+=("Bash(fraim-queue prio:*)" "Bash(fraim-queue solved:*)" "Bash(fraim-queue thread close:*)" "Bash(fraim-queue thread ignore:*)" "Bash(fraim-queue reply:*)")
+    tool_lines tools-chief "$name"
     while IFS= read -r repo; do [ -z "$repo" ] || t+=("$repo"); done < <(fraim-auto sources --tools 2>/dev/null)
   fi
   # The engineer builds: it writes automations, plugins, lead briefs and skill drafts, and tests
   # them. It cannot switch anything on (fraim-auto on, resume, fraim-lead resume).
-  if is_engineer "$dir"; then
-    t+=(Skill
-      "Edit(~/fraim/automations/**)" "Write(~/fraim/automations/**)"
-      "Edit(~/fraim/leads/**)" "Write(~/fraim/leads/**)" "Edit(~/fraim/fraim-guide.md)"
-      "Bash(fraim-auto new:*)" "Bash(fraim-auto check:*)" "Bash(fraim-auto run:*)" "Bash(fraim-auto catalog:*)"
-      "Bash(fraim-auto sync:*)" "Bash(fraim-auto pause:*)"
-      "Bash(fraim-lead new:*)" "Bash(fraim-lead pause:*)" "Bash(fraim-lead events:*)"
-      "Bash(fraim-brain skill propose:*)" "Bash(chmod +x:*)" "Bash(date:*)")
-  fi
+  if is_engineer "$dir"; then tool_lines tools-engineer "$name"; fi
   while IFS= read -r repo; do
     for verb in fetch log status diff show; do t+=("Bash(git -C $repo $verb:*)"); done
   done < <(lead_repos)

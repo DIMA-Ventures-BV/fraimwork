@@ -22,7 +22,23 @@
     "PostToolUse": [
       {
         "matcher": "*",
-        "hooks": [{ "type": "command", "command": "/usr/local/bin/fraim-audit" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/fraim-audit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/fraim-guard"
+          }
+        ]
       }
     ]
   },

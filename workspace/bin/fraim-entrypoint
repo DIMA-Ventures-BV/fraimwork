@@ -21,6 +21,7 @@ write_runtime_env() {
     printf 'TZ=%q\n' "${TZ:-UTC}"
     printf 'FRAIM_AUTO_CONFIRM_CHANNEL=%q\n' "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}"
     printf 'FRAIM_PERMISSIONS=%q\n' "${FRAIM_PERMISSIONS:-all}"
+    printf 'FRAIM_TOOL_LISTS=%q\n' "${FRAIM_TOOL_LISTS:-enforce}"
     printf 'FRAIM_VERSION=%q\n' "${FRAIM_VERSION:-dev}"
     printf 'FRAIM_RELEASES_REPO=%q\n' "${FRAIM_RELEASES_REPO:-}"
     printf 'FRAIM_SPACE=%q\n' "${FRAIM_SPACE:-main}"

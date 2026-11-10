@@ -87,3 +87,7 @@ Claude can read these keys, the same as on a laptop. Use the proxy when the tool
 ## OAuth sign-ins without copying an address
 
 `fraim connect NAME --url URL --oauth` tunnels the sign-in's `localhost` callback port from the laptop to the workspace and opens the browser. After Approve the browser lands on the server by itself; then `fraim connect NAME --finish`. When the port is busy on the laptop, fraim falls back to `fraim connect NAME --redirect` and a pasted address.
+
+## Commands that are always refused
+
+`fraim-guard` checks every shell command of every Claude on the server, also with permissions bypassed. It refuses a force push (`--force`, `-f`, a `+` refspec; `--force-with-lease` is allowed) and a recursive delete of the home folder, a folder above it, or `~/fraim`. It reads the command like a shell does, so spelling and `bash -c` do not matter. This stops mistakes, not an attacker: a script or another language is not read. The real limits are the container, the secrets proxy and the tool lists.

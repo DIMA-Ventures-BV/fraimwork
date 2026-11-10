@@ -13,6 +13,7 @@
 #   fraim-relay context                        the conversation of the last day and the open decisions:
 #                                              what the chat, the chief and the brief read before they answer
 #   fraim-relay chat -- TEXT                   the owner writes in the app; the chief answers there
+#   fraim-relay timing [gap|wait SECONDS]      show or set how often the chief may send a message
 #
 # The conversation (~/fraim/relay/conversation.jsonl) holds every WhatsApp message between the owner
 # and the server: what the owner wrote, the chat's answers and the chief's messages, each with the
@@ -21,6 +22,7 @@
 # Notices that arrive close together become one message (FRAIM_RELAY_WAIT seconds, default 20).
 # The owner gets at most one message per FRAIM_RELAY_GAP seconds (default 900): notices that come
 # in sooner wait and go into the next message.
+# The owner sets both with `fraim-relay timing` (~/fraim/relay/settings); the variables still win.
 # When the chief cannot run (not signed in, usage limit, FRAIM_RELAY_TIMEOUT seconds, default
 # 180), the notices go out as they are, so nothing is lost. Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
@@ -92,11 +94,34 @@ lock() {
 }
 has_pending() { compgen -G "$pending/*.json" >/dev/null; }
 
+relay_setting() {
+  local v
+  v="$(sed -n "s/^$1=//p" "$relay/settings" 2>/dev/null | tail -1)"
+  case "$v" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$v" ;; esac
+}
+
+cmd_timing() {
+  if [ $# -eq 0 ]; then
+    printf 'gap %s seconds between messages\nwait %s seconds to collect notices into one message\n' "$(relay_setting gap 900)" "$(relay_setting wait 20)"
+    return 0
+  fi
+  case "${1:-}:${2:-}" in
+    gap:|wait:|gap:*[!0-9]*|wait:*[!0-9]*) echo 'usage: fraim-relay timing [gap|wait SECONDS]' >&2; return 2 ;;
+    gap:*|wait:*) ;;
+    *) echo 'usage: fraim-relay timing [gap|wait SECONDS]' >&2; return 2 ;;
+  esac
+  if [ "${FRAIM_HEADLESS:-}" = 1 ]; then echo 'only the owner changes the timing; this run has no owner watching' >&2; return 1; fi
+  mkdir -p "$relay"
+  local seconds=$((10#$2))
+  { grep -v "^$1=" "$relay/settings" 2>/dev/null; printf '%s=%s\n' "$1" "$seconds"; } > "$relay/settings.tmp" && mv "$relay/settings.tmp" "$relay/settings"
+  printf '%s is now %s seconds\n' "$1" "$seconds"
+}
+
 wait_for_gap() {
   local last left
   last="$(cat "$relay/last-sent" 2>/dev/null)"
   [[ "$last" =~ ^[0-9]+$ ]] || return 0
-  left=$(( last + ${FRAIM_RELAY_GAP:-900} - $(date +%s) ))
+  left=$(( last + ${FRAIM_RELAY_GAP:-$(relay_setting gap 900)} - $(date +%s) ))
   [ "$left" -le 0 ] || sleep "$left"
 }
 
@@ -104,7 +129,7 @@ cmd_drain() {
   mkdir -p "$pending"
   while has_pending; do
     lock || return 0
-    sleep "${FRAIM_RELAY_WAIT:-20}"
+    sleep "${FRAIM_RELAY_WAIT:-$(relay_setting wait 20)}"
     wait_for_gap
     while has_pending; do drain_once; done
     rm -rf "$relay/.lock"
@@ -293,7 +318,7 @@ cmd_chat() {
       --set "recent=$(cmd_context 2>/dev/null)" \
       --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
       --set "text=$text")" \
-    --allowedTools "Read,Glob,Grep,Edit(~/fraim/ui/**),Write(~/fraim/ui/**),Bash(fraim-ui:*),Bash(fraim-lead display:*),Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style:*),Bash(fraim-relay said:*),Bash(fraim-prompt:*),Bash(fraim-auto check:*),Bash(fraim-auto sync:*),Bash(fraim-auto pause:*),Bash(fraim-auto resume:*),Bash(fraim-auto on:*),Bash(fraim-lead pause:*),Bash(fraim-lead resume:*),Edit(~/fraim/leads/**),Write(~/fraim/leads/**),Edit(~/fraim/automations/**),Write(~/fraim/automations/**),Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/claude/**),Write(~/fraim/claude/**),Edit(~/fraim/styles/**),Edit(~/fraim/inbox-rules.md),Edit(~/.claude/skills/**)" \
+    --allowedTools "Read,Glob,Grep,Bash(fraim-relay timing:*),Bash(fraim-prompt list:*),Bash(fraim-prompt show:*),Bash(fraim-prompt own:*),Bash(fraim-prompt check:*),Bash(fraim-prompt reset:*),Edit(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Edit(~/fraim/ui/**),Write(~/fraim/ui/**),Bash(fraim-ui:*),Bash(fraim-lead display:*),Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style:*),Bash(fraim-relay said:*),Bash(fraim-prompt:*),Bash(fraim-auto check:*),Bash(fraim-auto sync:*),Bash(fraim-auto pause:*),Bash(fraim-auto resume:*),Bash(fraim-auto on:*),Bash(fraim-lead pause:*),Bash(fraim-lead resume:*),Edit(~/fraim/leads/**),Write(~/fraim/leads/**),Edit(~/fraim/automations/**),Write(~/fraim/automations/**),Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/claude/**),Write(~/fraim/claude/**),Edit(~/fraim/styles/**),Edit(~/fraim/inbox-rules.md),Edit(~/.claude/skills/**)" \
     2>>"$relay/errors.log")"
   code=$?
   output="$(printf '%s' "$output" | sed -e 's/[[:space:]]*$//')"
@@ -317,5 +342,6 @@ case "$action" in
   log) cmd_log "$@" ;;
   context) cmd_context ;;
   chat) cmd_chat "$@" ;;
+  timing) cmd_timing "$@" ;;
   *) usage 'add [--chat CHAT_ID] -- TEXT | drain | said [N] | on | log owner|me -- TEXT | context | chat -- TEXT' ;;
 esac

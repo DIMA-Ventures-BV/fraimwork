@@ -18,7 +18,9 @@ if [ -r /etc/fraim/runtime.env ]; then
   export FRAIM_SECRETS_URL FRAIM_SECRETS_TOKEN FRAIM_SPACE
 fi
 # PERMISSIONS=all in .env (the default): nobody is there to approve a tool, so skip the
-# prompts. Managed deny rules and --disallowedTools still apply; --allowedTools no longer limits.
+# prompts. Managed deny rules and --disallowedTools still apply. --allowedTools does not limit
+# anything in that mode, so a -p run that names its tools runs in dontAsk instead: what is not
+# on its list is refused. TOOL_LISTS=open in .env turns that off.
 # A headless run (-p: goals, leads, automations, the brain) has no owner watching. Commands
 # that only the owner may run (queue decisions, brain changes) check this and refuse.
 # The exception is the owner's own message in the app (fraim-relay chat): the owner is the one
@@ -26,8 +28,12 @@ fi
 headless_run=""
 owner_chat="${FRAIM_OWNER_CHAT:-}"
 unset FRAIM_OWNER_CHAT
+tool_list=""
 for arg in "$@"; do
-  case "$arg" in -p|--print) headless_run=1; [ "$owner_chat" = 1 ] || export FRAIM_HEADLESS=1; break ;; esac
+  case "$arg" in
+    -p|--print) headless_run=1; [ "$owner_chat" = 1 ] || export FRAIM_HEADLESS=1 ;;
+    --allowedTools|--allowed-tools) tool_list=1 ;;
+  esac
 done
 # A run nobody watches (automations, leads, the brain) waits for free memory, at most
 # FRAIM_CAPACITY_WAIT seconds (default 300, shorter than its caller's own time limit), instead
@@ -41,7 +47,11 @@ if [ -n "$headless_run" ] && [ "${FRAIM_NO_CAPACITY_WAIT:-}" != 1 ] && command -
   fi
 fi
 if [ "${FRAIM_PERMISSIONS:-all}" = all ]; then
-  set -- --dangerously-skip-permissions "$@"
+  if [ -n "$headless_run" ] && [ -n "$tool_list" ] && [ "${FRAIM_TOOL_LISTS:-enforce}" != open ]; then
+    set -- --permission-mode dontAsk "$@"
+  else
+    set -- --dangerously-skip-permissions "$@"
+  fi
 fi
 # What every Claude on the server is told is the prompt file "server" (fraim-prompt). Those
 # rules must never go missing: without a fresh copy, use the last one, then the shipped one.
@@ -58,10 +68,10 @@ if command -v fraim-prompt >/dev/null; then
 fi
 [ -s "$server_prompt" ] || server_prompt="${FRAIM_PROMPT_DEFAULTS:-/etc/fraim/prompts}/server.md"
 [ ! -s "$server_prompt" ] || set -- "$@" --append-system-prompt-file "$server_prompt"
-# Runs nobody watches may not rewrite instructions with the edit tools. This does not stop a
-# shell command: they run as the same Unix user (docs/prompts.md).
+# Runs nobody watches may not rewrite instructions or their own tool list with the edit tools.
+# A goal has a full shell and runs as the same Unix user, so this does not stop it (docs/prompts.md).
 if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
-  set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**)"
+  set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**),Edit(~/fraim/leads/*/tools),Write(~/fraim/leads/*/tools)"
   set -- "$@" --disallowedTools "Edit(~/fraim/ui/**),Write(~/fraim/ui/**)"
 fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.

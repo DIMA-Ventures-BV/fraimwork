@@ -28,8 +28,8 @@
 # A goal started by a lead (--lead) counts toward that lead's daily budget
 # (~/fraim/leads/<name>/budget, default 3); follow-up work the owner asked for in the queue
 # does not.
-# Tools: ~/fraim/goals/tools (one per line) or the default below. The run uses
-# --permission-mode acceptEdits, so a tool that is not listed is refused, never asked.
+# Tools: ~/fraim/goals/tools (one per line) or the default below. With PERMISSIONS=all (the
+# default) a goal is not limited to this list: it is a live session with a full shell anyway.
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
