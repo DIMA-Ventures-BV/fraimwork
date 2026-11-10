@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # production-errors: one goal per new production error. Set these two for your app.
-CHANNEL="${PRODUCTION_ERRORS_CHANNEL:-mlv-alerts}"   # the Slack channel the app posts errors to
-REPO="${PRODUCTION_ERRORS_REPO:-mijnlevensverhalen}" # the app's repo folder in ~/code
+CHANNEL="${PRODUCTION_ERRORS_CHANNEL:-app-alerts}"   # the Slack channel the app posts errors to
+REPO="${PRODUCTION_ERRORS_REPO:-my-app}"             # the app's repo folder in ~/code
 MAX_GOALS="${PRODUCTION_ERRORS_MAX:-3}"              # goals started per run; the rest wait
 AGAIN_AFTER="${PRODUCTION_ERRORS_AGAIN:-86400}"      # an error gets a new goal after this many seconds
 #

@@ -88,7 +88,7 @@ alert() { printf '[2026-11-09 10:05] :rotating_light: *Serverfout* `%s` / >%s\n'
   [ ! -e hacked ]
   [ "$(wc -l < "$GOALS")" -eq 1 ]
   # The event name keeps only safe characters; the message is kept as plain text.
-  grep -q 'error in mijnlevensverhalen: x.event.touchhacked\|error in mijnlevensverhalen: x.eventtouchhacked' "$GOALS"
+  grep -q 'error in my-app: x.event.touchhacked\|error in my-app: x.eventtouchhacked' "$GOALS"
 }
 
 @test "when Slack cannot be read, the owner hears it once a day" {
@@ -96,6 +96,6 @@ alert() { printf '[2026-11-09 10:05] :rotating_light: *Serverfout* `%s` / >%s\n'
   run "$CHECK"
   [ "$status" -eq 1 ]
   run "$CHECK"
-  [ "$(grep -c 'cannot read Slack channel mlv-alerts' "$SENT")" -eq 1 ]
+  [ "$(grep -c 'cannot read Slack channel app-alerts' "$SENT")" -eq 1 ]
   grep -q not_in_channel "$SENT"
 }

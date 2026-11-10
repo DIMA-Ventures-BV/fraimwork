@@ -880,7 +880,7 @@ cmd_tailscale() {
       [ -n "$email" ] || usage "fraim tailscale policy --email you@example.com [--email-2 colleague@example.com]"
       local members="\"$email\""
       [ -z "$(flag email-2)" ] || members="$members, \"$(flag email-2)\""
-      sed "s/\"michael@example.com\"/$members/g" "$REPO/tailscale/policy.hujson"
+      sed "s/\"owner@example.com\"/$members/g" "$REPO/tailscale/policy.hujson"
       ;;
     key) ts_key_store ;;
     apply)
