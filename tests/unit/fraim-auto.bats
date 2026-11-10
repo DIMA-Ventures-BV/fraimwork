@@ -331,7 +331,7 @@ schedule: "0 8 * * *"' 'D.'
   make_auto e 'file: inbox' 'E.'
   run "$AUTO" check
   [ "$status" -eq 1 ]
-  [[ "$output" == *"unknown trigger 'telepathy' (available: after, files, page"* ]]
+  [[ "$output" == *"unknown trigger 'telepathy' (available: after, files, mail, page"* ]]
   [[ "$output" == *"cannot run after itself"* ]]
   [[ "$output" == *"there is no automation 'nobody'"* ]]
   [[ "$output" == *"trigger files: '../etc' must be a folder inside ~/fraim"* ]]

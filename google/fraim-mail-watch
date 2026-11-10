@@ -3,12 +3,14 @@
 
 Gmail is asked what changed since the last look. Without Google push it looks every 30 seconds;
 with push (fraim google push) a Pub/Sub message wakes it at once. The subscription is pulled, so
-the server needs no public address. No mail text is stored: only the ids of the mail and chain.
+the server needs no public address. No mail text is stored: only the ids and the sender's address.
 """
 import json
 import os
+import re
 import sys
 import time
+from email.utils import parseaddr
 
 DIR = os.environ.get("FRAIM_GOOGLE_DIR", "/data/google")
 STATE = os.path.join(DIR, "mail-watch.json")
@@ -50,6 +52,29 @@ def new_mail(history):
     return found
 
 
+def sender(message):
+    for item in message.get("payload", {}).get("headers", []):
+        if item.get("name", "").lower() == "from":
+            address = parseaddr(str(item.get("value", "")))[1].lower()
+            return address if re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", address) else ""
+    return ""
+
+
+def with_senders(service, mails):
+    """A mail deleted in the meantime has no sender. Any other failure repeats the whole look."""
+    for mail in mails:
+        try:
+            message = service.users().messages().get(
+                userId="me", id=mail["id"], format="metadata", metadataHeaders=["From"]
+            ).execute()
+        except Exception as err:  # pylint: disable=broad-except
+            if getattr(getattr(err, "resp", None), "status", 0) != 404:
+                raise
+            message = {}
+        mail["from"] = sender(message)
+    return mails
+
+
 def append_events(path, mails, seq):
     lines = []
     if os.path.exists(path):
@@ -87,7 +112,7 @@ def look(service, state, events_file=EVENTS):
     if start:
         history, latest = changes_since(service, start)
         if history is not None:
-            mails = new_mail(history)
+            mails = with_senders(service, new_mail(history))
             if mails:
                 state["seq"] = append_events(events_file, mails, int(state.get("seq", 0)))
             state["history_id"] = latest

@@ -23,6 +23,13 @@ class Gmail:
         self.pages, self.gone, self.watched = list(pages or []), gone, []
     def users(self): return self
     def history(self): return self
+    def messages(self): return self
+    def get(self, userId, id, format, metadataHeaders):
+        def go():
+            if id == 'deleted': raise Gone()
+            if id == 'broken': raise RuntimeError('network')
+            return {'payload': {'headers': [{'name': 'From', 'value': 'Anna Bakker <Anna@Example.com>'}]}}
+        return Run(go)
     def list(self, **kw):
         def go():
             if self.gone: raise Gone()
@@ -57,6 +64,33 @@ print(w.look(Gmail([{'history': [added('a','t1','INBOX'), added('b','t2','INBOX'
 print([json.loads(l)['seq'] for l in open(EVENTS)])"
   [ "${lines[0]}" = "2 120 9" ]
   [ "${lines[1]}" = "[8, 9]" ]
+}
+
+@test "each new mail records its sender as a plain address" {
+  run py "
+s = {'history_id': '100'}
+w.look(Gmail([{'history': [added('a','t1','INBOX')], 'historyId': '120'}]), s, EVENTS)
+print(json.loads(open(EVENTS).read())['from'])
+print(repr(w.sender({'payload': {'headers': [{'name': 'From', 'value': 'not an address'}]}})), repr(w.sender({})))"
+  [ "${lines[0]}" = "anna@example.com" ]
+  [ "${lines[1]}" = "'' ''" ]
+}
+
+@test "a mail deleted before it was read has no sender and the look goes on" {
+  run py "
+s = {'history_id': '100'}
+print(w.look(Gmail([{'history': [added('deleted','t1','INBOX')], 'historyId': '120'}]), s, EVENTS), s['history_id'])
+print(repr(json.loads(open(EVENTS).read())['from']))"
+  [ "${lines[0]}" = "1 120" ]
+  [ "${lines[1]}" = "''" ]
+}
+
+@test "a failure while reading a sender keeps the position, so the mail comes back" {
+  run py "
+s = {'history_id': '100'}
+try: w.look(Gmail([{'history': [added('broken','t1','INBOX')], 'historyId': '120'}]), s, EVENTS)
+except RuntimeError: print('raised', s['history_id'], os.path.exists(EVENTS))"
+  [ "$output" = "raised 100 False" ]
 }
 
 @test "pages are followed to the end" {
