@@ -55,7 +55,7 @@ const ownerLayer = (name, lead) => layers(name, lead)[0]
 function resolve(name, lead) {
   for (const layer of layers(name, lead)) {
     const text = read(layer.file)
-    if (text !== null) return { ...layer, text }
+    if (text !== null && text.trim()) return { ...layer, text }
   }
   return null
 }
@@ -128,6 +128,8 @@ function namesIn(node, lead, seen = new Set(), depth = 0) {
 }
 
 function problems(name, lead) {
+  const blank = layers(name, lead).filter((l) => l.owner && read(l.file) !== null && !read(l.file).trim())
+  if (blank.length) return blank.map((l) => `${l.file}: the file is empty, so it is skipped`)
   const found = resolve(name, lead)
   if (!found || !found.owner) return []
   let tree
@@ -137,7 +139,6 @@ function problems(name, lead) {
   } catch (err) {
     return [`${found.file}: ${err.message}`]
   }
-  if (!found.text.trim()) return [`${found.file}: the file is empty`]
   const shipped = read(defaultFile(name))
   if (shipped === null) return []
   const known = namesIn(parse(shipped), null)
@@ -180,18 +181,25 @@ function nameArg(a) {
   return name
 }
 
+// A file with a mistake is skipped, so the next one in line is used: a broken file for one
+// agent must not cost the owner's good file for every agent.
 function cmdRender(a) {
   const name = nameArg(a)
-  const found = resolve(name, a.lead)
-  if (!found) die(`no prompt "${name}"; fraim-prompt list shows them`)
-  try {
-    process.stdout.write(render(parse(found.text), a.set, a.lead, 0))
-  } catch (err) {
-    process.stderr.write(`fraim-prompt: ${found.file}: ${err.message}; using the default\n`)
-    const shipped = read(defaultFile(name))
-    if (shipped === null) die(`no default for "${name}"`)
-    try { process.stdout.write(renderDefault(shipped, a.set)) } catch (e) { die(`the default of "${name}" is broken: ${e.message}`) }
+  let tried = false
+  for (const layer of layers(name, a.lead)) {
+    const text = read(layer.file)
+    if (text === null || !text.trim()) continue
+    tried = true
+    try {
+      process.stdout.write(render(parse(text), a.set, a.lead, 0))
+      return
+    } catch (err) {
+      process.stderr.write(`fraim-prompt: ${layer.file}: ${err.message}; using the next version\n`)
+    }
   }
+  if (!tried) die(`no prompt "${name}"; fraim-prompt list shows them`)
+  const shipped = read(defaultFile(name)) ?? die(`no default for "${name}"`)
+  try { process.stdout.write(renderDefault(shipped, a.set)) } catch (e) { die(`the default of "${name}" is broken: ${e.message}`) }
 }
 
 // The fallback reads only shipped files, so a broken owner's include cannot break it again.
@@ -215,6 +223,7 @@ function renderDefault(text, vars) {
 function cmdList(a) {
   for (const name of allNames(a.lead)) {
     const found = resolve(name, a.lead)
+    if (!found) { process.stdout.write(`${name.padEnd(24)} empty  (has a mistake: fraim-prompt check)\n`); continue }
     let note = ''
     if (found.owner) {
       const base = read(baseFile(found, name))

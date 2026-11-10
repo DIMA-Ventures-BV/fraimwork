@@ -135,3 +135,42 @@ setup() {
     [[ "$out" != *'$('* ]]
   done
 }
+
+@test "an empty file is skipped, so the agent keeps its instructions, and check names it" {
+  printf '  \n\n' > "$FRAIM_FILES_DIR/prompts/greet.md"
+  run fraim-prompt render greet --set who=Sam
+  [ "$output" = "Hello Sam." ]
+  printf '' > "$FRAIM_LEADS_DIR/chief/prompts/greet.md"
+  run fraim-prompt render greet --lead chief --set who=Sam
+  [ "$output" = "Hello Sam." ]
+  run fraim-prompt check greet
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"empty"* ]]
+}
+
+@test "a broken file for one agent falls back to the owner's good file, not past it" {
+  printf 'Hi {{who}}.\n' > "$FRAIM_FILES_DIR/prompts/greet.md"
+  printf '{{#open}} never closed\n' > "$FRAIM_LEADS_DIR/chief/prompts/greet.md"
+  run --separate-stderr fraim-prompt render greet --lead chief --set who=Sam
+  [ "$status" -eq 0 ]
+  [ "$output" = "Hi Sam." ]
+  [[ "$stderr" == *"never closed"* ]]
+}
+
+@test "the shipped prompts say what the scripts used to say" {
+  unset FRAIM_PROMPT_DEFAULTS
+  out="$(fraim-prompt render goal --set id=g7 --set 'text=find flights' --set 'rules=- no emoji')"
+  [[ "$out" == *"find flights"* ]]
+  [[ "$out" == *"~/fraim/goals/g7/queue.json"* ]]
+  [[ "$out" == *'e.g. \"Merge the new checkout text?\"'* ]]
+  [[ "$out" == *"preferences, learned from earlier reviews"*"- no emoji"* ]]
+  out="$(fraim-prompt render automation --set name=mail --set 'text=read mail' --set skill=inbox --set outs=whatsapp)"
+  [[ "$out" == "Use the inbox skill"* ]]
+  [[ "$out" == *"read mail"*'answer with exactly: SILENT'* ]]
+  out="$(fraim-prompt render brain-distill --set 'log=e1 said' --set max_rule_chars=300)"
+  [[ "$out" == *"e1 said"*"At most 300 characters"*'"ops"'* ]]
+  out="$(fraim-prompt render brain-review --set 'chats=OWNER: hi' --set max_items=5)"
+  [[ "$out" == *"OWNER: hi"*"Return at most 5 items"*'"items"'* ]]
+  [[ "$(fraim-prompt render style-adhd)" == *"At most 5 short lines"* ]]
+  [[ "$(fraim-prompt render style-detailed)" == *"Give the reasoning"* ]]
+}

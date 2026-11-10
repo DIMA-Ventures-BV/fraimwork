@@ -39,19 +39,23 @@ fi
 if [ "${FRAIM_PERMISSIONS:-all}" = all ]; then
   set -- --dangerously-skip-permissions "$@"
 fi
-# What every Claude on the server is told is the prompt file "server" (fraim-prompt). Agents
-# nobody watches may not rewrite their own instructions.
+# What every Claude on the server is told is the prompt file "server" (fraim-prompt). Those
+# rules must never go missing: without a fresh copy, use the last one, then the shipped one.
+prompt_dir="$HOME/.local/state/fraim"
+server_prompt="$prompt_dir/server-prompt.md"
 if command -v fraim-prompt >/dev/null; then
-  prompt_dir="$HOME/.local/state/fraim"
   mkdir -p "$prompt_dir" 2>/dev/null
   prompt_tmp="$(mktemp "$prompt_dir/.server-prompt.XXXXXX" 2>/dev/null)"
   if [ -n "$prompt_tmp" ] && fraim-prompt render server > "$prompt_tmp" 2>/dev/null && [ -s "$prompt_tmp" ]; then
-    mv "$prompt_tmp" "$prompt_dir/server-prompt.md"
+    mv "$prompt_tmp" "$server_prompt"
   else
     rm -f "$prompt_tmp"
   fi
-  [ ! -s "$prompt_dir/server-prompt.md" ] || set -- "$@" --append-system-prompt-file "$prompt_dir/server-prompt.md"
 fi
+[ -s "$server_prompt" ] || server_prompt="${FRAIM_PROMPT_DEFAULTS:-/etc/fraim/prompts}/server.md"
+[ ! -s "$server_prompt" ] || set -- "$@" --append-system-prompt-file "$server_prompt"
+# Runs nobody watches may not rewrite instructions with the edit tools. This does not stop a
+# shell command: they run as the same Unix user (docs/prompts.md).
 if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
   set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**)"
 fi
