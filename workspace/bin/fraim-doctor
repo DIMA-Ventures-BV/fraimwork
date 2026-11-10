@@ -53,6 +53,18 @@ check "jobs-ok" jobs_ok
 plugins_ok() { local s="$HOME/.local/state/fraim/config-init.status"; [ ! -f "$s" ] || ! grep -q '^failed' "$s"; }
 command -v fraim-config >/dev/null && check "plugins-ok" plugins_ok
 has_module whatsapp && check "whatsapp-connected" sh -c "fraim-gateway GET /status | jq -e .connected"
+# Connected is not enough: Claude must be listening, or messages only wait in the gateway.
+# Claude restarting takes a moment, so a missing listener gets a few tries.
+reaches_claude() {
+  logged_in || return 0
+  local _
+  for _ in 1 2 3; do
+    fraim-gateway GET /status | jq -e '.listeners > 0' && return 0
+    sleep "${FRAIM_DOCTOR_RETRY:-10}"
+  done
+  return 1
+}
+has_module whatsapp && check "whatsapp-reaches-claude" reaches_claude
 has_module browser && check "server-browser" curl -fsS "${BROWSER_CDP_URL}/json/version"
 has_module sync && check "syncthing" curl -fsS http://syncthing:8384/rest/noauth/health
 

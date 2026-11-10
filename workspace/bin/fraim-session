@@ -19,25 +19,19 @@ fi
 
 # The WhatsApp channel is a development channel, so Claude Code asks for confirmation
 # at every start. The owner enabled it in .env, so confirm it here unless disabled.
-confirm_dev_channel() {
-  [ "${#args[@]}" -gt 0 ] && [ "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}" = 1 ] || return 0
-  local pane
-  for _ in $(seq 60); do
-    sleep 1
-    pane="$(hc read main --lines 0 2>/dev/null || true)"
-    if printf '%s' "$pane" | grep -q '❯.*local development'; then
-      hc keys main enter >/dev/null 2>&1
-      return 0
-    fi
-  done
-}
+# One watcher for the life of this script: one pass of the loop can start Claude twice.
+confirm_pid=""
+if [ "${#args[@]}" -gt 0 ] && [ "${FRAIM_AUTO_CONFIRM_CHANNEL:-1}" = 1 ]; then
+  fraim-herdr confirm-channel &
+  confirm_pid=$!
+fi
 
 while true; do
-  confirm_dev_channel &
   fraim-claude --continue "${args[@]}" "${rc_args[@]}" || fraim-claude "${args[@]}" "${rc_args[@]}"
   echo
   echo "fraim: Claude stopped. It restarts in 5 seconds. Press Ctrl-C to get a plain shell."
   sleep 5 || break
 done
 
+[ -z "$confirm_pid" ] || kill "$confirm_pid" 2>/dev/null
 exec bash -l

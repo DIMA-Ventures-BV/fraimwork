@@ -2928,7 +2928,16 @@ cmd_whatsapp() {
       say "WhatsApp session removed. Run: fraim whatsapp link --number <agent number>"
       ;;
     test) workspace_ssh "fraim-notify 'fraim test message: WhatsApp works.'" && say "Test message sent to the owner." ;;
-    *) usage "fraim whatsapp status | link [--number N] | relink | test" ;;
+    check)
+      local tries=0
+      until status="$(workspace_ssh 'fraim-gateway GET /status')" && jq -e '.connected and .listeners > 0 and .queued == 0' <<<"$status" >/dev/null; do
+        tries=$((tries + 1))
+        [ "$tries" -lt "${FRAIM_WHATSAPP_CHECK_TRIES:-30}" ] || die "WhatsApp does not reach Claude: $status"
+        sleep "${FRAIM_WHATSAPP_CHECK_WAIT:-3}"
+      done
+      say "WhatsApp is linked, Claude listens, and no message waits."
+      ;;
+    *) usage "fraim whatsapp status | link [--number N] | relink | test | check" ;;
   esac
 }
 
@@ -3080,7 +3089,7 @@ Operate
   fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | stats | distill | skills]
                                              preferences and skills learned from reviews
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
-  fraim whatsapp status|link [--number N]|relink|test
+  fraim whatsapp status|link [--number N]|relink|test|check
   fraim browser [--print-url] | stop         server browser view URL and VNC password
   fraim browser --url-only                   only the fixed URL (no tunnel, no password; not in public mode)
   fraim chrome start|stop|status             lend a separate local Chrome profile to the server
