@@ -16,7 +16,7 @@ fake_server_with_work() {
 case "$REMOTE" in
   *"ls -1 .env.space-"*) echo work ;;
   *".env.space-work"*"grep -E"*|*"grep -E"*".env.space-work"*)
-    printf "SSH_PORT=2223\nVNC_PORT=6081\nPREVIEW_PORTS=3110-3119\nMOSH_PORTS=60020-60030\nSPACE_INDEX=1\nCOMPOSE_PROFILES=browser,scheduler\nBROWSER_IP=172.29.50.10\n" ;;
+    printf "SSH_PORT=2223\nVNC_PORT=6081\nPREVIEW_PORTS=3110-3119\nMOSH_PORTS=60020-60030\nSPACE_INDEX=1\nCOMPOSE_PROFILES='"${1:-browser,scheduler}"'\nBROWSER_IP=172.29.50.10\n" ;;
   *"fraim-doctor --json"*) echo "{\"ok\":true,\"checks\":[]}" ;;
 esac'
 }
@@ -208,6 +208,27 @@ esac'
   grep -q 'umask 077 && t=$(mktemp .fraim-put-env.XXXXXX)' "$SSH_LOG"
   grep -q '.env.space-work > "$t"' "$SSH_LOG"
   grep -q 'install.sh --space work' "$SSH_LOG"
+}
+
+@test "space policy keeps google in the module list when asked" {
+  fake_server_with_work browser,google
+  run "$FRAIM" space policy work --modules browser,google
+  grep -qF 'k=COMPOSE_PROFILES -v v=browser\,google' "$SSH_LOG"
+  [[ "$output" != *"Google is now off"* ]]
+}
+
+@test "space policy says so when a module list turns google off" {
+  fake_server_with_work browser,google
+  run "$FRAIM" space policy work --modules browser
+  grep -qF 'k=COMPOSE_PROFILES -v v=browser' "$SSH_LOG"
+  [[ "$output" == *"Google is now off"* ]]
+}
+
+@test "space policy refuses an unknown module" {
+  fake_server_with_work
+  run "$FRAIM" space policy work --modules browser,telepathy
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown module"* ]]
 }
 
 @test "space commands take the name as an argument, not --space" {
