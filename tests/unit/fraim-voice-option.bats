@@ -26,7 +26,7 @@ setup() {
 
 @test "voice is a server-wide setting: every space shares one image" {
   grep -q 'for key in .*VOICE' "$ROOT/install.sh"
-  grep -q "|VOICE|\||VOICE'" "$ROOT/bin/fraim"
+  grep -q "|VOICE|\||VOICE'" "$ROOT/bin/fraim.d/space.sh"
 }
 
 @test "install.sh turns voice on when any space uses WhatsApp" {
