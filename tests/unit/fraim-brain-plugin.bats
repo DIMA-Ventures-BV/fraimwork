@@ -241,7 +241,8 @@ sleeper() {
 }
 
 @test "show with a flood of output is cut, not failed" {
-  printf '#!/usr/bin/env bash\nyes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | head -c 3000000\n' > "$P"
+  # 2>/dev/null: GNU head may print "Broken pipe" once the plug-in is cut off, and run counts stderr.
+  printf '#!/usr/bin/env bash\nyes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2>/dev/null | head -c 3000000 2>/dev/null\n' > "$P"
   chmod +x "$P"
   run fraim-brain show --for web
   [ "$status" -eq 0 ]
