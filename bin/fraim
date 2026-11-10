@@ -461,11 +461,7 @@ space_add() {
   else
     [ "$(printf '%s\n' "$existing" | grep -c .)" -lt "$SPACE_MAX" ] || usage "a server holds at most $((SPACE_MAX + 1)) spaces (main plus $SPACE_MAX)"
     modules="$(flag modules)"; modules="${modules:-browser,scheduler}"
-    printf '%s' "$modules" | grep -Eq '^([a-z]+)(,[a-z]+)*$' || usage "--modules is a comma list of: browser,scheduler,whatsapp,sync"
-    local mod
-    for mod in ${modules//,/ }; do
-      case "$mod" in browser|scheduler|whatsapp|sync) ;; *) usage "unknown module '$mod'; use browser,scheduler,whatsapp,sync" ;; esac
-    done
+    check_modules "$modules"
     [ "$FRAIM_ACCESS" != local ] || case ",$modules," in *,sync,*) usage "file sync is not part of the local test stack" ;; esac
     owner=""
     if [ -n "$(flag whatsapp-owner)" ]; then owner="$(normalize_phone "$(flag whatsapp-owner)")" || exit 2; fi
@@ -524,6 +520,15 @@ space_rm() {
   say "Space $name and all its data are deleted."
 }
 
+SPACE_MODULES="browser,scheduler,whatsapp,sync,google"
+check_modules() {
+  local mod
+  printf '%s' "$1" | grep -Eq '^([a-z]+)(,[a-z]+)*$' || usage "--modules is a comma list of: $SPACE_MODULES"
+  for mod in ${1//,/ }; do
+    case ",$SPACE_MODULES," in *,"$mod",*) ;; *) usage "unknown module '$mod'; use $SPACE_MODULES" ;; esac
+  done
+}
+
 space_policy() {
   local name="$1" changed=""
   [ -n "$name" ] || usage "fraim space policy NAME [--deny 'claude.ai Gmail,NAME'] [--claudeai on|off] [--modules m,m]"
@@ -540,8 +545,11 @@ space_policy() {
     put_env CLAUDEAI_CONNECTORS "$(flag claudeai)"; changed=1
   fi
   if [ -n "$(flag modules)" ]; then
-    printf '%s' "$(flag modules)" | grep -Eq '^(browser|scheduler|whatsapp|sync)(,(browser|scheduler|whatsapp|sync))*$' \
-      || usage "--modules is a comma list of: browser,scheduler,whatsapp,sync"
+    check_modules "$(flag modules)"
+    case ",$(space_info COMPOSE_PROFILES),:,$(flag modules)," in
+      *,google,*:*,google,*) ;;
+      *,google,*:*) say "Google is now off for space $name. Its login stays stored; add google to --modules to turn it on again." ;;
+    esac
     put_env COMPOSE_PROFILES "$(flag modules)"; changed=1
   fi
   SPACE_INFO=""

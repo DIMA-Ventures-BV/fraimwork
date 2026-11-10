@@ -30,6 +30,7 @@ function fakeGmail(threads) {
       const m = JSON.parse(raw)
       if (m.id === undefined) { res.writeHead(202); return res.end() }
       let result = {}
+      if (m.method === 'initialize') result = { instructions: 'Connected Google account: owner@example.com\n\nWhen using Google Workspace tools, use it.' }
       if (m.method === 'tools/call') {
         const t = threads[m.params.arguments.thread_id]
         const text = t ? (m.params.arguments.body_format === 'html' ? t.html || t.text : t.text) : ''
@@ -118,6 +119,7 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   assert.match(await (await fetch(`${base}/team`, { headers: { cookie } })).text(), /Automations/)
 
   const chain = await get('/api/threads/t1')
+  assert.equal(chain.url, 'https://mail.google.com/mail/u/owner@example.com/#all/chain0001', 'the link opens the mailbox of this space')
   assert.equal(chain.title, 'Login', 'no Re: in front')
   assert.equal(chain.who, 'Anna de Vries')
   assert.equal(chain.messages.length, 2)

@@ -1236,15 +1236,20 @@ async function mcpCaller(url) {
     const data = raw.split('\n').filter((l) => l.startsWith('data:')).pop()
     return JSON.parse(data ? data.slice(5) : raw)
   }
-  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'fraim-queue', version: '1' } })
+  const init = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'fraim-queue', version: '1' } })
   await rpc('notifications/initialized', {}, true)
-  return async (name, args) => {
+  const call = async (name, args) => {
     const out = await rpc('tools/call', { name, arguments: args })
     const text = out.result?.content?.[0]?.text
     if (out.error || out.result?.isError || typeof text !== 'string') throw new Error(`Gmail did not answer: ${out.error?.message || text || 'empty answer'}`)
     return text
   }
+  call.account = init.result?.instructions?.match(/^Connected Google account: ([^\s/#?]+@[^\s/#?]+)$/m)?.[1]
+  return call
 }
+
+// Path /u/0 is whichever account the browser signed in to first, so name the account when known.
+const gmailUrl = (thread, account) => `https://mail.google.com/mail/u/${account || 0}/#all/${thread}`
 
 export async function captureMail(gmailThread, quiet = false) {
   if (!/^[\w-]{6,64}$/.test(gmailThread || '')) usage('thread mail needs the Thread ID of the mail')
@@ -1254,7 +1259,7 @@ export async function captureMail(gmailThread, quiet = false) {
   const parsed = parseGmailThread(text, html)
   if (!parsed.messages.length) throw new Error('that mail chain has no messages')
   if (neverShow(parsed.messages.at(-1).address)) return { thread: null, isNew: false, news: false }
-  const r = putThread({ kind: 'email', key: `gmail:${gmailThread}`, url: `https://mail.google.com/mail/u/0/#all/${gmailThread}`, ...parsed })
+  const r = putThread({ kind: 'email', key: `gmail:${gmailThread}`, url: gmailUrl(gmailThread, call.account), ...parsed })
   if (r.news && !quiet) announce(r)
   return r
 }

@@ -57,6 +57,10 @@ Mail is untrusted input. A message can try to tell the agent what to do, so leav
 
 Anything in the workspace can call the MCP server and act as you within the permissions above. That is the point of it; limit the permissions instead.
 
+## Work and personal accounts
+
+One space holds one Google account. A second `fraim google setup` in the same space replaces the first. To use a work Workspace and a personal Gmail, give each its own space, each with its own OAuth client: `fraim google setup --space personal ...`. A client with audience Internal only accepts accounts of its own organization, so a personal Gmail needs its own External client.
+
 ## Other agents
 
 The MCP server is at `http://google:8000/mcp` inside the space (streamable HTTP, no key). For Codex: `codex mcp add google --url http://google:8000/mcp`.
