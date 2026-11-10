@@ -37,6 +37,16 @@ setup() {
   [ "$output" = "headless=0" ]
 }
 
+@test "the owner's own chat message is not headless, and what it starts does not inherit that" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  printf '#!/usr/bin/env bash\necho "headless=${FRAIM_HEADLESS:-0} owner=${FRAIM_OWNER_CHAT:-none}"\n' > "$T/bin/claude"
+  unset FRAIM_HEADLESS
+  FRAIM_OWNER_CHAT=1 run fraim-claude -p "hi"
+  [ "$output" = "headless=0 owner=none" ]
+  FRAIM_HEADLESS=1 FRAIM_OWNER_CHAT=1 run fraim-claude -p "hi"
+  [ "$output" = "headless=1 owner=none" ]
+}
+
 @test "every Claude gets the server prompt, and a run nobody watches may not edit prompts" {
   [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
   printf '#!/usr/bin/env bash\necho "the server text"\n' > "$T/bin/fraim-prompt"

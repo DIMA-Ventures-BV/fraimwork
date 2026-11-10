@@ -21,9 +21,13 @@ fi
 # prompts. Managed deny rules and --disallowedTools still apply; --allowedTools no longer limits.
 # A headless run (-p: goals, leads, automations, the brain) has no owner watching. Commands
 # that only the owner may run (queue decisions, brain changes) check this and refuse.
+# The exception is the owner's own message in the app (fraim-relay chat): the owner is the one
+# asking, as on WhatsApp. It covers this run only, so nothing this run starts inherits it.
 headless_run=""
+owner_chat="${FRAIM_OWNER_CHAT:-}"
+unset FRAIM_OWNER_CHAT
 for arg in "$@"; do
-  case "$arg" in -p|--print) export FRAIM_HEADLESS=1; headless_run=1; break ;; esac
+  case "$arg" in -p|--print) headless_run=1; [ "$owner_chat" = 1 ] || export FRAIM_HEADLESS=1; break ;; esac
 done
 # A run nobody watches (automations, leads, the brain) waits for free memory, at most
 # FRAIM_CAPACITY_WAIT seconds (default 300, shorter than its caller's own time limit), instead

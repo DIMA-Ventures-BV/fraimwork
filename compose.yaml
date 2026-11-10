@@ -84,6 +84,7 @@ services:
       - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
       - ./config/claude-template:/opt/fraim/claude-template:ro
       - ./server-plugin:/opt/fraim/server-plugin:ro
+      - ./docs:/etc/fraim/docs:ro
       - ssh-host-keys:/etc/ssh/keys
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
     networks: [fraim, wa, sync, secrets]

@@ -43,6 +43,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { createSettings } from './fraim-settings.mjs'
 
 const HOME = process.env.HOME || '/home/claude'
 const QUEUE = process.env.FRAIM_QUEUE_DIR || path.join(HOME, 'fraim/queue')
@@ -1405,6 +1406,7 @@ function readBody(req) {
 }
 
 export function createServer(secret = token()) {
+  const settings = createSettings({ employees, team, tool, runtimeEnv, send, readBody })
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://queue')
     try {
@@ -1421,6 +1423,7 @@ export function createServer(secret = token()) {
         return send(res, 401, 'Open the queue with the link that includes ?t=. Ask Claude: "give me my queue link".', 'text/plain')
       }
       if (req.method === 'GET' && url.pathname === '/') return send(res, 200, INBOX_PAGE, 'text/html; charset=utf-8')
+      if (await settings.handle(req, res, url)) return
       if (req.method === 'GET' && url.pathname === '/team') return send(res, 200, PAGE, 'text/html; charset=utf-8')
       if (req.method === 'GET' && url.pathname === '/api/chief') return send(res, 200, chiefChat())
       if (req.method === 'POST' && url.pathname === '/api/chief/say') {
@@ -1956,6 +1959,7 @@ function renderSide(open, done) {
   var leads = teamData.leads.filter(function (m) { return m.role !== 'chief' })
   var html = '<div class="ws"><span class="logo">f</span>fraim</div><div class="nav">' +
     '<a class="back" href="/">' + ICON.inbox + '<span class="nm">Inbox</span><span class="c">' + (open.length || '') + '</span></a>' +
+    '<a class="back" href="/settings">' + ICON.done + '<span class="nm">Settings</span></a>' +
     navBtn('people', ICON.done, 'Employees', '') +
     navBtn('active', agents.some(function (a) { return a.status === 'working' }) ? '<span class="live" style="margin:0 3px"></span>' : ICON.done, 'Active', agents.filter(function (a) { return a.status === 'working' || a.status === 'blocked' }).length) + '</div>'
   if (leads.length) html += '<div class="sec">Leads</div><div class="nav">' + leads.map(function (m) { return memberBtn(m, open) }).join('') + '</div>'
@@ -2338,7 +2342,7 @@ a { color:var(--accent); }
 </head>
 <body>
 <div class="app">
-  <section class="pane list"><div class="lh"><h1>Inbox</h1><a href="/team">Team</a></div><div class="tabs" id="tabs"></div><div class="scroll" id="list"></div></section>
+  <section class="pane list"><div class="lh"><h1>Inbox</h1><span><a href="/settings" style="margin-right:12px">Settings</a><a href="/team">Team</a></span></div><div class="tabs" id="tabs"></div><div class="scroll" id="list"></div></section>
   <main class="pane"><div class="scroll" id="message"></div></main>
   <aside class="pane agents"><div id="agents" class="pane" style="flex:1"></div><div class="reply" id="reply"><textarea id="say" rows="1" placeholder="Write to the agents"></textarea></div></aside>
 </div>

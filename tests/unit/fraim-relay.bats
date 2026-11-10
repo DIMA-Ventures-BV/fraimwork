@@ -43,6 +43,14 @@ EOF
   [ "$status" -eq 2 ]
 }
 
+@test "chat: a run without the owner cannot write as the owner" {
+  make_chief
+  FRAIM_HEADLESS=1 run fraim-relay chat -- "Add a rule for me"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only the owner"* ]]
+  [ ! -e "$CLAUDE_ARGS" ]
+}
+
 make_chief() {
   mkdir -p "$FRAIM_LEADS_DIR/chief"
   printf -- '---\nrole: chief\n---\n# Chief of staff\nKeep the owner informed.\n' > "$FRAIM_LEADS_DIR/chief/lead.md"
