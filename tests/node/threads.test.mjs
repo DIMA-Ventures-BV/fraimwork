@@ -113,6 +113,7 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
 
   const page = await (await fetch(`${base}/`, { headers: { cookie } })).text()
   assert.match(page, /Write to the agents/)
+  assert.match(page, /For you/, 'what is for the owner says so')
   assert.doesNotMatch(page, />(Reply|Forward|Comment)</, 'the middle pane only shows what came in')
   assert.match(await (await fetch(`${base}/team`, { headers: { cookie } })).text(), /Automations/)
 
