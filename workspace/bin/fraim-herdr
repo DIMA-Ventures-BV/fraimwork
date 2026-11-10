@@ -85,7 +85,7 @@ hcx() {
   if ! in_workspace && ! alive; then
     die "the session service (herdr) does not answer in the workspace container; run: fraim restart workspace"
   fi
-  hc "$@"
+  exec hc "$@"
 }
 
 # live, finished, gone (no such terminal: hc exit 3) or unknown (the core did not answer).

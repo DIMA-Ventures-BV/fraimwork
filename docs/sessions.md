@@ -81,6 +81,12 @@ reopens the same conversation (`fraim-claude --resume SID`) first and starts a w
 `follow` mode. It touches `last-send` first, so the watcher never closes the terminal (keep time)
 with that message still in it.
 
+While a goal is not working the watcher sleeps on core's event stream (`hc events --terminal`),
+so it reacts at once to a status change; `hc wait` returns at once for a terminal that is not
+working, so it only serves while Claude works. It still wakes every `FRAIM_GOAL_POLL` seconds
+(default 60), because retries, the keep time, the time limit and a finished background task
+are not core events.
+
 The watcher touches `heartbeat` at least every minute and removes it when it exits. A goal is
 running while its heartbeat is younger than three minutes; this works across containers, where
 a pid does not. After a container restart, `fraim-goal reconcile` gives a goal whose terminal
