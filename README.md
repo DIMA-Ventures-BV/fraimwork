@@ -68,7 +68,7 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 | Path | What |
 |---|---|
 | `compose.yaml` | All services. Modules are compose profiles: `sync`, `browser`, `whatsapp`, `scheduler`. Every space starts this file as its own compose project (`docs/spaces.md`). |
-| `modules/` | One manifest per module with flat `key: value` lines: `id`, `version`, `min_fraim_version`, `description`, `profile` (the compose profile), `requires`, and `check: NAME COMMAND` lines. `fraim-doctor` runs the checks of the modules that are on. |
+| `modules/` | One manifest per module with flat `key: value` lines: `id`, `version`, `min_fraim_version`, `description`, `profile` (the compose profile), `check: NAME COMMAND` lines, and `claude-channel: server:NAME` for a module that talks to main. `fraim-doctor` runs the checks of the modules that are on; `fraim-session` loads their channels. |
 | `docs/channels.md` | What a second chat channel must implement next to WhatsApp. |
 | `install.sh` | Server setup on Ubuntu 24.04: Docker, Tailscale, firewall, secrets. Safe to run again. |
 | `bin/fraim` | The CLI Claude uses. |

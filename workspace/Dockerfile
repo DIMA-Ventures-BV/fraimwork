@@ -95,6 +95,7 @@ COPY skel/ /etc/fraim/skel/
 COPY skel-jobs/ /etc/fraim/skel-jobs/
 COPY automation-kit/ /etc/fraim/automation-kit/
 COPY prompts/ /etc/fraim/prompts/
+COPY services /etc/fraim/services
 COPY ui/ /etc/fraim/ui/
 COPY bin/ /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/fraim-*

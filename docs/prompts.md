@@ -35,6 +35,10 @@ The first file that exists is used:
 | `server` | What every Claude on the server is told, including the WhatsApp chat |
 | `tools-lead`, `tools-chief`, `tools-engineer` | The tools every lead, the chief and the engineer may use, one rule per line |
 | `stale-card` | The queue card when a default you copied changed |
+| `notice-goal-done`, `notice-goal-answered`, `notice-goal-failed` | What you hear when a background task finishes, answers or fails |
+| `notice-asks`, `notice-session-done`, `notice-who` | What you hear when a task or coding session asks you something or finishes, and how it is named |
+| `notice-main-blocked`, `notice-whatsapp-down` | What you hear when the main session is stuck on its screen or WhatsApp cannot reach it |
+| `goal-check-passed`, `goal-check-failed` | What a background task is told after the independent check of its change |
 
 `fraim-prompt list` shows them all and whose version is used.
 

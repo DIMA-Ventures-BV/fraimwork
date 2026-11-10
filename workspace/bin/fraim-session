@@ -6,10 +6,14 @@ set -u
 . /etc/fraim/runtime.env 2>/dev/null || true
 cd "$HOME/fraim" || exit 1
 
+# A module that talks to main declares its Claude Code channel in its manifest
+# ("claude-channel: server:NAME"); every module that is on loads its own.
 args=()
-case ",${FRAIM_MODULES:-}," in
-  *,whatsapp,*) args+=(--dangerously-load-development-channels server:whatsapp) ;;
-esac
+for module in ${FRAIM_MODULES//,/ }; do
+  while read -r channel; do
+    [ -z "$channel" ] || args+=(--dangerously-load-development-channels "$channel")
+  done < <(sed -n 's/^claude-channel: *//p' "${FRAIM_MODULES_DIR:-/etc/fraim/modules}/$module.manifest" 2>/dev/null)
+done
 rc_args=()
 # Remote Control (the Claude phone app) needs a full login; a setup-token cannot use it.
 # The session shows up in the app as "<server> <space>".

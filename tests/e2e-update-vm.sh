@@ -32,7 +32,7 @@ doctor_ok() {
   done
   printf '%s\n' "$json"
   (cd "$OPT" && docker compose ps -a) || true
-  exec_ws sh -c 'tail -20 ~/.local/state/fraim/queue.log ~/.local/state/fraim/herdr.log' || true
+  exec_ws sh -c 'tail -20 ~/.local/state/fraim/queue-page.log ~/.local/state/fraim/herdr.log' || true
   fail "$1 is not healthy"
 }
 updater() { env PATH="$W/bin:$PATH" FRAIM_UPDATER_HOUR=4 FRAIM_UPDATER_TRIES=18 /usr/local/sbin/fraim-updater "$@"; }

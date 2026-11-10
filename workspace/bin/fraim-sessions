@@ -65,7 +65,7 @@ launch() {
   fraim-herdr trust "$cwd" || die "could not mark $cwd as trusted in ~/.claude.json"
   local args=(fraim-claude)
   if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
-  fraim-herdr open "$id" session "$cwd" --label "repo=$(cat "$dir/repo")" -- "${args[@]}" \
+  fraim-herdr open "$id" session "$cwd" --label "repo=$(cat "$dir/repo")" --label "sid=$sid" -- "${args[@]}" \
     || die "could not start session $id"
   hc wait "$id" --timeout "${FRAIM_SESSION_READY:-90}" --json >/dev/null 2>&1 || true
   local state tries=0

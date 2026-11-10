@@ -41,9 +41,11 @@ The owner gets a WhatsApp message, written by the chief of staff in plain words 
   `/usr/local/bin/herdr-core` and `hc`. Root owns it, so `hc update` cannot replace it; a new
   version comes with a new image.
 - **The core.** `fraim-entrypoint` starts `fraim-herdr supervise` as user claude. Every 30 seconds
-  it starts the core if needed (`hc server status` starts one), the terminals `main`
-  (`fraim-session`), `queue-page` (`fraim-queue serve`) and `watch` (`fraim-herdr watch`), and
-  `fraim-goal reconcile`. The core's socket is `~/.local/state/herdr-core/default/default.sock`
+  it starts the core if needed (`hc server status` starts one), the terminal `main`
+  (`fraim-session`), every service in the services file, and `fraim-goal reconcile`. The
+  services file (`workspace/services`, one `NAME COMMAND` per line) ships `queue-page`
+  (`fraim-queue serve`) and `watch` (`fraim-herdr watch`); the owner's `~/fraim/services`
+  wins, so an owner can add or drop a background service without an engine change. The core's socket is `~/.local/state/herdr-core/default/default.sock`
   in the home volume.
 - **The scheduler container** shares the home volume and reaches the same core through that
   socket. Any `hc` command starts a core when none answers, so scripts call

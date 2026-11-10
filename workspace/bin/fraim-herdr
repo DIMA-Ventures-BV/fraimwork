@@ -31,6 +31,7 @@ set -uo pipefail
 . "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
 
 usage() { echo "fraim-herdr: $*" >&2; exit 2; }
+here="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
 die() { echo "fraim-herdr: $*" >&2; exit 1; }
 
 session="${HC_SESSION:-default}"
@@ -186,10 +187,21 @@ cmd_up() {
   hc server status >/dev/null 2>&1 || die "herdr-core did not start"
   local failed=0
   start_service main main fraim-session || failed=1
-  # The review queue page, on the last preview slot; restarts itself when it stops.
-  start_service queue-page service bash -c 'while true; do fraim-queue serve 2>>~/.local/state/fraim/queue.log; sleep 5; done' || failed=1
-  start_service watch service bash -c 'while true; do fraim-herdr watch 2>>~/.local/state/fraim/watch.log; sleep 5; done' || failed=1
+  local name command
+  while read -r name command; do
+    case "$name" in ''|'#'*) continue ;; esac
+    printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,31}$' || { echo "fraim-herdr: bad service name '$name'" >&2; failed=1; continue; }
+    start_service "$name" service bash -c "while true; do $command 2>>~/.local/state/fraim/$name.log; sleep 5; done" || failed=1
+  done < "$(services_file)"
   return "$failed"
+}
+
+services_file() {
+  local f
+  for f in "$HOME/fraim/services" /etc/fraim/services "$here/../services"; do
+    [ -f "$f" ] && { printf '%s' "$f"; return; }
+  done
+  printf '/dev/null'
 }
 
 # The screen keeps old prompts above the current one, so only a prompt on the last lines counts.
@@ -231,7 +243,7 @@ cmd_heal() {
       restarts=$((restarts + 1))
       misses=0
     elif [ "$restarts" -eq "${FRAIM_HEAL_RESTARTS:-3}" ]; then
-      tell_owner "Claude on your server does not receive WhatsApp messages, and restarting it did not help. Ask Claude on your laptop to fix fraim."
+      tell_owner "$(say notice-whatsapp-down)"
       restarts=$((restarts + 1))
     fi
   fi
@@ -249,15 +261,6 @@ cmd_supervise() {
     fraim-capacity check || fraim-capacity reclaim >/dev/null 2>&1 || true
     sleep "${FRAIM_HERDR_CHECK:-30}"
   done
-}
-
-kind_of_name() {
-  case "$1" in
-    main) echo main ;;
-    g[0-9]*) echo goal ;;
-    s[0-9]*) echo session ;;
-    *) echo service ;;
-  esac
 }
 
 # fraim shell [NAME]: main, a goal (g3), a coding session (s1), or a plain shell that stays.
@@ -318,30 +321,16 @@ cmd_busy() {
   hc exec ps -o comm= --ppid "$pid" 2>/dev/null | grep -qxE 'bash|sh|dash|zsh'
 }
 
+# Goals and sessions carry Claude's session id as label sid (fraim-goal, fraim-sessions).
 cmd_last_text() {
-  local name="$1" sid=""
-  case "$(kind_of_name "$name")" in
-    goal) sid="$(cat "${FRAIM_GOALS_DIR:-$HOME/fraim/goals}/$name/session-id" 2>/dev/null)" ;;
-    session) sid="$(cat "${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}/$name/session-id" 2>/dev/null)" ;;
-  esac
-  transcript_text "$sid"
+  transcript_text "$(hc get "$1" --json 2>/dev/null | jq -r '.labels.sid // ""')"
 }
 
 tell_owner() { FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$1" >/dev/null 2>&1 || true; }
-
-# What the owner calls it: the goal's task or the session's repo, never an id. The owner
-# answers in plain words; the server's Claude finds the session with fraim-herdr ls.
-describe() {
-  local name="$1" kind="$2" rec="$3" what
-  case "$kind" in
-    goal)
-      what="$(head -1 "${FRAIM_GOALS_DIR:-$HOME/fraim/goals}/$name/goal.md" 2>/dev/null | cut -c1-80)"
-      printf 'The task "%s"' "${what:-a background task}" ;;
-    session)
-      printf 'The coding session in %s' "$(jq -r '.labels.repo // "a repo"' <<<"$rec")" ;;
-    *) printf 'A session on the server' ;;
-  esac
-}
+# The words the owner hears are prompt files (notice-*.md) the owner can change.
+say() { local name="$1"; shift; "$here/fraim-prompt" render "$name" "$@" 2>/dev/null; }
+# Who it is in the owner's words: the goal's task (label title) or the session's repo, never an id.
+who() { jq -r '"--set\nkind=\(.labels.fraim // "")\n--set\ntitle=\(.labels.title // "")\n--set\nrepo=\(.labels.repo // "")"' <<<"$1"; }
 
 # Follows status changes. Blocked (a question or a permission) reaches the owner for every
 # kind; a coding session that finished a turn reaches the owner too. Goals send their own
@@ -349,7 +338,7 @@ describe() {
 cmd_watch() {
   in_workspace || die "the watcher runs in the workspace container only"
   declare -A last=()
-  local line type addr state rec name kind msg text
+  local line type addr state rec name kind msg text whom
   while IFS= read -r line; do
     type="$(jq -r '.params.type // empty' <<<"$line" 2>/dev/null)"
     [ "$type" = status ] || continue
@@ -371,12 +360,12 @@ cmd_watch() {
           (
             sleep "${FRAIM_MAIN_BLOCKED_GRACE:-60}"
             [ "$(status_of "$addr")" = blocked ] \
-              && tell_owner "The main session waits for an answer on its screen: ${msg:-open it with fraim shell}."
+              && tell_owner "$(say notice-main-blocked --set "question=$msg")"
           ) &
         else
           msg="$(printf '%s' "${msg#answer: }" | redact)"
-          tell_owner "$(describe "$name" "$kind" "$rec") asks you: ${msg:-it waits for your answer}
-Answer me here in your own words."
+          mapfile -t whom < <(who "$rec")
+          tell_owner "$(say notice-asks "${whom[@]}" --set "question=$msg")"
         fi ;;
       done)
         [ "$kind" = session ] || continue
@@ -384,8 +373,8 @@ Answer me here in your own words."
         touch "${FRAIM_SESSIONS_DIR:-$HOME/fraim/sessions}/$name/notified" 2>/dev/null || true
         # Hide first, then shorten: a cut through a token would keep part of it visible.
         text="$(cmd_last_text "$name" | redact | head -c 1200)"
-        tell_owner "$(describe "$name" "$kind" "$rec") is done.
-${text:-It wrote no summary.}" ;;
+        mapfile -t whom < <(who "$rec")
+        tell_owner "$(say notice-session-done "${whom[@]}" --set "text=$text")" ;;
     esac
   done < <(hc events --json 2>/dev/null)
 }

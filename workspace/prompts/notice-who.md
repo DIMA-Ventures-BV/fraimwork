@@ -1,0 +1,2 @@
+{{! Who a notice is about, in the owner's words: the task, or the repo of a coding session. Never an id.}}
+{{#title}}The task "{{title}}"{{/title}}{{^title}}{{#repo}}The coding session in {{repo}}{{/repo}}{{^repo}}A session on the server{{/repo}}{{/title}}

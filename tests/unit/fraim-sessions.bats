@@ -183,11 +183,10 @@ EOF
 }
 
 @test "watch tells the owner in plain words: a question, a finished session; goals and services stay quiet" {
-  jq -n '{name: "s1", labels: {fraim: "session", repo: "vertelboek"}, state: "live", status: {state: "blocked"}, turn: 1}' > "$HC_FAKE/t-s1.json"
+  jq -n '{name: "s1", labels: {fraim: "session", repo: "vertelboek", sid: "sid-1"}, state: "live", status: {state: "blocked"}, turn: 1}' > "$HC_FAKE/t-s1.json"
   jq -n '{name: "g2", labels: {fraim: "goal"}, state: "live", status: {state: "done"}, turn: 1}' > "$HC_FAKE/t-g2.json"
   jq -n '{name: "watch", labels: {fraim: "service"}, state: "live", status: {state: "blocked"}, turn: 0}' > "$HC_FAKE/t-watch.json"
   mkdir -p "$HOME/fraim/sessions/s1" "$HOME/.claude/projects/-x"
-  echo sid-1 > "$HOME/fraim/sessions/s1/session-id"
   jq -cn '{type: "assistant", message: {content: [{type: "text", text: "Fixed it. The key was sk-ant-api03-abcdefghijklmnopqrstuv"}]}}' > "$HOME/.claude/projects/-x/sid-1.jsonl"
   ev() { jq -cn --arg t "$1" --arg s "$2" --arg m "${3:-}" '{jsonrpc: "2.0", method: "event", params: {type: "status", terminal: $t, data: {status: {state: $s, msg: $m}}}}'; }
   {
