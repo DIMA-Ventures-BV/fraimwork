@@ -98,10 +98,10 @@ Not built: `missed: latest` (catch up on schedule hits while the server was off)
 | `trigger: after: <other>` | Another automation delivered an answer (not SILENT, not failed) | `{{input}}`: its answer | the runner | built |
 | `trigger: queue: events` | New items in the review queue: `events` (goal results, failures, automation answers, priority 1), `urgent` (priority 1) or `all`. Items of the chief of staff never count | `{{input}}`: one line per item | trigger plugin `queue`, polled | built |
 | `trigger: slack: channel-name` | New messages in a Slack channel: a public channel by name, or any channel by id (C...). Every page since the last check, oldest first, without joins and topic changes; a message without text uses its attachments. Needs the secrets service `slack` (a bot token with `channels:history` and `channels:read`, `groups:history` for a private channel, member of the channel). The first check starts from now. Example `production-errors` (a `check.sh`, no Claude: one goal per new error event, at most 3 a run, the rest later, each error again after a day) | `{{input}}`: one line per message | trigger plugin `slack`, polled | built |
+| `trigger: mail: from:@mollie.com,anna@example.com` or `trigger: mail: all` | New mail in the inbox from those senders, or from anyone. Promotions, Social and Forums never count. The first check starts from now. Example `mail-from` | `{{input}}`: one Thread ID per line | trigger plugin `mail`, polled ([channels.md](channels.md)) | built |
 | `trigger: <type>: <value>` | The owner's own plugin in `~/fraim/automations/_triggers/<type>` reports something | its lines | trigger plugin, polled | built |
 | `whatsapp: <regex>` | The owner sends a matching WhatsApp message | `text`, `match.1..n`, `chat` | the WhatsApp channel, same path as `goal:` | step 2 |
 | `webhook: true` | Someone POSTs to `https://<server>/hooks/<name>/<secret>` | `body`, `headers`, `query` | a small receiver behind Tailscale Funnel or Caddy | step 4 |
-| `mail: from *@mollie.com` | A matching mail arrives | `from`, `subject`, `body`, `attachments` | a Gmail history poller, or a mail trigger plugin | step 5 |
 
 The keys for later triggers are reserved: `fraim-auto check` says "not available yet" instead of "unknown setting".
 
@@ -228,7 +228,7 @@ Each step ships on its own and is useful alone.
 | 2 | WhatsApp: `whatsapp:` trigger and the `autos`/`run`/`pause`/`resume` shortcuts. Fold goals into it (goals merged in #16). | 1 day |
 | 3 | Plugins for triggers and outputs (built-in and the owner's own), `files`, `page` and `after` triggers, `webhook` output, `catalog`, `new`, examples, the `building-automations` skill | **built** |
 | 4 | `webhook:` trigger: small receiver container, secret per automation, Tailscale Funnel or Caddy for public URLs | 1 day |
-| 5 | `mail:` trigger: Gmail history poller in the google container; `email:` output as draft by default | 1 day |
+| 5 | `trigger: mail:` built ([channels.md](channels.md)); `email:` output as draft by default | 1 day |
 | 6 | Optional: a read-only "Automations" page (list, last runs, outputs) served on the tailnet | 1 day |
 
 ## Open for Michael

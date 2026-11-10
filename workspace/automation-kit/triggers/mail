@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# usage: mail:from:@example.com,anna@example.com | mail:all
+# description: New mail in the inbox, from the senders you name (an address or @domain, lowercase) or from anyone (all). Promotions, Social and Forums never count. One Thread ID per line is {{input}}; read the mail with the Gmail tools.
+# Trigger plugin. $1 is the filter. It prints one Thread ID per mail chain, or nothing.
+# Only ids reach the prompt, because a sender or a subject is text a stranger chose.
+# The first check only remembers where the mailbox is. $FRAIM_TRIGGER_STATE stays between checks.
+set -uo pipefail
+one='(@[a-z0-9.-]+\.[a-z]{2,}|[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,})'
+valid() { [ "$1" = all ] || [[ "$1" =~ ^from:$one(,$one)*$ ]]; }
+if [ "${1:-}" = --check ]; then
+  valid "${2:-}" && exit 0
+  echo "'${2:-}' must be all, or from: with lowercase addresses or @domains, comma separated (from:@mollie.com,anna@example.com)"; exit 1
+fi
+filter="${1:-}"
+valid "$filter" || { echo "'$filter' is not a mail filter"; exit 1; }
+state="${FRAIM_TRIGGER_STATE:?}"
+
+last="$(cat "$state/last" 2>/dev/null)"
+out="$(fraim-channels events email --after "${last:-0}")" || exit 1
+newest="$(jq -r '.last // 0' <<<"$out")" || { echo "could not read the list of new mail"; exit 1; }
+# First check, or a list that started over: begin from here and replay nothing.
+if [ -z "$last" ] || [ "$last" -gt "$newest" ]; then
+  printf '%s\n' "$newest" > "$state/last"
+  exit 0
+fi
+
+moved="$(jq -r --arg last "$last" '[.events[].seq, ($last | tonumber)] | max' <<<"$out")" || exit 1
+lines="$(jq -r --arg filter "${filter#from:}" '
+  ($filter | split(",")) as $senders
+  | .events
+  | map(select($filter == "all" or ((.from // "") as $from | $from != "" and any($senders[]; . as $s | $from == $s or (($s | startswith("@")) and ($from | endswith($s)))))))
+  | map(.thread) | map(select(test("^[A-Za-z0-9_-]{6,64}$"))) | unique | .[]' <<<"$out")" \
+  || { echo "could not read the list of new mail"; exit 1; }
+
+# FRAIM_TRIGGER_INBOX: a caller that keeps the lines itself gets them before the cursor moves.
+if [ -n "${FRAIM_TRIGGER_INBOX:-}" ] && [ -n "$lines" ]; then
+  printf '%s\n' "$lines" >> "$FRAIM_TRIGGER_INBOX" || exit 1
+fi
+printf '%s\n' "$moved" > "$state/last"
+[ -n "${FRAIM_TRIGGER_INBOX:-}" ] || [ -z "$lines" ] || printf '%s\n' "$lines"

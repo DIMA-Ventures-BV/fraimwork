@@ -5,8 +5,7 @@
 //   fraim-channels list                 every channel and how it is doing
 //   fraim-channels check CHANNEL        exit 1 when a channel that should work does not
 //   fraim-channels seen CHANNEL ID      exit 0 the first time, 10 for a repeat
-//   fraim-channels listen [--once]      run the triggers that were switched on; none by default
-import { execFile } from 'node:child_process'
+//   fraim-channels events CHANNEL [--after N]   what a channel reported; trigger plugins read it
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,7 +30,7 @@ export function runtimeEnv() {
 // target: who an answer goes to, worked out from the conversation and never from an agent.
 // reply:  what the service needs to send one approved text.
 // inbound: the channel reports through POST /events. A new message starts nothing by itself:
-//          trigger names what runs, and without one nobody follows the channel.
+//          an automation opts in with a trigger plugin that reads fraim-channels events.
 export const CHANNELS = [
   {
     id: 'email',
@@ -48,18 +47,6 @@ export const CHANNELS = [
     healthy: (s, now) => !s.signed_in || (Boolean(s.last_check) && now - s.last_check * 1000 < STALE_MS),
     describe: (s) => (s.signed_in ? `signed in, new mail by ${s.mode === 'push' ? 'Google push' : 'a check every 30 seconds'}` : 'not signed in'),
     inbound: true,
-    trigger: (env) => env.FRAIM_MAIL_AUTOMATION || '',
-    // Only the Thread IDs go to the agent. The automation judges the mail and reads it as data.
-    handoff(events, { env, run, log }) {
-      const name = env.FRAIM_MAIL_AUTOMATION
-      if (!fs.existsSync(path.join(env.HOME || '', 'fraim/automations', name, 'automation.md'))) {
-        log(`new mail, but there is no automation ${name} to read it`)
-        return Promise.resolve()
-      }
-      const threads = [...new Set(events.map((e) => e.thread))].filter((t) => /^[\w-]{6,64}$/.test(t || ''))
-      if (!threads.length) return Promise.resolve()
-      return run('fraim-auto', ['run', name, '--input', threads.join(' ')])
-    },
   },
   {
     id: 'whatsapp',
@@ -146,74 +133,6 @@ export function claim(channel, id, dir = stateDir(), now = Date.now()) {
   return true
 }
 
-function readCursor(file) {
-  try {
-    return Number.parseInt(fs.readFileSync(file, 'utf8'), 10) || 0
-  } catch {
-    return 0
-  }
-}
-
-function saveCursor(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(`${file}.tmp`, `${value}\n`)
-  fs.renameSync(`${file}.tmp`, file)
-}
-
-function runner(log) {
-  return (command, args) => new Promise((resolve) => {
-    execFile(command, args, { timeout: 20 * 60 * 1000 }, (err) => {
-      if (err) log(`${command} ${args[0]} failed: ${err.message}`)
-      resolve()
-    })
-  })
-}
-
-// At least once: the cursor moves after the handoff, and claim() drops what comes back.
-async function follow(channel, { env, log, once }) {
-  const file = path.join(stateDir(), `${channel.id}.cursor`)
-  const gapMs = once ? 0 : Number(env.FRAIM_CHANNEL_GAP_MS || 60000)
-  const call = caller(channel, env, 40000)
-  const run = runner(log)
-  let reading = readCursor(file)
-  let pending = []
-  let lastHandoff = 0
-  for (;;) {
-    try {
-      const out = await call('/events', { after: reading, wait: once ? 0 : 25 })
-      const last = Number(out.last) || 0
-      if (reading > last) {
-        reading = 0
-        saveCursor(file, 0)
-        continue
-      }
-      pending.push(...(out.events || []))
-      reading = pending.reduce((top, e) => Math.max(top, Number(e.seq) || 0), reading)
-      if (pending.length && Date.now() - lastHandoff >= gapMs) {
-        const fresh = pending.filter((e) => claim(channel.id, e.id))
-        pending = []
-        lastHandoff = Date.now()
-        if (fresh.length) {
-          const done = channel.handoff(fresh, { env, run, log })
-          if (once) await done
-        }
-        saveCursor(file, reading)
-      }
-      if (once) return 0
-    } catch (err) {
-      log(`${channel.id}: ${err.message}`)
-      if (once) return 1
-      await new Promise((resolve) => setTimeout(resolve, 5000))
-    }
-  }
-}
-
-export async function listen({ once = false, env = runtimeEnv(), log = (line) => process.stderr.write(`fraim-channels: ${line}\n`) } = {}) {
-  const sources = CHANNELS.filter((c) => c.inbound && isOn(c, env) && c.trigger(env))
-  const results = await Promise.all(sources.map((channel) => follow(channel, { env, log, once })))
-  return results.some(Boolean) ? 1 : 0
-}
-
 async function statusOf(channel, env) {
   if (!isOn(channel, env)) return { on: false, ok: true, text: 'off' }
   try {
@@ -228,7 +147,18 @@ export async function main(args) {
   const [command, first, second] = args
   const env = runtimeEnv()
   if (command === 'seen' && first && second) return claim(first, second) ? 0 : DUPLICATE
-  if (command === 'listen') return listen({ once: args.includes('--once'), env })
+  if (command === 'events' && channelById(first)?.inbound) {
+    const channel = channelById(first)
+    try {
+      if (!isOn(channel, env)) throw new Error(`the ${channel.module} module is off`)
+      const after = Number(args[args.indexOf('--after') + 1]) || 0
+      console.log(JSON.stringify(await caller(channel, env, 30000)('/events', { after, wait: 0 })))
+      return 0
+    } catch (err) {
+      console.error(`${first}: ${err.message}`)
+      return 1
+    }
+  }
   if (command === 'list') {
     for (const channel of CHANNELS) {
       const s = await statusOf(channel, env)
@@ -241,6 +171,6 @@ export async function main(args) {
     if (!s.ok) console.error(`${first}: ${s.text}`)
     return s.ok ? 0 : 1
   }
-  console.error('usage: fraim-channels list | check CHANNEL | seen CHANNEL ID | listen [--once]')
+  console.error('usage: fraim-channels list | check CHANNEL | seen CHANNEL ID | events CHANNEL [--after N]')
   return 2
 }

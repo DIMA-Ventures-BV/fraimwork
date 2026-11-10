@@ -34,7 +34,7 @@ Add one entry to `CHANNELS` in `workspace/bin/fraim-channels.mjs`:
 | `target(id, thread, call)` | who an answer goes to |
 | `reply(r)` | the body for `POST /reply` |
 | `status`, `healthy`, `describe` | for `fraim-channels list` and the doctor |
-| `inbound`, `handoff(events, tools)` | optional: the service reports through `POST /events` |
+| `inbound` | optional: the service reports through `POST /events`, and `fraim-channels events` reads it |
 
 The service needs `POST /reply` with the `REPLY_TOKEN`. An inbound one also needs `POST /events {after, wait}`, which answers `{events: [{seq, id, ...}], last}`. Messages must be kept on disk, so a restart loses nothing. The owner's own chat is still WhatsApp only.
 
@@ -46,11 +46,11 @@ The service needs `POST /reply` with the `REPLY_TOKEN`. An inbound one also need
 
 ## New mail
 
-`google/fraim-mail-watch` asks Gmail what changed and writes the id of each new mail to `mail-events.jsonl`. Mail in Promotions, Social and Forums is left out.
+`google/fraim-mail-watch` asks Gmail what changed and writes the id and sender's address of each new mail to `mail-events.jsonl`. Mail in Promotions, Social and Forums is left out.
 
 **A new message starts nothing by itself.** The watcher only records. No agent runs and no Claude usage is spent until a trigger is switched on. The scheduled `mail-requests` automation keeps working as before.
 
-A trigger is a deliberate choice: set `FRAIM_MAIL_AUTOMATION` to the name of an automation and run `fraim-channels listen`. It hands that automation the Thread IDs as `{{input}}`, at most once a minute. Nothing starts `listen` yet.
+An automation opts in with one line, `trigger: mail: from:@mollie.com,anna@example.com` or `trigger: mail: all`. Each check (every 5 minutes by default) costs no Claude usage; Claude runs only when a named sender wrote, once per check, with the Thread IDs as `{{input}}`. Start from the example: `fraim-auto new NAME --from mail-from`. A From address can be faked, so a trigger only decides what starts: the mail stays data, and answering still needs the owner's yes.
 
 The watcher looks every 30 seconds. Google push makes it seconds and needs no public address, because the server pulls the subscription.
 
