@@ -14,5 +14,8 @@
 # Every Sunday evening: propose rule changes from new review feedback; the owner approves them in the queue.
 0 20 * * 0 fraim-brain distill --if-new
 
+# Every morning: one queue card when a default the owner has their own copy of changed.
+0 9 * * * fraim-prompt stale --notify
+
 # Every Monday: tell the owner once when a new fraimwork release is available.
 0 10 * * 1 fraim-version-check --notify
