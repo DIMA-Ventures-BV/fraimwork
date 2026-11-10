@@ -1,0 +1,267 @@
+#!/usr/bin/env node
+// fraim-watch: tells the owner when what the agents are told changes, and can put it back.
+// A web page or mail could trick a background task into rewriting an agent's instructions.
+// This does not block that; it makes sure the owner hears it and can undo it.
+//
+//   fraim-watch loop [SECONDS]   check every SECONDS (default 60); the container runs this
+//   fraim-watch scan             check once
+//   fraim-watch list [N]         the last N changes, newest first
+//   fraim-watch show ID          what one change did
+//   fraim-watch undo [ID]        put back the last batch of changes, or one change (owner only)
+//   fraim-watch status           exit 1 when the watcher has not checked for 5 minutes
+//
+// The container runs it as its own user (uid 1101), so the agents, which run as "claude", can
+// read its history but cannot change it or stop it. It only ever reads their files. A file with
+// the first baseline is not reported. A new agent's job description is not reported: hiring goes
+// through the queue. A rules change the brain made itself (it keeps history/) is not reported.
+// Exit codes: 0 ok, 1 failure, 2 usage.
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const HOME = process.env.FRAIM_WATCH_HOME || process.env.HOME || os.homedir()
+const STORE = process.env.FRAIM_WATCH_STORE || '/var/lib/fraim/watch'
+const STATE = path.join(STORE, 'state.json')
+const EVENTS = path.join(STORE, 'events.jsonl')
+const SNAP = path.join(STORE, 'snap')
+const FILES = path.join(HOME, 'fraim')
+const MAX_BYTES = 256 * 1024
+const UNREADABLE = 'unreadable'
+const STALE_MS = 5 * 60 * 1000
+
+const die = (msg, code = 1) => { process.stderr.write(`${msg}\n`); process.exit(code) }
+const sha = (text) => crypto.createHash('sha256').update(text).digest('hex')
+
+function isDir(p) {
+  try { return fs.lstatSync(p).isDirectory() } catch { return false }
+}
+function names(dir) {
+  if (!isDir(dir)) return []
+  try { return fs.readdirSync(dir).filter((n) => !n.startsWith('.')).sort() } catch { return [] }
+}
+
+// Every watched file, relative to the home folder. Symbolic links are never followed.
+function watched() {
+  const out = ['fraim/brain/rules.md', 'fraim/styles/voice.md', 'fraim/goals/tools']
+  for (const n of names(path.join(FILES, 'prompts'))) if (n.endsWith('.md')) out.push(`fraim/prompts/${n}`)
+  for (const lead of names(path.join(FILES, 'leads'))) {
+    if (!isDir(path.join(FILES, 'leads', lead))) continue
+    out.push(`fraim/leads/${lead}/lead.md`, `fraim/leads/${lead}/tools`)
+    for (const n of names(path.join(FILES, 'leads', lead, 'prompts'))) {
+      if (n.endsWith('.md')) out.push(`fraim/leads/${lead}/prompts/${n}`)
+    }
+  }
+  return out
+}
+
+// The file's text, null when it is not there, UNREADABLE when it cannot be read as a plain file.
+function readWatched(rel) {
+  const full = path.join(HOME, rel)
+  let st
+  try { st = fs.lstatSync(full) } catch { return null }
+  if (!st.isFile() || st.size > MAX_BYTES) return UNREADABLE
+  let fd
+  try {
+    fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+    return fs.readFileSync(fd, 'utf8')
+  } catch { return UNREADABLE } finally { if (fd !== undefined) fs.closeSync(fd) }
+}
+
+function writeAtomic(file, text) {
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, text)
+  fs.renameSync(tmp, file)
+}
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE, 'utf8')) } catch { return null }
+}
+function readEvents() {
+  try {
+    return fs.readFileSync(EVENTS, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  } catch { return [] }
+}
+function keep(text) {
+  const h = sha(text)
+  const f = path.join(SNAP, h)
+  if (!fs.existsSync(f)) writeAtomic(f, text)
+  return h
+}
+const snapshot = (hash) => { try { return fs.readFileSync(path.join(SNAP, hash), 'utf8') } catch { return null } }
+
+function newestBrainHistory() {
+  const n = names(path.join(FILES, 'brain', 'history')).filter((x) => x.startsWith('rules-'))
+  return n.length ? n[n.length - 1] : ''
+}
+
+function label(rel) {
+  let m
+  if (rel === 'fraim/brain/rules.md') return 'your rules for the agents'
+  if (rel === 'fraim/styles/voice.md') return 'how the chief talks to you'
+  if (rel === 'fraim/goals/tools') return 'the tools background tasks may use'
+  if ((m = /^fraim\/prompts\/(.+)\.md$/.exec(rel))) return `the "${m[1]}" instructions for every agent`
+  if ((m = /^fraim\/leads\/([^/]+)\/lead\.md$/.exec(rel))) return `the job description of ${m[1]}`
+  if ((m = /^fraim\/leads\/([^/]+)\/tools$/.exec(rel))) return `the tools ${m[1]} may use`
+  if ((m = /^fraim\/leads\/([^/]+)\/prompts\/(.+)\.md$/.exec(rel))) return `the "${m[2]}" instructions of ${m[1]}`
+  return rel
+}
+
+function counts(before, after) {
+  const a = (before ?? '').split('\n')
+  const b = (after ?? '').split('\n')
+  const left = new Map()
+  for (const l of a) left.set(l, (left.get(l) ?? 0) + 1)
+  let added = 0
+  for (const l of b) {
+    if ((left.get(l) ?? 0) > 0) left.set(l, left.get(l) - 1)
+    else added++
+  }
+  const removed = [...left.values()].reduce((x, y) => x + y, 0)
+  return { added, removed }
+}
+
+function describe(ev) {
+  if (ev.after === null) return `${label(ev.path)} was deleted`
+  if (ev.before === null) return `${label(ev.path)} is new`
+  if (ev.after === UNREADABLE) return `${label(ev.path)} can no longer be read`
+  const c = counts(snapshot(ev.before), snapshot(ev.after))
+  return `${label(ev.path)} changed (${c.added} lines added, ${c.removed} removed)`
+}
+
+function message(events) {
+  const shown = events.slice(0, 5).map((e) => `- ${describe(e)}`)
+  if (events.length > 5) shown.push(`- and ${events.length - 5} more`)
+  return `What your agents are told just changed:\n${shown.join('\n')}\nIf you did not ask for this, answer "undo" and I put it back.`
+}
+
+async function send(text) {
+  const url = process.env.FRAIM_GATEWAY_URL
+  const token = process.env.FRAIM_GATEWAY_TOKEN
+  const owner = process.env.WHATSAPP_OWNER
+  if (!url || !token || !owner || !`,${process.env.FRAIM_MODULES ?? ''},`.includes(',whatsapp,')) return false
+  try {
+    const res = await fetch(`${url}/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: owner, text }),
+      signal: AbortSignal.timeout(20000),
+    })
+    return res.ok
+  } catch { return false }
+}
+
+async function scan() {
+  fs.mkdirSync(SNAP, { recursive: true })
+  const before = loadState()
+  const previous = before?.files ?? {}
+  const current = {}
+  const brain = newestBrainHistory()
+  const history = readEvents()
+  const undone = undoneIds()
+  const changes = []
+  const paths = new Set([...watched(), ...Object.keys(previous)])
+  for (const rel of paths) {
+    const text = readWatched(rel)
+    const hash = text === null ? null : text === UNREADABLE ? UNREADABLE : keep(text)
+    if (hash !== null) current[rel] = hash
+    const was = previous[rel] ?? null
+    if (!before || hash === was) continue
+    const last = history.filter((e) => e.path === rel).pop()
+    if (last && undone.has(last.id) && hash === last.before) continue
+    if (rel === 'fraim/brain/rules.md' && brain !== (before.brain ?? '')) continue
+    if (was === null && /^fraim\/leads\/[^/]+\/lead\.md$/.test(rel)) continue
+    changes.push({ path: rel, before: was, after: hash })
+  }
+  let pending = before?.pending ?? []
+  if (changes.length) {
+    const batch = Date.now()
+    const start = history.length ? history[history.length - 1].id : 0
+    const events = changes.map((c, i) => ({ id: start + i + 1, batch, time: new Date().toISOString(), ...c }))
+    fs.appendFileSync(EVENTS, events.map((e) => `${JSON.stringify(e)}\n`).join(''))
+    pending = [...pending, message(events)]
+  }
+  const unsent = []
+  for (const text of pending) if (!(await send(text))) unsent.push(text)
+  writeAtomic(STATE, JSON.stringify({ files: current, brain, pending: unsent, checked: new Date().toISOString() }))
+  return changes.length
+}
+
+async function loop(seconds) {
+  for (;;) {
+    try { await scan() } catch (err) { process.stderr.write(`fraim-watch: ${err.message}\n`) }
+    await new Promise((r) => setTimeout(r, seconds * 1000))
+  }
+}
+
+function cmdList(n) {
+  const events = readEvents().slice(-n).reverse()
+  if (!events.length) { process.stdout.write('No changes yet.\n'); return }
+  const undone = undoneIds()
+  for (const e of events) process.stdout.write(`${e.id}  ${e.time.slice(0, 16).replace('T', ' ')}  ${describe(e)}${undone.has(e.id) ? '  (undone)' : ''}\n`)
+}
+
+function cmdShow(id) {
+  const ev = readEvents().find((e) => e.id === id) ?? die(`no change ${id}; fraim-watch list shows them`)
+  process.stdout.write(`${describe(ev)}\nFile: ~/${ev.path}\nWhen: ${ev.time}\n`)
+  const a = ev.before && ev.before !== UNREADABLE ? snapshot(ev.before) : ''
+  const b = ev.after && ev.after !== UNREADABLE ? snapshot(ev.after) : ''
+  const was = new Set((a ?? '').split('\n'))
+  const now = new Set((b ?? '').split('\n'))
+  for (const l of was) if (!now.has(l) && l) process.stdout.write(`- ${l}\n`)
+  for (const l of now) if (!was.has(l) && l) process.stdout.write(`+ ${l}\n`)
+}
+
+const UNDONE = path.join(HOME, '.local/state/fraim/watch-undone')
+function undoneIds() {
+  try { return new Set(fs.readFileSync(UNDONE, 'utf8').split('\n').filter(Boolean).map(Number)) } catch { return new Set() }
+}
+
+function restore(ev) {
+  const full = path.join(HOME, ev.path)
+  if (ev.before === UNREADABLE) return `${label(ev.path)} cannot be put back: the earlier version could not be read`
+  if (ev.before === null) { fs.rmSync(full, { force: true }); return `${label(ev.path)} removed again` }
+  const text = snapshot(ev.before)
+  if (text === null) return `${label(ev.path)} cannot be put back: the earlier version is gone`
+  fs.mkdirSync(path.dirname(full), { recursive: true })
+  fs.rmSync(full, { force: true })
+  fs.writeFileSync(full, text)
+  return `${label(ev.path)} put back`
+}
+
+function cmdUndo(id) {
+  if (process.env.FRAIM_HEADLESS === '1') die('only the owner can undo this; this run has no owner watching')
+  const events = readEvents()
+  if (!events.length) die('there is nothing to undo')
+  const undone = undoneIds()
+  const open = events.filter((e) => !undone.has(e.id))
+  const chosen = id ? open.filter((e) => e.id === id) : open.filter((e) => e.batch === open[open.length - 1]?.batch)
+  if (!chosen.length) die('there is nothing to undo')
+  fs.mkdirSync(path.dirname(UNDONE), { recursive: true })
+  for (const e of chosen.reverse()) {
+    process.stdout.write(`${restore(e)}\n`)
+    fs.appendFileSync(UNDONE, `${e.id}\n`)
+  }
+}
+
+function cmdStatus() {
+  let age = Infinity
+  try { age = Date.now() - fs.statSync(STATE).mtimeMs } catch {}
+  if (age > STALE_MS) die('the watcher has not checked recently')
+  process.stdout.write('ok\n')
+}
+
+const number = (v, what) => {
+  if (!/^[0-9]+$/.test(v ?? '')) die(`${what} must be a number`, 2)
+  return Number(v)
+}
+
+const [cmd, arg] = process.argv.slice(2)
+switch (cmd) {
+  case 'scan': process.stdout.write(`${await scan()} changed\n`); break
+  case 'loop': await loop(arg ? number(arg, 'SECONDS') : 60); break
+  case 'list': cmdList(arg ? number(arg, 'N') : 10); break
+  case 'show': cmdShow(number(arg, 'ID')); break
+  case 'undo': cmdUndo(arg ? number(arg, 'ID') : 0); break
+  case 'status': cmdStatus(); break
+  default: die('usage: fraim-watch scan|loop [SECONDS]|list [N]|show ID|undo [ID]|status', 2)
+}

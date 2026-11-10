@@ -142,6 +142,18 @@ case "$role" in
       register_main_mcp whatsapp "node /opt/fraim/channel/whatsapp-channel.mjs"
     fi
 
+    # Tells the owner when what the agents are told changes (docs/prompts.md). Its own user
+    # (uid 1101), so the agents can read its history but not change it or stop it.
+    install -d -o 1101 -g 1101 -m 0755 /var/lib/fraim/watch
+    chown -R 1101:1101 /var/lib/fraim/watch
+    (
+      while :; do
+        setpriv --reuid=1101 --regid=1101 --clear-groups \
+          env HOME=/var/lib/fraim/watch FRAIM_WATCH_HOME="$home" fraim-watch loop >>/var/lib/fraim/watch/log 2>&1 || true
+        sleep 10
+      done
+    ) &
+
     # herdr-core holds every Claude session (main, goals, coding sessions), the queue page
     # and the watcher; the supervisor starts them and restarts what stops (docs/sessions.md).
     as_claude "mkdir -p ~/.local/state/fraim && setsid fraim-herdr supervise </dev/null >>~/.local/state/fraim/herdr.log 2>&1 &"

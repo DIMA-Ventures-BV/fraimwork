@@ -87,6 +87,7 @@ services:
       - ./server-plugin:/opt/fraim/server-plugin:ro
       - ./docs:/etc/fraim/docs:ro
       - ssh-host-keys:/etc/ssh/keys
+      - watch-store:/var/lib/fraim/watch
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
     networks: [fraim, wa, sync, secrets]
 
@@ -232,6 +233,7 @@ volumes:
   inbox:
   pc:
   ssh-host-keys:
+  watch-store:
   browser-profile:
   whatsapp-auth:
   syncthing-config:
