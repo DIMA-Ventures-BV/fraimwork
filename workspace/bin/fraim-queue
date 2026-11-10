@@ -2086,6 +2086,12 @@ a { color:var(--accent); }
 .c .b { color:var(--soft); font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .ask { border:1px solid color-mix(in srgb, var(--yellow) 50%, var(--line)); border-radius:8px; padding:9px 11px; margin-top:5px; font-size:13.5px; }
 .ask.closed { border-color:var(--line); color:var(--soft); }
+.foryou { font-size:11px; font-weight:600; color:var(--yellow); margin-bottom:3px; }
+.c.side { grid-template-columns:22px minmax(0,1fr); gap:8px; margin-bottom:10px; }
+.c.side .av { width:22px; height:22px; font-size:9px; }
+.c.side .n { font-weight:400; font-size:12px; color:var(--muted); }
+.c.side .n em { font-style:normal; font-weight:500; }
+.c.side .b { color:var(--muted); font-size:13px; }
 .ask p { margin:6px 0 0; color:var(--muted); font-size:12.5px; }
 .acts { display:flex; gap:6px; margin-top:9px; }
 .btn { height:30px; padding:0 14px; border-radius:6px; border:1px solid var(--line2); background:var(--hover); cursor:pointer; font-weight:500; font-size:13px; }
@@ -2255,10 +2261,13 @@ function drawMiddle(force) {
   if (force) box.scrollTop = top; else box.scrollTop = 0
 }
 function chatHtml(c) {
-  var head = '<div class="n">' + esc(c.from) + (c.to ? '<small>to ' + esc(c.to) + '</small>' : '') + '<small>' + when(c.time, true) + '</small></div>'
-  if (!c.item) return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="b">' + esc(c.text) + '</div></div></div>'
-  var i = c.item, open = i.state === 'open'
-  return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask' + (open ? '' : ' closed') + '">' + esc(i.ask || i.title) + (i.need ? '<p>' + esc(i.need) + '</p>' : '') + (i.if_yes ? '<p>If yes: ' + esc(i.if_yes) + '</p>' : '') +
+  var time = when(c.time, true)
+  if (c.from === 'You') return '<div class="row me"><div class="bub">' + esc(c.text) + '<small>' + time + '</small></div></div>'
+  var i = c.item, open = i && i.state === 'open'
+  if (!i && c.to !== 'You') return '<div class="c side">' + av(c.from) + '<div><div class="n"><em>' + esc(c.from) + '</em> to <em>' + esc(c.to || 'the team') + '</em><small>' + time + '</small></div><div class="b">' + esc(c.text) + '</div></div></div>'
+  var head = '<div class="n">' + esc(c.from) + '<small>' + time + '</small></div>'
+  if (!i) return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask"><div class="foryou">For you</div>' + esc(c.text) + '</div></div></div>'
+  return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask' + (open ? '' : ' closed') + '">' + (open ? '<div class="foryou">For you</div>' : '') + esc(i.ask || i.title) + (i.need ? '<p>' + esc(i.need) + '</p>' : '') + (i.if_yes ? '<p>If yes: ' + esc(i.if_yes) + '</p>' : '') +
     (open ? '<div class="acts"><button class="btn p" data-v="approved" data-item="' + esc(i.id) + '">Yes</button><button class="btn" data-v="dismissed" data-item="' + esc(i.id) + '">No</button></div>' : '') + '</div></div></div>'
 }
 function drawAgents() {
@@ -2267,7 +2276,7 @@ function drawAgents() {
   var same = sideKey && JSON.parse(sideKey)[0] === t.id
   sideKey = key
   var waiting = t.chat.some(function (c) { return c.item && c.item.state === 'open' })
-  var status = waiting ? 'Waiting for your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it' : t.chat.length ? 'Nobody is working on it now' : 'No agent has picked this up yet'
+  var status = waiting ? 'Needs your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it. Nothing needed from you.' : t.chat.length ? 'Nothing needed from you.' : 'No agent has picked this up yet'
   var old = $('#chat'), atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 30
   $('#agents').innerHTML = '<div class="ah"><b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') +
     (t.working.length ? '<div class="typing">' + esc(t.working[0]) + ' is working on it</div>' : '') + '</div></div>'
