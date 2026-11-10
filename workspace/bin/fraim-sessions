@@ -14,7 +14,7 @@
 #   fraim-sessions stop ID                close it (send reopens the same conversation)
 #
 # Each session keeps ~/fraim/sessions/<id>/: repo, cwd, session-id, task.
-# At most FRAIM_SESSIONS_MAX run at once (default: from the server's memory, 4 on 4 GB).
+# A new one opens when the server has memory for it (fraim-capacity); FRAIM_SESSIONS_MAX caps the count.
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
@@ -77,21 +77,9 @@ launch() {
   [ "$state" = live ] || die "session $id stopped right after it started; see: fraim-sessions read $id"
 }
 
-# Each Claude takes 300 to 500 MB. Keep about 1.5 GB for main, the browser and WhatsApp, and
-# allow one session per 500 MB of the rest (4 on 4 GB, about 12 on 8 GB), unless set.
-default_max() {
-  local mb
-  mb="$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)"
-  [ -n "$mb" ] || { echo 4; return; }
-  mb=$(( (mb - 1500) / 500 ))
-  [ "$mb" -ge 2 ] || mb=2
-  [ "$mb" -le 20 ] || mb=20
-  echo "$mb"
-}
-
 check_room() {
-  local max="${FRAIM_SESSIONS_MAX:-$(default_max)}"
-  [ "$(live_count)" -lt "$max" ] || die "$max sessions are open, the most this server runs at once; stop one first (fraim-sessions list)"
+  local max="${FRAIM_SESSIONS_MAX:-}"
+  [ -z "$max" ] || [ "$(live_count)" -lt "$max" ] || die "$max sessions are open, the most this server runs at once; stop one first (fraim-sessions list)"
   # Memory, not only the count: goals, leads and the chief run Claude too (fraim-capacity).
   if command -v fraim-capacity >/dev/null && ! fraim-capacity admit \
     && ! { fraim-capacity reclaim && fraim-capacity admit; }; then
