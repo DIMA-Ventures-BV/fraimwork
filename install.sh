@@ -56,7 +56,7 @@ start_space() {
   ENV_FILE=".env.space-$name"
   [ -f "$ENV_FILE" ] || die "no space $name ($ENV_FILE is missing); create it with: fraim space add $name"
   chmod 600 "$ENV_FILE"
-  for key in ACCESS_MODE BIND_IP PRIVATE_BIND_IP FRAIM_HOSTNAME FRAIM_VERSION FRAIM_COMMIT FRAIM_RELEASES_REPO; do
+  for key in ACCESS_MODE BIND_IP PRIVATE_BIND_IP FRAIM_HOSTNAME FRAIM_VERSION FRAIM_COMMIT FRAIM_RELEASES_REPO VOICE; do
     local value
     value="$(ENV_FILE=.env get_env "$key")"
     [ -z "$value" ] || set_env "$key" "$value"
@@ -178,6 +178,12 @@ mode="$(get_env ACCESS_MODE)"
 case "$mode" in tailscale|public) ;; *) die "ACCESS_MODE must be tailscale or public" ;; esac
 if has_module whatsapp && [ -z "$(get_env WHATSAPP_OWNER)" ]; then
   die "the whatsapp module needs WHATSAPP_OWNER in .env"
+fi
+
+# Voice messages need the speech engine (622 MB). Every space shares one image, so one space
+# with WhatsApp is enough to keep it. An owner's own VOICE=on or off in .env stays.
+if [ -z "$(get_env VOICE)" ]; then
+  if grep -qs '^COMPOSE_PROFILES=.*whatsapp' .env .env.space-*; then set_env VOICE on; else set_env VOICE off; fi
 fi
 
 say "Generating secrets"

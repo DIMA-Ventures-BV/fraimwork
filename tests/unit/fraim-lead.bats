@@ -332,10 +332,10 @@ FAKE
   ls "$FRAIM_AUTOMATIONS_DIR"/chief/runs/*/trigger.json >/dev/null
 }
 
-@test "ask without a chief says how to make one" {
+@test "ask without a contact says what to do instead" {
   run fraim-lead ask -- "hello"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no chief of staff"* ]]
+  [[ "$output" == *"no default contact"* ]]
 }
 
 @test "a queue event wakes the chief; it stays quiet unless the owner must act" {
@@ -540,7 +540,7 @@ FAKE
   grep -q 'from automation digest: The automation digest failed' "$FRAIM_LEADS_DIR/engineer/inbox.md"
   run fraim-queue list --json
   [[ "$output" == *'"lead":"engineer"'* ]]
-  [[ "$output" == *"the engineer is already fixing it"* ]]
+  [[ "$output" == *"already being fixed"* ]]
   [[ "$output" != *'"on_approve":"The automation digest'* ]]
   rm -f "$FRAIM_LEADS_DIR/engineer/inbox.md"
   FAKE_FAIL=1 FAKE_FAIL_TEXT="boom" run fraim-auto run engineer

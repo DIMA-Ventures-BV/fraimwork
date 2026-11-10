@@ -138,7 +138,7 @@ make_chief() {
   FAKE_FAIL=1 run fraim-notify "Lead web failed: exit 1."
   [ "$status" -eq 0 ]
   grep -q 'Lead web failed: exit 1.' "$SENT"
-  grep -q 'the chief could not write it' "$FRAIM_RELAY_DIR/said.md"
+  grep -q 'nobody could write it' "$FRAIM_RELAY_DIR/said.md"
   touch "$FRAIM_LEADS_DIR/chief/paused"
   rm -f "$SENT" "$CLAUDE_CALLS"
   run fraim-notify "Goal g1 done."

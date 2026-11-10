@@ -77,6 +77,7 @@ Each source is one small plugin that prints plain text. Built-in ones are in `/e
 - **Page:** `fraim queue` on the laptop opens it. Keys: `j`/`k` move, `a` approve, `r` reject, `d` dismiss, `n` write a note, `v` dictate a note, `1` `2` `3` priority. The page is on the tailnet only and needs the link with the token once (the browser then keeps a cookie). `fraim queue keep` makes it always available on a Mac: a launchd agent keeps an SSH tunnel open on `http://localhost:3109` through restarts of the Mac and the server, so a bookmark always works; `fraim queue keep --off` removes it.
 - **WhatsApp:** talk in your own words ("what's waiting for me?", "the export looks good", "no, use the brand green", "drop the blog idea"). The server's Claude finds the item and records your decision, with your words as the note. There are no keywords.
 - **Laptop:** `fraim queue list`, `fraim queue approve q3`, `fraim queue reject q3 "why"`.
+- **Your own screen:** a page or a separate app on the documented API; see [api.md](api.md).
 
 ## Goals feed the queue
 
@@ -106,6 +107,22 @@ Each run, a lead reads its brief, its own notes (`state.md`), the brain rules an
 A lead cannot send mail, post, pay, merge or deploy. Its tools are narrow: read files, the queue, goals, `fraim-api`, and read-only `git` and `gh`. Add more in `~/fraim/leads/<name>/tools`, one per line.
 
 You get one WhatsApp message per run, and none when the lead found nothing.
+
+## Agents and capabilities
+
+The engine knows agents, capabilities and a default contact. The chief and the engineer are the defaults a fresh install gets. Only you can change any of this, with `fraim-authority`:
+
+| Setting | Means | Default |
+|---|---|---|
+| `set contact NAME\|none` | The agent that writes your WhatsApp notices and takes your work (`fraim-lead ask`) | the chief |
+| `set fixer NAME\|none` | The agent that receives failed automations | the engineer |
+| `set chat NAME\|none` | The agent that answers the chat in the app | the contact |
+| `set-cap NAME queue own\|all`, `rules own\|all` | Sees its own or everyone's queue and rules | `all` for the chief, otherwise `own` |
+| `set-cap NAME output direct\|summary` | Its answer goes to you word for word, or as "checked in" | `direct` for the chief |
+| `set-cap NAME builds_off 1`, `source_tools 1` | What it makes starts switched off; it may use tools named by built-in sources | engineer; chief |
+| `set-cap NAME template X` | Uses the `X-run` and `tools-X` prompts | `chief`, `engineer`, otherwise `lead` |
+
+`fraim-lead rename OLD NEW` renames an agent and keeps all of this. With no contact, notices go out as they are at the normal gap, WhatsApp answers by itself, and the app chat says nobody is set up. A deleted agent's leftover automations stop without an alert.
 
 ## The chief of staff
 
@@ -189,7 +206,7 @@ you: "send me the Meta ad spend every Monday"
 
 Guards:
 
-- **New things start off.** While the engineer runs, `fraim-auto new` and `fraim-lead new` always make it switched off (`FRAIM_LEAD_ROLE=engineer`), even when it forgets `--off`.
+- **New things start off.** While an agent with `builds_off` runs, `fraim-auto new` and `fraim-lead new` always make it switched off (`FRAIM_BUILDS_OFF=1`), even when it forgets `--off`.
 - **Only you switch on.** Approving a `--switch-on NAME` item runs `fraim-auto on NAME`: it removes `enabled: false`, resumes a paused lead and updates the scheduler. A headless run (goal, lead, automation) cannot run `fraim-auto on`, and the engineer's tools do not include `resume`.
 - **No loops.** A failure of the engineer's own runs goes to the queue as before, not back to the engineer.
 - It cannot send mail or messages, post, pay, merge or deploy.

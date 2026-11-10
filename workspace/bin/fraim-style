@@ -10,6 +10,7 @@
 #   fraim-style set PLACE STYLE       change one place (PLACE all changes every place)
 #   fraim-style list                  the styles there are
 #   fraim-style show STYLE            the rules of one style
+#   fraim-style own STYLE             copy a shipped style to the owner's file and print its path
 #   fraim-style prompt PLACE          the block a prompt gets for that place
 #   fraim-style voice                 the owner's own rules for how the chief talks to them
 #   fraim-style voice add RULE        add one ("Talk English to me", "Call me Michael")
@@ -132,6 +133,16 @@ case "$cmd" in
     [ $# -eq 1 ] || usage "fraim-style show STYLE"
     style_exists "$1" || { printf 'no style "%s"\n' "$1" >&2; exit 1; }
     style_text "$1" ;;
+  own)
+    [ $# -eq 1 ] || usage "fraim-style own STYLE"
+    [ "${FRAIM_HEADLESS:-}" != 1 ] || { echo "only the owner changes styles; this run has no owner watching" >&2; exit 1; }
+    case "$1" in adhd|detailed) ;; *) printf 'no shipped style "%s" to copy\n' "$1" >&2; exit 1 ;; esac
+    if [ ! -f "$dir/$1.md" ]; then
+      mkdir -p "$dir/.base"
+      fraim-prompt default "style-$1" > "$dir/.base/$1.md"
+      builtin_style "$1" > "$dir/$1.md"
+    fi
+    printf '%s\n' "$dir/$1.md" ;;
   prompt)
     [ $# -eq 1 ] || usage "fraim-style prompt whatsapp|queue|default"
     place="$1"; valid_place "$place" || place=default
@@ -141,5 +152,5 @@ case "$cmd" in
     plain_words
     voice_block ;;
   voice) cmd_voice "$@" ;;
-  *) usage "fraim-style [set PLACE STYLE | list | show STYLE | prompt PLACE | voice [add RULE | remove N | clear]]" ;;
+  *) usage "fraim-style [set PLACE STYLE | list | show STYLE | own STYLE | prompt PLACE | voice [add RULE | remove N | clear]]" ;;
 esac

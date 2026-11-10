@@ -227,7 +227,7 @@ allow=[\"447700900123\",\"12025550123\"]"'
   run "$FRAIM" tailscale policy --email a@example.org --email-2 b@example.org
   [ "$status" -eq 0 ]
   [[ "$output" == *'"a@example.org", "b@example.org"'* ]]
-  [[ "$output" != *"michael@example.com"* ]]
+  [[ "$output" != *"owner@example.com"* ]]
 }
 
 @test "tailscale policy without email exits 2" {

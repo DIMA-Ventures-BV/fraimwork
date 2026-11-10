@@ -3,8 +3,11 @@
 #   --json    machine-readable output
 #   --notify  send failures to the owner on WhatsApp
 set -u
+# Exported, because a manifest's check runs in its own shell.
+set -a
 # shellcheck source=/dev/null
-. /etc/fraim/runtime.env 2>/dev/null || true
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+set +a
 
 json=0 notify=0
 for arg in "$@"; do
@@ -19,6 +22,47 @@ check() {
 }
 has_module() { case ",${FRAIM_MODULES:-}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 logged_in() { [ -s "$HOME/.claude/.credentials.json" ] || [ -s "$HOME/.config/fraim/claude-token" ]; }
+export -f logged_in
+warn() { echo "fraim-doctor: $*" >&2; }
+
+# A build without a version number (dev, a bare commit) passes.
+version_at_least() {
+  local min="${1#v}"
+  [[ "${FRAIM_VERSION:-dev}" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+) ]] || return 0
+  [ "$(printf '%s\n%s\n' "$min" "${BASH_REMATCH[1]}" | sort -V | head -1)" = "$min" ]
+}
+
+# Reads one modules/NAME.manifest and queues the checks of a module that is on. Queued, not
+# run here: a check that reads stdin would swallow the rest of the file.
+module_names=() module_commands=()
+load_manifest() {
+  local line key value id="" profile="" min="" entry
+  local entries=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    key="${line%%:*}"
+    value="${line#*:}"
+    value="${value# }"
+    case "$key" in
+      id) id="$value" ;;
+      profile) profile="$value" ;;
+      min_fraim_version) min="$value" ;;
+      check) entries+=("$value") ;;
+    esac
+  done < "$1"
+  if [ -z "$id" ] || [ -z "$profile" ]; then warn "skipping $1: it needs id and profile"; return; fi
+  has_module "$profile" || return 0
+  if [ -n "$min" ] && ! version_at_least "$min"; then
+    warn "skipping module $id: it needs fraimwork $min, this is ${FRAIM_VERSION:-dev}"
+    return
+  fi
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    case "$entry" in
+      *' '*) module_names+=("${entry%% *}"); module_commands+=("${entry#* }") ;;
+      *) warn "skipping check '$entry' of module $id: it has no command" ;;
+    esac
+  done
+}
 
 check "claude-login" logged_in
 # claude setup-token tokens last one year; warn a month before.
@@ -36,10 +80,9 @@ check "sessions-service" fraim-herdr alive
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "queue-page" curl -fsS --max-time 5 http://127.0.0.1:3109/health
 [ "${FRAIM_ROLE:-workspace}" = scheduler ] || check "instructions-watch" fraim-watch status
 # An automation that failed or was blocked on its last run, or was paused after failures.
-# State of deleted automations (and of old-style jobs) is removed.
+# State of deleted automations is removed.
 jobs_ok() {
   local d name failed=0
-  rm -rf "$HOME/.local/state/fraim/jobs"
   for d in "$HOME"/.local/state/fraim/automations/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
@@ -53,22 +96,15 @@ check "jobs-ok" jobs_ok
 # The config layer loads in the background at start; "pending" (still running) counts as ok.
 plugins_ok() { local s="$HOME/.local/state/fraim/config-init.status"; [ ! -f "$s" ] || ! grep -q '^failed' "$s"; }
 command -v fraim-config >/dev/null && check "plugins-ok" plugins_ok
-has_module whatsapp && check "whatsapp-connected" sh -c "fraim-gateway GET /status | jq -e .connected"
-# Connected is not enough: Claude must be listening, or messages only wait in the gateway.
-# Claude restarting takes a moment, so a missing listener gets a few tries.
-reaches_claude() {
-  logged_in || return 0
-  local _
-  for _ in 1 2 3; do
-    fraim-gateway GET /status | jq -e '.listeners > 0' && return 0
-    sleep "${FRAIM_DOCTOR_RETRY:-10}"
-  done
-  return 1
-}
-has_module whatsapp && check "whatsapp-reaches-claude" reaches_claude
-has_module google && check "mail-watch" fraim-channels check email
-has_module browser && check "server-browser" curl -fsS "${BROWSER_CDP_URL}/json/version"
-has_module sync && check "syncthing" curl -fsS http://syncthing:8384/rest/noauth/health
+
+modules_dir="${FRAIM_MODULES_DIR:-/etc/fraim/modules}"
+manifests=("$modules_dir"/*.manifest)
+if [ -f "${manifests[0]}" ]; then
+  for manifest in "${manifests[@]}"; do load_manifest "$manifest"; done
+elif [ -n "${FRAIM_MODULES:-}" ]; then
+  warn "no module manifests in $modules_dir, so no module is checked"
+fi
+for i in "${!module_names[@]}"; do check "${module_names[$i]}" bash -c "${module_commands[$i]}"; done
 
 if [ "$json" = 1 ]; then
   out='[]'

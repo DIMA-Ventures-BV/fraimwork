@@ -58,7 +58,8 @@ Use public mode only when the user cannot use Tailscale (for example a work lapt
 
 When the user picks "Not now" for WhatsApp, say once: "Without WhatsApp your server cannot warn you by itself, and results of scheduled jobs wait on the server until you ask me what they said. Once a week, ask me 'is my server ok?' and I check it for you." Put the same lines in the guide.
 
-Modules: `browser` and `scheduler` always; `whatsapp` when chosen; `sync` on a server.
+Modules: `scheduler` always; `whatsapp` when chosen; `sync` on a server.
+The server browser is off by default because it uses about 1.5 GB of memory. When a service needs a real browser login, switch it on by running `$F space policy main --modules <the current list>,browser`.
 Then follow **Path A** (Mac trial) or **Path B** (server).
 
 ## Path A: trial on this Mac
@@ -142,7 +143,7 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
 
 ## Workspace (macOS, no user input)
 
-Gives the user a ready cmux window: their server's Claude on the left, a Dock with server status and the server browser on the right.
+Gives the user a ready cmux window: their server's Claude on the left, a Dock with server status (and the server browser, when it is on) on the right.
 cmux is installed unmodified; `fraim-desktop` never changes the user's own cmux settings, only Dock controls whose id starts with `fraim-`.
 
 1. Run `<checkout>/bin/fraim-desktop install`. Exit 3: pass the HUMAN STEP on in plain words, wait, run it again. Exit 1 naming `dock.json is not plain JSON`: ask the user before you touch that file.
@@ -154,7 +155,7 @@ Skip this stage on Linux and Windows. Run it again after a move to a new server,
 ## Finish
 
 Report, in this order:
-1. One line per part, in plain words: Claude (`claude-login`), browser (`server-browser`), scheduler (its `services[]` status: healthy), WhatsApp, sync, config. Each says works or what is missing.
+1. One line per part that is on, in plain words: Claude (`claude-login`), browser (`server-browser`, only when switched on), scheduler (its `services[]` status: healthy), WhatsApp, sync, config. Each says works or what is missing.
 2. How the user reaches the server from now on: WhatsApp the bot, or ask you ("ask my server to ...", which uses `$F ask`).
 3. The one next thing worth doing, for example "Send the bot 'what can you do?'".
 4. The one-page guide. Server: write `~/fraim/fraim-guide.md` on the server (`$F exec -- sh -c 'cat > ~/fraim/fraim-guide.md'`, text on stdin); with sync it also appears on the laptop.
@@ -188,4 +189,4 @@ Report, in this order:
 4. Run `claude setup-token` and approve in the browser.
 5. Enter the WhatsApp pairing code in WhatsApp Business.
 6. Install and open the Syncthing app (sync only; `fraim sync pair` does the pairing).
-7. Website logins and 2FA in the server browser, only when a job needs a site.
+7. Website logins and 2FA in the server browser, only when a job needs a site (switch the browser on first).

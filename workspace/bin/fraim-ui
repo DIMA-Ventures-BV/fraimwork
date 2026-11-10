@@ -9,6 +9,7 @@
 #   fraim-ui check [NAME]         name the mistakes in the owner's pages
 #   fraim-ui diff NAME            the owner's page against the default
 #   fraim-ui reset NAME           back to the default (the owner's file goes to .history)
+#   fraim-ui restore NAME         put back the newest copy reset kept in .history
 #
 # Pages: inbox (/), team (/team), settings (/settings), and the owner's own at /p/NAME.
 # Adding ?builtin=1 to the first three always shows the default. Only the owner changes pages: a run nobody watches may not.
@@ -35,6 +36,14 @@ problems() {
   [ -s "$f" ] || { echo "$f: the file is empty, so the default is used"; return; }
   grep -qi '<html' "$f" || echo "$f: there is no <html> in it, so the page will not load as a page"
   grep -qi '</html>' "$f" || echo "$f: it stops before </html>, so part of the page is missing"
+}
+# The base goes along, so a page brought back later still knows which default it came from.
+archive() {
+  local stamp
+  stamp="$(date +%Y%m%dT%H%M%S)"
+  mkdir -p "$owner/.history/.base"
+  mv "$owner/$1.html" "$owner/.history/$1.$stamp.html"
+  [ ! -f "$owner/.base/$1.html" ] || mv "$owner/.base/$1.html" "$owner/.history/.base/$1.$stamp.html"
 }
 
 cmd="${1:-}"
@@ -107,10 +116,29 @@ case "$cmd" in
     need_name "$name"
     owner_only
     [ -f "$owner/$name.html" ] || { echo "$name already uses the default"; exit 0; }
-    mkdir -p "$owner/.history"
-    mv "$owner/$name.html" "$owner/.history/$name.$(date +%Y%m%dT%H%M%S).html"
-    rm -f "$owner/.base/$name.html"
+    archive "$name"
     echo "$name is back to the default; the old page is in $owner/.history"
     ;;
-  *) usage "list | path NAME | own NAME | new NAME | check [NAME] | diff NAME | reset NAME" ;;
+  restore)
+    need_name "$name"
+    owner_only
+    newest=""
+    for f in "$owner/.history/$name".*.html; do
+      if [ -f "$f" ]; then newest="$f"; fi
+    done
+    [ -n "$newest" ] || die "no earlier copy of $name to put back"
+    if [ -f "$owner/$name.html" ] && cmp -s "$newest" "$owner/$name.html"; then echo "$name already is that copy"; exit 0; fi
+    file="${newest##*/}"
+    work="$(mktemp -d "$owner/.restore.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    cp "$newest" "$work/page"
+    [ ! -f "$owner/.history/.base/$file" ] || cp "$owner/.history/.base/$file" "$work/base"
+    [ ! -f "$owner/$name.html" ] || archive "$name"
+    mkdir -p "$owner/.base"
+    rm -f "$owner/.base/$name.html"
+    [ ! -f "$work/base" ] || mv "$work/base" "$owner/.base/$name.html"
+    mv "$work/page" "$owner/$name.html"
+    echo "$name is back to your copy; the one it replaced is in $owner/.history"
+    ;;
+  *) usage "list | path NAME | own NAME | new NAME | check [NAME] | diff NAME | reset NAME | restore NAME" ;;
 esac

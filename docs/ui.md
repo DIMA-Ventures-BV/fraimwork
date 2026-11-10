@@ -27,6 +27,17 @@ The chief runs these.
 | `fraim-ui check [NAME]` | Name the mistakes in your pages |
 | `fraim-ui diff NAME` | Your page against the default |
 | `fraim-ui reset NAME` | Back to the default; the old page goes to `.history/` |
+| `fraim-ui restore NAME` | Put back the newest copy `reset` kept |
+
+## A separate app
+
+A page can also be an app of its own, on another address. It talks to your server through the API in [api.md](api.md):
+
+1. Ask Claude for a token with the address of your app: `fraim-queue token new --name myapp --scope read --origin https://app.example.com`. Use `write` or `decide` only if the app must change things.
+2. The app sends `Authorization: Bearer TOKEN` to `/api/v1/...`. Only addresses on a token may call from a browser.
+3. The app listens on `/api/v1/events` instead of polling.
+
+A page in `/p/NAME` needs no token: it uses the page's cookie on the same routes. Send `X-Fraim-Queue: 1` with every `POST`.
 
 ## If a page breaks
 

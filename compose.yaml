@@ -26,11 +26,13 @@ x-defaults: &defaults
     options: { max-size: "10m", max-file: "3" }
 
 x-workspace-env: &workspace-env
-  TZ: ${TZ:-Europe/Amsterdam}
+  TZ: ${TZ:-UTC}
   FRAIM_MODULES: ${COMPOSE_PROFILES:-}
   FRAIM_HOSTNAME: ${FRAIM_HOSTNAME:-fraim}
   FRAIM_GATEWAY_URL: http://whatsapp:8080
   FRAIM_GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+  FRAIM_CHANNEL_URL: ${CHANNEL_URL:-}
+  FRAIM_CHANNEL_TOKEN: ${CHANNEL_TOKEN:-}
   FRAIM_REPLY_TOKEN: ${REPLY_TOKEN:-}
   WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
   BROWSER_CDP_URL: http://${BROWSER_IP:-172.30.0.10}:9223
@@ -59,11 +61,15 @@ x-workspace-volumes: &workspace-volumes
   - ./bin/fraim-config:/usr/local/bin/fraim-config:ro
   - ./config/claude-template:/opt/fraim/claude-template:ro
   - ./server-plugin:/opt/fraim/server-plugin:ro
+  - ./modules:/etc/fraim/modules:ro
 
 services:
   workspace:
     <<: *defaults
-    build: ./workspace
+    build:
+      context: ./workspace
+      args:
+        VOICE: ${VOICE:-on}
     image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     hostname: fraim
     environment: *workspace-env
@@ -87,6 +93,7 @@ services:
       - ./config/claude-template:/opt/fraim/claude-template:ro
       - ./server-plugin:/opt/fraim/server-plugin:ro
       - ./docs:/etc/fraim/docs:ro
+      - ./modules:/etc/fraim/modules:ro
       - ssh-host-keys:/etc/ssh/keys
       - watch-store:/var/lib/fraim/watch
       - ./config/authorized_keys:/etc/fraim/authorized_keys:ro
@@ -116,7 +123,7 @@ services:
     profiles: [browser]
     environment:
       VNC_PASSWORD: ${VNC_PASSWORD:-}
-      TZ: ${TZ:-Europe/Amsterdam}
+      TZ: ${TZ:-UTC}
     shm_size: 1gb
     # A runaway tab kills only Chromium (it restarts on its own), not Claude's workspace.
     mem_limit: 1536m
@@ -140,7 +147,7 @@ services:
       WHATSAPP_ALLOW: ${WHATSAPP_ALLOW:-}
       WHATSAPP_CONTACTS: ${WHATSAPP_CONTACTS:-}
       REPLY_TOKEN: ${REPLY_TOKEN:-}
-      TZ: ${TZ:-Europe/Amsterdam}
+      TZ: ${TZ:-UTC}
     volumes:
       - whatsapp-auth:/data
       - files:/fraim:ro
@@ -155,7 +162,7 @@ services:
     image: fraimwork/secrets:${FRAIM_IMAGE_TAG:-local}
     environment:
       SECRETS_TOKEN: ${SECRETS_TOKEN:-}
-      TZ: ${TZ:-Europe/Amsterdam}
+      TZ: ${TZ:-UTC}
     volumes:
       - secrets-store:/data/secrets
     networks: [secrets, secrets-out]
@@ -168,7 +175,7 @@ services:
     image: fraimwork/google:${FRAIM_IMAGE_TAG:-local}
     profiles: [google]
     environment:
-      TZ: ${TZ:-Europe/Amsterdam}
+      TZ: ${TZ:-UTC}
       GOOGLE_PERMISSIONS: ${GOOGLE_PERMISSIONS:-gmail:drafts drive:readonly calendar:readonly}
       WORKSPACE_MCP_ALLOWED_HOSTS: google
       REPLY_TOKEN: ${REPLY_TOKEN:-}
@@ -185,7 +192,7 @@ services:
       PUID: "1000"
       PGID: "1000"
       STGUIADDRESS: 0.0.0.0:8384
-      TZ: ${TZ:-Europe/Amsterdam}
+      TZ: ${TZ:-UTC}
     ports:
       - "${PRIVATE_BIND_IP:-127.0.0.1}:${SYNC_GUI_PORT:-8384}:8384"
       - "${BIND_IP}:${SYNC_PORT:-22000}:22000/tcp"

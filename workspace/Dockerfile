@@ -70,11 +70,15 @@ COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs c
 # Speech to text for WhatsApp voice messages (fraim-transcribe). The model is part of the
 # image, so a voice message never waits for a download. "base" needs about 500 MB while it
 # runs; "small" is more exact but needs 1.2 GB, too much next to Claude on a 4 GB server.
+# VOICE=off leaves it out (622 MB): install.sh does that on a server without WhatsApp.
+ARG VOICE=on
 ARG FASTER_WHISPER_VERSION=1.2.1
 ARG WHISPER_MODEL=base
 RUN python3 -m venv /opt/fraim/whisper/venv \
- && /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" \
- && /opt/fraim/whisper/venv/bin/python -c "from faster_whisper import download_model; download_model('${WHISPER_MODEL}', output_dir='/opt/fraim/whisper/model')"
+ && if [ "${VOICE}" = on ]; then \
+      /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" \
+      && /opt/fraim/whisper/venv/bin/python -c "from faster_whisper import download_model; download_model('${WHISPER_MODEL}', output_dir='/opt/fraim/whisper/model')"; \
+    fi
 # Pillow: still pictures from videos (fraim-frames). poppler-utils: Claude reads PDFs with it.
 ARG PILLOW_VERSION=11.3.0
 RUN /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "pillow==${PILLOW_VERSION}" \

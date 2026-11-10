@@ -116,7 +116,9 @@ validate() {
     valid_item "$n" || bad="$bad
   leads/$n.md: the name may only hold lowercase letters, digits and -"
     [ "$(header_get "$f" role)" = lead ] || bad="$bad
-  leads/$n.md: the header needs role: lead (a repo cannot add a chief or an engineer)"
+  leads/$n.md: the header needs role: lead (a repo cannot add an agent with powers)"
+    [ -e "$leads/$n" ] || ! fraim-authority holds "$n" 2>/dev/null || bad="$bad
+  leads/$n.md: this server keeps that name for an agent with powers"
     v="$(header_get "$f" schedule)"
     [ -z "$v" ] || { [ "$(printf '%s' "$v" | wc -w | tr -d ' ')" = 5 ] && printf '%s' "$v" | grep -Eq '^[0-9*/,-]+( [0-9*/,-]+){4}$'; } || bad="$bad
   leads/$n.md: schedule needs five cron fields"
@@ -386,7 +388,7 @@ cmd_export() {
     valid_item "$item" || usage "'$item' is not a name"
     if [ -f "$leads/$item/lead.md" ]; then
       f="$leads/$item/lead.md"
-      [ "$(header_get "$f" role)" = lead ] || die "$item is a chief or an engineer; those stay personal"
+      [ "$(header_get "$f" role)" = lead ] || die "$item is not a plain lead; agents with powers stay personal"
       s="$(header_get "$autos/$item/automation.md" schedule 2>/dev/null)"
       b="$(cat "$leads/$item/budget" 2>/dev/null)"
       t="$(here_tools "$leads/$item/tools" | paste -sd, -)"

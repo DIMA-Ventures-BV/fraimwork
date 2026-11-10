@@ -14,7 +14,7 @@ set -uo pipefail
 valid() { [[ "$1" =~ ^#?[a-z0-9][a-z0-9_-]{0,79}$ || "$1" =~ ^[CG][A-Z0-9]{6,20}$ ]]; }
 if [ "${1:-}" = --check ]; then
   valid "${2:-}" && exit 0
-  echo "'${2:-}' must be a channel: its name (mlv-alerts) or an id like C0123ABCD"; exit 1
+  echo "'${2:-}' must be a channel: its name (app-alerts) or an id like C0123ABCD"; exit 1
 fi
 channel="${1:-}"
 valid "$channel" || { echo "'$channel' is not a Slack channel name or id"; exit 1; }

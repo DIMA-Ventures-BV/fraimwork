@@ -172,6 +172,7 @@ cmd_mark_unreviewed() {
     _triggers|_outputs|_sources)
       second="${rest#*/}"; second="${second%%/*}"
       valid_type "$second" && mark_unreviewed "$first.$second" ;;
+    _brain) mark_unreviewed _brain.brain ;;
     *) valid_name "$first" && mark_unreviewed "$first" ;;
   esac
 }
@@ -355,20 +356,20 @@ record_failure() {
 # else. With an engineer lead, the engineer gets the failure at once and fixes it; the item only
 # informs. Without one, approving it starts a goal that finds the cause and fixes the
 # automation. A login or a usage limit is not something an agent can fix, so those only inform.
-the_engineer() { FRAIM_LEADS_DIR="$leads_dir" fraim-authority role engineer 2>/dev/null; }
+authority_get() { FRAIM_LEADS_DIR="$leads_dir" fraim-authority get "$1" 2>/dev/null; }
 failure_to_queue() {
-  local name="$1" reason="$2" run_rel="$3" fix=() eng="" lead
+  local name="$1" reason="$2" run_rel="$3" fix=() fixer="" lead
   command -v fraim-queue >/dev/null || return 0
   lead="$(get "$autos/$name/automation.md" lead 2>/dev/null)"
-  eng="$(the_engineer)" || eng=""
-  # The engineer does not fix its own runs: that could wake it forever.
-  [ "$name" != "$eng" ] && [ "$lead" != "$eng" ] || eng=""
+  fixer="$(authority_get fixer)" || fixer=""
+  # The fixer does not fix its own runs: that could wake it forever.
+  [ "$name" != "$fixer" ] && [ "$lead" != "$fixer" ] || fixer=""
   case "$reason" in
     *"not signed in"*) fix=(--ask "Sign the server in to Claude again? Ask Claude on your laptop to do it." --advise dismiss --why "Nothing on the server can fix a sign-in.") ;;
     *"usage limit"*) fix=(--ask "Nothing to do: it runs again when the Claude usage limit resets." --advise dismiss --why "The limit resets on its own.") ;;
-    *) if [ -n "$eng" ] && command -v fraim-lead >/dev/null; then
-        fix=(--lead "$eng" --ask "Nothing to do: the engineer is already fixing it and reports back. Skip this when you have read it." --advise dismiss --why "$reason.")
-        fraim-lead tell "$eng" --from "automation $name" -- "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause and fix it, then tell the chief in one line what was wrong." >/dev/null 2>&1 || true
+    *) if [ -n "$fixer" ] && command -v fraim-lead >/dev/null; then
+        fix=(--lead "$fixer" --ask "Nothing to do: this is already being fixed and you hear back. Skip this when you have read it." --advise dismiss --why "$reason.")
+        fraim-lead tell "$fixer" --from "automation $name" -- "$(fraim-prompt render fixer-failure --set "name=$name" --set "reason=$reason" --set "run=${run_rel:-~/fraim/automations/$name/runs}" --set "contact=$(authority_get contact)")" >/dev/null 2>&1 || true
       else
         fix=(--ask "Let Claude find out why $name failed and fix it?" --advise approve --need "The automation $name stopped working: $reason." --if-yes "Claude finds the cause, fixes it and tests it once without sending anything." --if-no "$name stays broken until someone looks at it." --why "$reason."
       --on-approve "The automation $name failed: $reason. Its last run is in ${run_rel:-~/fraim/automations/$name/runs}. Find the cause, fix ~/fraim/automations/$name (use the building-automations skill), check it with fraim-auto check $name, and run it once with fraim-auto run $name --dry.")
@@ -591,10 +592,21 @@ lock_held() {
   [ -z "$(find "$lock" -maxdepth 0 -mmin +$(( t / 60 + 5 )) 2>/dev/null)" ]
 }
 
+lead_gone() {
+  local lead
+  lead="$(get "$1" lead)"
+  [ -n "$lead" ] && [ ! -f "$leads_dir/$lead/lead.md" ]
+}
+
 # gate NAME FILE AUTO: exits when NAME must not run now. A mistake blocks every run; a run
 # that no person started (AUTO=1) also stops at enabled: false, a pause and the hours.
 gate() {
   local name="$1" f="$2" auto="$3" problems_found
+  # The owner deleted the agent and this automation is what it left behind: nothing to alert.
+  if [ "$auto" = 1 ] && lead_gone "$f"; then
+    sset "$name" last_status "skipped $(now_human) its lead is gone"
+    exit 0
+  fi
   problems_found="$(problems "$name")"
   if [ -n "$problems_found" ]; then
     if [ "$auto" = 1 ]; then
@@ -837,7 +849,7 @@ cmd_on() {
   fi
   rm -f "$state_root/$name/paused" "$state_root/$name/last_alert" "$state_root/$name/review_asked"
   # The yes covers this automation and the plug-ins that were built with it.
-  rm -f "$unreviewed/$name" "$unreviewed"/_triggers.* "$unreviewed"/_outputs.* "$unreviewed"/_sources.*
+  rm -f "$unreviewed/$name" "$unreviewed"/_triggers.* "$unreviewed"/_outputs.* "$unreviewed"/_sources.* "$unreviewed"/_brain.*
   sset "$name" streak 0
   lead="$(get "$f" lead)"
   if [ -n "$lead" ] && [ -f "$leads_dir/$lead/paused" ] && command -v fraim-lead >/dev/null; then
@@ -866,6 +878,7 @@ cmd_sync() {
     [ -n "$n" ] || continue
     f="$autos/$n/automation.md"
     is_false "$(get "$f" enabled)" && continue
+    lead_gone "$f" && continue
     if [ -n "$(get "$f" trigger)" ]; then
       [ "$(trigger_type "$f")" != after ] || continue
       c="$(every_cron "$(get "$f" every | grep . || echo "$DEFAULT_POLL")")"
@@ -955,8 +968,8 @@ cmd_new() {
     esac
   done
   valid_name "$name" || usage "'$name' is not an automation name (lowercase letters, digits, - and _)"
-  # The engineer builds; the owner switches on (fraim-auto on, through the queue).
-  [ "${FRAIM_LEAD_ROLE:-}" != engineer ] || off=1
+  # A builds_off agent builds; the owner switches on (fraim-auto on, through the queue).
+  [ -z "${FRAIM_BUILDS_OFF:-}" ] || off=1
   dest="$autos/$name"
   [ ! -e "$dest" ] || die "automation $name already exists: $dest/automation.md"
   if [ -n "$from" ]; then
@@ -984,10 +997,6 @@ cmd_new() {
 lead_automation() {
   local name="$1" cron="$2" what
   what="$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front && /^## Area/ { getline; print; exit }' "$leads_dir/$name/lead.md" | cut -c1-100)"
-  case "$(FRAIM_LEADS_DIR="$leads_dir" fraim-authority role-of "$name" 2>/dev/null)" in
-    chief) what="chief of staff: ranks the queue and sends the daily digest" ;;
-    engineer) what="engineer: builds and fixes automations, leads, plugins and skills" ;;
-  esac
   mkdir -p "$autos/$name"
   printf -- '---\ndescription: Lead %s: %s\nschedule: "%s"\nlead: %s\ntimeout: 40m\noutput: none\n---\nThe lead brief is ~/fraim/leads/%s/lead.md. This automation only sets when the lead runs.\n' \
     "$name" "${what:-see its brief}" "$cron" "$name" "$name" > "$autos/$name/automation.md"

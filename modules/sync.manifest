@@ -1,0 +1,7 @@
+id: sync
+version: 1.0.0
+min_fraim_version: 0.1.0
+description: Keep ~/fraim in step with your laptop through Syncthing
+profile: sync
+requires:
+check: syncthing curl -fsS http://syncthing:8384/rest/noauth/health

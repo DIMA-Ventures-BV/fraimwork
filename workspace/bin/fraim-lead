@@ -19,11 +19,12 @@
 #   fraim-lead run NAME          what its automation runs; also fine by hand
 #   fraim-lead try NAME [--status]  one trial run of a new employee on real data; changes nothing
 #   fraim-lead tell NAME [--from WHO] -- TEXT    leave a note in the lead's inbox and wake it now
-#   fraim-lead ask [NAME|--chief] -- TEXT        the owner asks a lead (the chief by default); it runs now
-#   fraim-lead brief                             what the chief knows, for the chat that talks as the chief
-#   fraim-lead events NAME [--every 15m] [--off] wake the lead on new queue events (the chief has it)
+#   fraim-lead ask [NAME|--chief] -- TEXT        the owner asks a lead (the default contact unless named); it runs now
+#   fraim-lead brief [NAME]                      what an agent knows, for the chat that talks as it (default: the contact)
+#   fraim-lead events NAME [--every 15m] [--off] wake the lead on new queue events (the chief has it by default)
 #   fraim-lead pause NAME | resume NAME
-#   fraim-lead display [NAME|--chief] [--clear] [-- TEXT]  the name people see for an agent (default: the chief)
+#   fraim-lead rename OLD NEW                    the owner only
+#   fraim-lead display [NAME|--chief] [--clear] [-- TEXT]  the name people see for an agent (default: the contact)
 #
 # Each lead lives in ~/fraim/leads/<name>/: lead.md (its brief, the owner edits it),
 # state.md (its own notes between runs), budget (goals per day), tools (extra tools,
@@ -56,10 +57,9 @@ lead_dir() {
   [ -f "$leads/$1/lead.md" ] || die "no lead $1; create it with: fraim-lead new $1"
   printf '%s' "$leads/$1"
 }
-is_chief() { [ "$(fraim-authority role-of "$(basename "$1")" 2>/dev/null)" = chief ]; }
-is_engineer() { [ "$(fraim-authority role-of "$(basename "$1")" 2>/dev/null)" = engineer ]; }
-the_engineer() { fraim-authority role engineer 2>/dev/null; }
-the_chief() { fraim-authority role chief 2>/dev/null; }
+cap() { fraim-authority cap "$1" "$2" 2>/dev/null; }
+the_fixer() { fraim-authority get fixer 2>/dev/null; }
+the_contact() { fraim-authority get contact 2>/dev/null; }
 # The name the owner gave an agent: the display: line at the top of its lead.md.
 lead_display() {
   awk 'NR == 1 && /^---$/ { f = 1; next } f && /^---$/ { exit } f && sub(/^display:[[:space:]]*/, "") { print; exit }' "$1" 2>/dev/null
@@ -76,7 +76,7 @@ cmd_display() {
     esac
   done
   if [ -z "$who" ]; then
-    who="$(the_chief)" || { [ "$clear" = 0 ] && [ -z "$value" ] && return 0; die "there is no chief of staff yet"; }
+    who="$(the_contact)" || { [ "$clear" = 0 ] && [ -z "$value" ] && return 0; die "there is no default contact; name the agent"; }
   fi
   local dir file
   dir="$(lead_dir "$who")"
@@ -121,11 +121,12 @@ cmd_new() {
   valid_name "$name" || usage "'$name' is not a lead name (lowercase letters, digits and -)"
   [ "$chief$engineer" != 11 ] || usage "a lead is the chief or the engineer, not both"
   if [ "${FRAIM_HEADLESS:-}" = 1 ] && [ "$chief$engineer" != 00 ]; then die "only the owner makes a chief or an engineer"; fi
-  [ "${FRAIM_LEAD_ROLE:-}" != engineer ] || off=1
+  [ -z "${FRAIM_BUILDS_OFF:-}" ] || off=1
   [ ! -e "$leads/$name" ] || die "lead $name already exists: $leads/$name"
   [ ! -e "$autos/$name" ] || die "an automation is already called $name; pick another name"
-  if [ "$engineer" = 1 ] && role="$(the_engineer)"; then die "lead $role is already the engineer"; fi
-  if [ "$chief" = 1 ] && role="$(the_chief)"; then die "lead $role is already the chief"; fi
+  if [ "${FRAIM_HEADLESS:-}" = 1 ] && fraim-authority holds "$name"; then die "the name $name has powers on this server; only the owner can use it"; fi
+  if [ "$engineer" = 1 ] && role="$(fraim-authority role engineer 2>/dev/null)"; then die "lead $role is already the engineer"; fi
+  if [ "$chief" = 1 ] && role="$(fraim-authority role chief 2>/dev/null)"; then die "lead $role is already the chief"; fi
   if [ "$chief" = 1 ]; then at="${at:-30 7 * * *}"; budget="${budget:-2}"
   elif [ "$engineer" = 1 ]; then at="${at:-0 6 * * 1}"; budget="${budget:-99}"
   else at="${at:-0 7 * * 1-5}"; budget="${budget:-3}"; fi
@@ -175,7 +176,7 @@ cmd_list() {
   for dir in "$leads"/*/; do
     [ -f "$dir/lead.md" ] || continue
     name="$(basename "$dir")"
-    kind=lead; is_chief "$dir" && kind=chief; is_engineer "$dir" && kind=engineer
+    kind="$(fraim-authority role-of "$name" 2>/dev/null)"; kind="${kind:-lead}"
     if has_auto "$name"; then
       at="$(sed -n 's/^schedule:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' "$autos/$name/automation.md" | head -1)"
     else
@@ -205,11 +206,11 @@ lead_goals() {
   done | sort -rn | head -10 | sed 's/^/g/'
 }
 
-# Queue items of one lead (all for the chief), with the owner's decisions.
+# Queue items of one lead (every lead's with queue=all), with the owner's decisions.
 queue_view() {
-  local name="$1" chief="$2" filter=()
+  local name="$1" scope="$2" filter=()
   command -v fraim-queue >/dev/null || return 0
-  [ "$chief" = 1 ] || filter=(--lead "$name")
+  [ "$scope" = all ] || filter=(--lead "$name")
   fraim-queue list --all --json "${filter[@]}" 2>/dev/null \
     | jq -r '.[:25][] | "\(.id) [\(.state)] p\(.priority) \(.kind): \(.title)" + (if .note != "" then " | owner: \(.note)" else "" end)'
 }
@@ -220,16 +221,13 @@ team_size() { cmd_list 2>/dev/null | grep -Ec '^[a-z0-9-]+  lead  ' || true; }
 # What an agent is told lives in prompt files the owner can change (fraim-prompt). This only
 # gathers the facts of this run and picks the file.
 prompt_for() {
-  local name="$1" dir="$2" chief="$3" budget used=0 g rules template
-  budget="$(tr -dc 0-9 2>/dev/null < "$dir/budget")"; budget="${budget:-3}"
-  while IFS= read -r g; do
-    case "$g" in *" $(date '+%Y-%m-%d') "*) used=$((used + 1)) ;; esac
-  done < <(lead_goals "$name")
-  # The chief sees every lead's rules; a lead sees the general ones and its own.
-  if [ "$chief" = 1 ]; then rules="$(fraim-brain show --for "$name" --all 2>/dev/null)"; else rules="$(fraim-brain show --for "$name" 2>/dev/null)"; fi
-  local eng chief_name team no_team="" inbox="" input="${FRAIM_LEAD_INPUT:-}"
-  eng="$(the_engineer)" || eng=""
-  chief_name="$(the_chief)" || chief_name=""
+  local name="$1" dir="$2" rules scope template
+  # rules=all sees every lead's rules; otherwise the general ones and its own.
+  if [ "$(cap "$name" rules)" = all ]; then rules="$(fraim-brain show --for "$name" --all 2>/dev/null)"; else rules="$(fraim-brain show --for "$name" 2>/dev/null)"; fi
+  scope="$(cap "$name" queue)"
+  local fixer contact team no_team="" inbox="" input="${FRAIM_LEAD_INPUT:-}" input_max=4000
+  fixer="$(the_fixer)" || fixer=""
+  contact="$(the_contact)" || contact=""
   team="$(team_size)"
   [ "$team" != 0 ] || no_team=1
   [ ! -s "$dir/.running/inbox.md" ] || inbox="$(head -c 6000 "$dir/.running/inbox.md")"
@@ -239,36 +237,33 @@ prompt_for() {
     --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$dir/lead.md")"
     --set "state=$(head -c 8000 "$dir/state.md" 2>/dev/null)"
     --set "inbox=$inbox" --set "rules=$rules"
-    --set "queue_view=$(queue_view "$name" "$chief" || true)"
+    --set "queue_view=$(queue_view "$name" "$scope" || true)"
     --set "goals=$(lead_goals "$name")"
-    --set "used=$used" --set "budget=$budget"
-    --set "engineer=$eng" --set "team_size=$team" --set "no_team=$no_team"
+    --set "engineer=$fixer" --set "chief_name=$contact" --set "team_size=$team" --set "no_team=$no_team"
     --set "repos_note=$(repos_note)"
     --set "style_queue=$(style_block queue)")
-  if is_engineer "$dir"; then
-    template="engineer-run"
+  if [ "$(cap "$name" builds_off)" = 1 ]; then
     local fw
     fw="$(code_dir)/fraimwork"
     [ -d "$fw/.git" ] || fw=""
-    args+=(--set "chief_name=$chief_name" --set "fw=$fw"
+    args+=(--set "fw=$fw"
       --set "automations=$(fraim-auto list 2>/dev/null | head -60)"
       --set "leads=$(cmd_list 2>/dev/null)")
-  elif [ "$chief" = 1 ]; then
-    template="chief-run"
-    local budget_zero="" owner_wrote=""
-    [ "$budget" != 0 ] || budget_zero=1
+  fi
+  if [ "$scope" = all ]; then
+    input_max=8000
+    local owner_wrote=""
     [ "${input#The owner wrote:}" = "$input" ] || owner_wrote=1
-    args+=(--set "budget_zero=$budget_zero" --set "owner_wrote=$owner_wrote"
-      --set "input=${input:0:8000}" --set "trigger=${FRAIM_LEAD_TRIGGER:-manual}"
+    args+=(--set "owner_wrote=$owner_wrote"
+      --set "trigger=${FRAIM_LEAD_TRIGGER:-manual}"
       --set "automations=$(fraim-auto list 2>/dev/null | head -40)"
       --set "outbox=$(tail -c 4000 "${FRAIM_FILES_DIR:-$HOME/fraim}/outbox.md" 2>/dev/null)"
-      --set "sources=$(fraim-auto sources 2>/dev/null)"
       --set "style_whatsapp=$(style_block whatsapp)")
-  else
-    template="lead-run"
-    args+=(--set "chief_name=${chief_name:-chief}" --set "input=${input:0:4000}")
   fi
-  fraim-prompt render "$template" "${args[@]}"
+  [ "$(cap "$name" source_tools)" != 1 ] || args+=(--set "sources=$(fraim-auto sources 2>/dev/null)")
+  args+=(--set "input=${input:0:$input_max}")
+  template="$(cap "$name" template)"
+  fraim-prompt render "${template:-lead}-run" "${args[@]}"
 }
 
 style_block() { command -v fraim-style >/dev/null || return 0; fraim-style prompt "$1" 2>/dev/null || true; }
@@ -298,16 +293,14 @@ tool_lines() {
 }
 
 tools_for() {
-  local name="$1" dir="$2" chief="$3" repo verb
+  local name="$1" dir="$2" repo verb template
   local t=()
   tool_lines tools-lead "$name"
-  if [ "$chief" = 1 ]; then
-    tool_lines tools-chief "$name"
+  template="$(cap "$name" template)"
+  [ "${template:-lead}" = lead ] || tool_lines "tools-$template" "$name"
+  if [ "$(cap "$name" source_tools)" = 1 ]; then
     while IFS= read -r repo; do [ -z "$repo" ] || t+=("$repo"); done < <(fraim-auto sources --tools 2>/dev/null)
   fi
-  # The engineer builds: it writes automations, plugins, lead briefs and skill drafts, and tests
-  # them. It cannot switch anything on (fraim-auto on, resume, fraim-lead resume).
-  if is_engineer "$dir"; then tool_lines tools-engineer "$name"; fi
   while IFS= read -r repo; do
     for verb in fetch log status diff show; do t+=("Bash(git -C $repo $verb:*)"); done
   done < <(lead_repos)
@@ -341,10 +334,10 @@ lead_message() {
 }
 
 cmd_run() {
-  local name="$1" dir chief=0 log output code before after new started=0
+  local name="$1" dir direct=0 log output code before after new started=0
   dir="$(lead_dir "$name")" || exit $?
   [ ! -f "$dir/paused" ] || { echo "Lead $name is paused."; return 0; }
-  is_chief "$dir" && chief=1
+  [ "$(cap "$name" output)" != direct ] || direct=1
   # One run at a time; a lock from a run that died is taken over.
   if ! mkdir "$dir/.running" 2>/dev/null; then
     if kill -0 "$(cat "$dir/.running/pid" 2>/dev/null)" 2>/dev/null; then echo "Lead $name is already running."; return 0; fi
@@ -379,13 +372,13 @@ cmd_run() {
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_LEAD_TIMEOUT:-1800}")
   local dirs=()
   [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
-  # What the engineer creates starts switched off (fraim-auto new and fraim-lead new read it).
-  if is_engineer "$dir"; then export FRAIM_LEAD_ROLE=engineer; else unset FRAIM_LEAD_ROLE; fi
+  # What a builds_off agent creates starts switched off (fraim-auto new and fraim-lead new read it).
+  if [ "$(cap "$name" builds_off)" = 1 ]; then export FRAIM_BUILDS_OFF=1; else unset FRAIM_BUILDS_OFF; fi
   export FRAIM_LEAD_NAME="$name"
   # stream-json writes each step as it happens, so the queue page shows what the run does now
   # (.running/live.jsonl). The answer is the last "result" line; plain text is kept as it is.
   local live="$dir/.running/live.jsonl"
-  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief"; fraim-prompt render talk-rules --lead "$name")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir"; fraim-prompt render talk-rules --lead "$name")" --allowedTools "$(tools_for "$name" "$dir")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
     --output-format stream-json --verbose > "$live" 2>"$log.err"
   code=$?
   if grep -q '"type":"result"' "$live" 2>/dev/null; then
@@ -427,7 +420,7 @@ cmd_run() {
     if [ -n "${FRAIM_LEAD_IN_AUTO:-}" ]; then
       echo "Lead $name failed: $reason. Log: ${log#"$HOME"/}" >&2
     else
-      if [ "$chief" = 1 ]; then FRAIM_NOTIFY_DIRECT=1 fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"; else fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"; fi
+      FRAIM_NOTIFY_DIRECT="$direct" fraim-notify "Lead $name failed: $reason. Log: ${log#"$HOME"/}"
     fi
     exit 1
   fi
@@ -437,12 +430,12 @@ cmd_run() {
   # The automation keeps this as the run's answer (its output is "none", so nothing is sent).
   printf '%s\n' "$output"
 
-  if [ "$chief" = 1 ]; then
+  if [ "$direct" = 1 ]; then
     is_silent "$output" && return 0
     # A run woken by queue events goes through the relay, which knows what the owner was
     # already told about the same results; the digest and answers to the owner go as they are.
     if [ -n "${FRAIM_LEAD_INPUT:-}" ] && [ "${FRAIM_LEAD_TRIGGER:-manual}" != manual ]; then
-      FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "The chief routed new work: ${output:0:3500}"
+      FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$name routed new work: ${output:0:3500}"
       return 0
     fi
     FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "${output:0:3500}
@@ -493,7 +486,7 @@ cmd_try() {
     echo "passed $(jq -r .at "$file")"
     return 0
   fi
-  if is_chief "$dir" || is_engineer "$dir"; then die "only a new employee gets a trial; $name is the chief or the engineer"; fi
+  if fraim-authority holds "$name"; then die "only a new employee gets a trial; $name has powers of its own"; fi
   [ ! -d "$dir/.running" ] || die "lead $name is running now; try again when it is done"
 
   local tmp hash live code=0 limit=() dirs=() reason="" verdict=failed answer last
@@ -505,9 +498,9 @@ cmd_try() {
   cd "$HOME/fraim" 2>/dev/null || cd "$HOME" || exit 1
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_LEAD_TRIAL_TIMEOUT:-540}")
   [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
-  unset FRAIM_LEAD_ROLE FRAIM_LEAD_INPUT FRAIM_THREAD
-  FRAIM_TRIAL=1 "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" 0; fraim-prompt render lead-trial --lead "$name")" \
-    --allowedTools "$(trial_tools "$(tools_for "$name" "$dir" 0)")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+  unset FRAIM_BUILDS_OFF FRAIM_LEAD_INPUT FRAIM_THREAD
+  FRAIM_TRIAL=1 "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir"; fraim-prompt render lead-trial --lead "$name")" \
+    --allowedTools "$(trial_tools "$(tools_for "$name" "$dir")")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
     --output-format stream-json --verbose > "$live" 2>"$tmp/err" || code=$?
 
   answer="$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .result // empty' "$live" 2>/dev/null)"
@@ -590,14 +583,16 @@ cmd_tell() {
   fi
 }
 
-# brief: everything the chief knows, in one text, for the chat that talks as the chief: its brief
-# and notes, what the owner was told, goals with what they were for, coding sessions, leads,
-# automations, open decisions and the owner's rules. Ids are for commands, never for the owner.
+# brief [NAME]: everything an agent knows, in one text, for the chat that talks as it (the
+# default contact, unless named): its brief and notes, what the owner was told, goals with what
+# they were for, coding sessions, leads, automations, open decisions and the owner's rules.
+# Ids are for commands, never for the owner.
 cmd_brief() {
-  local chief="" dir g id st by
-  printf 'Briefing for the chief of staff, %s. Ids (g.., s.., q..) are for commands only; tell the owner what a thing is and what it was for.\n' "$(date '+%A %Y-%m-%d %H:%M')"
-  if chief="$(the_chief)"; then
-    dir="$leads/$chief"
+  local who="${1:-}" dir g id st by
+  printf 'Briefing, %s. Ids (g.., s.., q..) are for commands only; tell the owner what a thing is and what it was for.\n' "$(date '+%A %Y-%m-%d %H:%M')"
+  if [ -n "$who" ]; then lead_dir "$who" >/dev/null || exit $?; else who="$(the_contact)" || who=""; fi
+  if [ -n "$who" ]; then
+    dir="$leads/$who"
     printf '\n## Your brief\n%s\n' "$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$dir/lead.md")"
     printf '\n## Your notes\n%s\n' "$(head -c 4000 "$dir/state.md" 2>/dev/null)"
   fi
@@ -622,7 +617,7 @@ cmd_brief() {
   for g in "$leads"/*/lead.md; do
     [ -f "$g" ] || continue
     id="$(basename "$(dirname "$g")")"
-    [ "$id" != "$chief" ] || continue
+    [ "$id" != "$who" ] || continue
     printf -- '- %s: %s Last run: %s\n' "$id" "$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front && NF' "$g" | head -3 | tr '\n' ' ' | cut -c1-200)" "$(cat "$(dirname "$g")/last" 2>/dev/null || echo never)"
   done
   if command -v fraim-auto >/dev/null; then
@@ -648,7 +643,7 @@ cmd_ask() {
   text="$*"
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "ask [NAME] -- TEXT"
   if [ -z "$name" ]; then
-    name="$(the_chief)" || die "there is no chief of staff yet; create one with: fraim-lead new chief --chief"
+    name="$(the_contact)" || die "there is no default contact: answer here, start a goal, or name a lead (fraim-lead list)"
   fi
   lead_dir "$name" >/dev/null || exit $?
   [ ! -f "$leads/$name/paused" ] || die "lead $name is paused; resume it with: fraim-lead resume $name"
@@ -702,10 +697,34 @@ cmd_events() {
   echo "Lead $name wakes on new queue events, checked every $every between 07:00 and 22:00 ($a)."
 }
 
+# rename OLD NEW: the owner renames an agent; its powers, automations and history go with it.
+cmd_rename() {
+  local old="$1" new="$2" a target dir f tmp
+  [ "${FRAIM_HEADLESS:-}" != 1 ] || die "only the owner renames an agent"
+  valid_name "$new" || usage "'$new' is not a lead name (lowercase letters, digits and -)"
+  dir="$(lead_dir "$old")" || exit $?
+  [ ! -d "$dir/.running" ] || die "lead $old is running now; try again when it is done"
+  [ ! -e "$leads/$new" ] && [ ! -e "$autos/$new" ] && [ ! -e "$autos/$new-events" ] || die "the name $new is taken"
+  fraim-authority rename "$old" "$new" || die "could not record the new name"
+  mv "$leads/$old" "$leads/$new"
+  local state="${FRAIM_AUTO_STATE_DIR:-$HOME/.local/state/fraim/automations}"
+  for a in $(lead_autos "$old"); do
+    target="$new${a#"$old"}"
+    mv "$autos/$a" "$autos/$target"
+    [ ! -d "$state/$a" ] || mv "$state/$a" "$state/$target"
+    f="$autos/$target/automation.md"
+    tmp="$(mktemp "$f.XXXXXX")"
+    sed -e "s/^lead: $old\$/lead: $new/" -e "s/^description: Lead $old/description: Lead $new/" -e "s#leads/$old/#leads/$new/#" "$f" > "$tmp" && mv "$tmp" "$f"
+  done
+  fraim-auto sync --quiet >/dev/null 2>&1 || true
+  echo "$old is now called $new."
+}
+
 action="${1:-}"
 [ $# -eq 0 ] || shift
 case "$action" in
   new) cmd_new "$@" ;;
+  rename) [ $# -eq 2 ] || usage "rename OLD NEW"; cmd_rename "$1" "$2" ;;
   list) cmd_list ;;
   show) [ $# -eq 1 ] || usage "show NAME"; cmd_show "$1" ;;
   run) [ $# -eq 1 ] || usage "run NAME"; cmd_run "$1" ;;
@@ -722,7 +741,7 @@ case "$action" in
     echo "Lead $1 resumed." ;;
   tell) cmd_tell "$@" ;;
   ask) cmd_ask "$@" ;;
-  brief) cmd_brief ;;
+  brief) cmd_brief "$@" ;;
   display) cmd_display "$@" ;;
   events) cmd_events "$@" ;;
   *) usage 'new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief] | list | show NAME | run NAME | tell NAME [--later] -- TEXT | ask [NAME] -- TEXT | events NAME [--every 15m] [--off] | pause NAME | resume NAME | display [NAME|--chief] [--clear] [-- TEXT]' ;;

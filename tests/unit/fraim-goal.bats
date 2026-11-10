@@ -332,6 +332,60 @@ EOF
   [ ! -e "$FRAIM_GOALS_DIR/g1/heartbeat" ]
 }
 
+@test "a core that stays busy while the goal runs never fails it" {
+  cat > "$T/bin/busy-core" <<'EOF'
+#!/usr/bin/env bash
+echo 15 > "$HC_FAKE/get-fail"
+EOF
+  chmod +x "$T/bin/busy-core"
+  FAKE_SEND_HOOK="$T/bin/busy-core" "$GOAL" start -- find flights
+  for _ in $(seq 150); do grep -qE '^(done|failed)' "$FRAIM_GOALS_DIR/g1/state" 2>/dev/null && break; sleep 0.1; done
+  grep -q '^done' "$FRAIM_GOALS_DIR/g1/state"
+}
+
+send_seen() { for _ in $(seq 30); do grep -q '^send ' "$HC_FAKE/calls" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+
+@test "an answered question wakes the watcher through the event stream, not its timer" {
+  FAKE_SEND_STATE=blocked FRAIM_GOAL_POLL=30 FRAIM_GOAL_KEEP=30 "$GOAL" start -- pick a drink
+  send_seen
+  sleep 0.5
+  grep -q '^running' "$FRAIM_GOALS_DIR/g1/state"
+  jq '.status = {state: "done"} | .turn = 2' "$HC_FAKE/t-g1.json" > "$T/t" && mv "$T/t" "$HC_FAKE/t-g1.json"
+  wait_state g1 done
+  wait_sent 'Goal g1 done'
+  sleep 0.3
+  "$GOAL" stop g1
+  for _ in $(seq 30); do grep -q 'watcher ended (stopped)' "$FRAIM_GOALS_DIR/g1/log.txt" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'watcher ended (stopped)' "$FRAIM_GOALS_DIR/g1/log.txt"
+  # The watcher leaves no event stream behind.
+  sleep 0.2
+  for p in $(cat "$HC_FAKE/events.pids"); do run kill -0 "$p"; [ "$status" -ne 0 ]; done
+}
+
+@test "heartbeats and title changes do not wake the watcher" {
+  mkdir -p "$HC_FAKE"
+  touch "$HC_FAKE/noise"
+  FRAIM_GOAL_POLL=3 FRAIM_GOAL_KEEP=30 "$GOAL" start -- tidy up
+  wait_state g1 done
+  sleep 0.3
+  before="$(grep -c '^get g1' "$HC_FAKE/calls")"
+  sleep 1
+  [ "$(grep -c '^get g1' "$HC_FAKE/calls")" -le "$((before + 1))" ]
+  "$GOAL" stop g1
+}
+
+@test "without an event stream the watcher waits its full time, and the goal stays fine" {
+  mkdir -p "$HC_FAKE"
+  touch "$HC_FAKE/events-down"
+  FRAIM_GOAL_POLL=1 FRAIM_GOAL_KEEP=30 "$GOAL" start -- tidy up
+  wait_state g1 done
+  before="$(grep -c '^events' "$HC_FAKE/calls" || true)"
+  sleep 2
+  [ "$(grep -c '^events' "$HC_FAKE/calls")" -le "$((before + 3))" ]
+  grep -q '^done' "$FRAIM_GOALS_DIR/g1/state"
+  "$GOAL" stop g1
+}
+
 @test "reconcile leaves a goal alone while the core does not answer" {
   mkdir -p "$FRAIM_GOALS_DIR/g1" "$HC_FAKE"
   echo "goal" > "$FRAIM_GOALS_DIR/g1/goal.md"
@@ -427,6 +481,34 @@ Not logged in · Please run /login"
   for _ in $(seq 30); do [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ] && break; sleep 0.1; done
   [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ]
   [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = system ]
+}
+
+fake_queue_url() {  # the command fraim-queue runs for "url"
+  cat > "$T/bin/fraim-queue" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  url) $1 ;;
+  add) echo q7 ;;
+esac
+EOF
+  chmod +x "$T/bin/fraim-queue"
+}
+
+@test "a goal's result names the page when the link is there" {
+  fake_queue_url 'echo http://page.test/'
+  "$GOAL" start -- "find flights"
+  wait_state g1 done
+  wait_sent "It waits for review as queue item q7"
+  grep -q "or open the queue: http://page.test/" "$SENT"
+}
+
+@test "a goal's result still goes out when the link is refused, and does not end on an empty link" {
+  fake_queue_url 'echo refused >&2; exit 1'
+  "$GOAL" start -- "find flights"
+  wait_state g1 done
+  wait_sent "It waits for review as queue item q7"
+  grep -q "in your own words\.$" "$SENT"
+  ! grep -q "open the queue" "$SENT"
 }
 
 @test "a goal from an approved card reports on that card, not on a new one" {

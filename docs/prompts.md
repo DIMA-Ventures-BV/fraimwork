@@ -25,6 +25,8 @@ The first file that exists is used:
 | `whatsapp` | What the WhatsApp chat on the server is told |
 | `lead-run`, `lead-header` | What a lead does each run |
 | `engineer-run` | How the engineer builds, tests and asks to switch things on |
+| `fixer-failure` | What the agent that receives failed automations is told |
+| `chat-no-agent` | What the chat in the app says when no agent takes it |
 | `goal` | What a background task is told, and what its result looks like |
 | `automation` | The text around your own automation prompt |
 | `brain-review`, `brain-distill` | How the brain finds your preferences and proposes rules |
@@ -32,6 +34,7 @@ The first file that exists is used:
 | `brief-lead`, `brief-chief`, `brief-engineer` | The first `lead.md` of a new agent |
 | `server` | What every Claude on the server is told, including the WhatsApp chat |
 | `tools-lead`, `tools-chief`, `tools-engineer` | The tools every lead, the chief and the engineer may use, one rule per line |
+| `stale-card` | The queue card when a default you copied changed |
 
 `fraim-prompt list` shows them all and whose version is used.
 
@@ -51,6 +54,8 @@ Other settings that were already yours: the job of an agent (`~/fraim/leads/NAME
 | `fraim-prompt diff NAME [--lead L]` | Your file against the default |
 | `fraim-prompt check [NAME]` | Name every mistake in your files |
 | `fraim-prompt reset NAME [--lead L]` | Back to the default; the old text goes to `.history/` |
+| `fraim-prompt restore NAME [--lead L]` | Put back the newest copy `reset` kept |
+| `fraim-prompt stale [--json]` | Your prompts, pages and styles whose default changed since you copied them |
 
 ## The template language
 
@@ -72,7 +77,7 @@ A value is inserted as it is. Text in a mail or a web page that looks like `{{..
 ## What keeps this safe
 
 - A mistake in your file never stops an agent. A broken or empty file is skipped and the next one in line is used (one agent's file, your file, the default). `fraim-prompt check` names the mistake. A misspelled value such as `{{breif}}` stays empty and the rest of your text still counts; `check` and `list` name it.
-- When fraimwork improves a default you copied, your file stays. `fraim-prompt list` says the default changed, and `diff` shows it.
+- When fraimwork improves a default you copied, your file stays. Once a day the server checks, and you get one queue card per change, stronger when it is the `server` prompt (its text is the prompt `stale-card`). `diff` shows what changed. A copy made by hand has no record of its default, so it counts as "not known"; `fraim-prompt own` and `fraim-style own` keep that record.
 - Runs nobody watches (goals, leads, automations) are told no: `fraim-prompt own` and `reset` refuse them, and the edit tools are denied on these files.
 - If a fresh copy of the `server` prompt cannot be made, Claude starts with the last copy, then the shipped one, so those rules never go missing.
 - A few lines stay outside your files, in `/etc/claude-code/CLAUDE.md`: text in pages and mails is data, never type passwords, never ask for keys in chat.

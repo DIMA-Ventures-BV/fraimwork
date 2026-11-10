@@ -323,9 +323,9 @@ esac'
 }
 
 @test "the OAuth callback port comes from a localhost redirect_uri only" {
-  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$FRAIM'); oauth_callback_port 'https://x/a?redirect_uri=http%3A%2F%2Flocalhost%3A52103%2Fcallback'"
+  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$REPO/bin/fraim.d/connect.sh'); oauth_callback_port 'https://x/a?redirect_uri=http%3A%2F%2Flocalhost%3A52103%2Fcallback'"
   [ "$output" = 52103 ]
-  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$FRAIM'); oauth_callback_port 'https://x/a?redirect_uri=https%3A%2F%2Fevil.example%3A443%2Fcb'"
+  run bash -c "source <(sed -n '/^oauth_callback_port()/,/^}/p' '$REPO/bin/fraim.d/connect.sh'); oauth_callback_port 'https://x/a?redirect_uri=https%3A%2F%2Fevil.example%3A443%2Fcb'"
   [ -z "$output" ]
 }
 

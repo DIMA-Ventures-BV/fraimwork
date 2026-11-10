@@ -135,6 +135,22 @@ test('rules are added, changed, removed and undone through the brain', async (t)
   assert.match(section(), /Never use emoji/)
 })
 
+test('the rules on the page come from the brain, so a plug-in brain is respected', async (t) => {
+  const s = await start(t)
+  const plugin = async (body) => {
+    await mkdir(s.f('fraim/automations/_brain'), { recursive: true })
+    await writeFile(s.f('fraim/automations/_brain/brain'), body)
+    await chmod(s.f('fraim/automations/_brain/brain'), 0o755)
+  }
+  await plugin('#!/bin/sh\nprintf "## Mine\\n- From the plug-in. [r7]\\n"\n')
+  const { body: d } = await s.get('/api/settings')
+  assert.deepEqual(d.rules, [{ name: 'Mine', rules: [{ id: 'r7', text: 'From the plug-in.' }] }])
+  await plugin('#!/bin/sh\nexit 3\n')
+  const crashed = await s.get('/api/settings')
+  assert.equal(crashed.status, 200)
+  assert.deepEqual(crashed.body.rules, [])
+})
+
 test('instructions are saved per employee, a broken one is refused, and reset works', async (t) => {
   const s = await start(t)
   const { body: p } = await s.get('/api/settings/prompt/lead-run?lead=web')
