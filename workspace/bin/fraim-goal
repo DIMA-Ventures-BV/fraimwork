@@ -197,14 +197,25 @@ to_queue() {
   case "$priority" in 1|2|3) ;; *) priority=2 ;; esac
   on_approve="$(jq -r '.on_approve // "" | tostring' <<<"$meta")"
   if [ "$failed" = 1 ]; then kind=failed priority=1 on_approve="" title="Failed: $title"; fi
+  # The independent check did not pass, so nothing was merged and the owner decides.
+  local check_note=""
+  if [ "$failed" != 1 ] && [ -s "$dir/check-note" ]; then
+    check_note="$(head -1 "$dir/check-note" | cut -c1-300)"
+    [ -n "$on_approve" ] || on_approve="Add $(cat "$dir/change" 2>/dev/null) to the code through the repo's normal flow, never with admin rights. Do not put it live."
+  fi
   local args=(add --quiet --result --goal "$id" --title "$title" --kind "$kind" --priority "$priority" --summary-file "$dir/result.md")
   [ ! -s "$dir/lead" ] || args+=(--lead "$(cat "$dir/lead")")
   [ ! -s "$dir/queue" ] || args+=(--continues "$(cat "$dir/queue")")
   [ -z "$on_approve" ] || args+=(--on-approve "$on_approve")
   if [ "$failed" != 1 ]; then
-    local ask advise why f v
+    local ask advise why f v why_max=3
     ask="$(jq -r '.ask // "" | tostring' <<<"$meta" | head -1 | cut -c1-300)"
     advise="$(jq -r '.advise // "" | tostring' <<<"$meta")"
+    if [ -n "$check_note" ]; then
+      advise=reject why_max=2
+      [ -n "$ask" ] || ask="Add this change to the code even though the independent check did not pass?"
+      args+=(--why "Independent check: $check_note")
+    fi
     [ -z "$ask" ] || args+=(--ask "$ask")
     for f in need if_yes if_no; do
       v="$(jq -r --arg f "$f" '.[$f] // "" | tostring' <<<"$meta" | head -1 | cut -c1-400)"
@@ -213,7 +224,7 @@ to_queue() {
     case "$advise" in approve|reject|dismiss) args+=(--advise "$advise") ;; esac
     while IFS= read -r why; do
       [ -z "$why" ] || args+=(--why "$why")
-    done < <(jq -r '.why // [] | if type == "array" then .[] else . end | tostring' <<<"$meta" 2>/dev/null | head -3)
+    done < <(jq -r '.why // [] | if type == "array" then .[] else . end | tostring' <<<"$meta" 2>/dev/null | head -"$why_max")
   else
     args+=(--ask "Try this task again?" --advise approve --why "The run stopped before it was done; the details say why."
       --need "The task you asked for is not finished." --if-yes "I start it again and build on what is already done."
@@ -335,6 +346,56 @@ fail_goal() {
   hc kill "$id" >/dev/null 2>&1 || true
 }
 
+# A second Claude that did not write the change and can only read compares it with the goal.
+# Prints its verdict (PASS, or FAIL: why); nothing when it could not run. The heartbeat goes
+# on meanwhile, or reconcile would take this watcher for dead.
+independent_check() {
+  local dir="$1" change="$2" limit=() dirs=() code pid
+  code="${FRAIM_CODE_DIR:-$HOME/code}"
+  ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_GOAL_CHECK_TIMEOUT:-900}")
+  [ ! -d "$code" ] || dirs=(--add-dir "$code")
+  (
+    cd "$dir" || exit 1
+    ${limit[@]+"${limit[@]}"} fraim-claude -p "$(fraim-prompt render goal-check --set "goal=$(cat goal.md)" --set "change=$change")" \
+      --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
+      ${dirs[@]+"${dirs[@]}"} --output-format text
+  ) </dev/null > "$dir/check.out" 2>>"$dir/log.txt" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    heartbeat "$dir"
+    sleep "${FRAIM_GOAL_CHECK_POLL:-5}"
+  done
+  grep -E '^(PASS|FAIL)' "$dir/check.out" | tail -1
+}
+
+# A goal that wrote ready-to-merge waits here. Exit 0: the goal got the outcome and works on,
+# so there is no result yet. Exit 1: nothing to check, or the owner decides (check-note).
+check_change() {
+  local id="$1" dir="$2" change n verdict why note
+  [ -s "$dir/ready-to-merge" ] || return 1
+  change="$(head -c 500 "$dir/ready-to-merge")"
+  rm -f "$dir/ready-to-merge"
+  printf '%s\n' "$change" > "$dir/change"
+  n=$(( $(cat "$dir/checks" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$dir/checks"
+  verdict="$(independent_check "$dir" "$change")"
+  printf '%s check %s: %s\n' "$(date '+%H:%M:%S')" "$n" "${verdict:-no verdict}" >> "$dir/log.txt"
+  why="$(printf '%s' "$verdict" | sed -E 's/^(PASS|FAIL):? *//' | cut -c1-300)"
+  case "$verdict" in
+    PASS*)
+      (cmd_send "$id" "The independent check passed. Merge $change now through the repo's normal flow, never with admin rights, and do not put it live. Then finish as your instructions say.") >/dev/null 2>>"$dir/log.txt" && return 0
+      note="it passed, but the task could not be told to merge" ;;
+    FAIL*)
+      if [ "$n" -lt "${FRAIM_GOAL_CHECKS:-2}" ]; then
+        (cmd_send "$id" "The independent check found a problem: $why Do not merge. Fix it, then write the link to ~/fraim/goals/$id/ready-to-merge again and end your turn.") >/dev/null 2>>"$dir/log.txt" && return 0
+      fi
+      note="it found a problem: $why" ;;
+    *) note="it could not run, so nothing was merged" ;;
+  esac
+  printf '%s\n' "$note" > "$dir/check-note"
+  return 1
+}
+
 # A turn ended: its last words are the result. The first result goes to the queue.
 report_done() {
   local id="$1" dir="$2" chat="$3" text reason qid review="" summary
@@ -345,6 +406,7 @@ report_done() {
     fail_goal "$id" "$dir" "$chat" "$reason"
     return 1
   fi
+  ! check_change "$id" "$dir" || return 0
   printf '%s\n' "$text" > "$dir/result.md"
   printf 'done %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$dir/state"
   if [ ! -f "$dir/queued" ]; then

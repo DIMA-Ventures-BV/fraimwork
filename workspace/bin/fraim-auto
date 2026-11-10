@@ -628,6 +628,24 @@ ask_review() {
     --switch-on "$name" --source "automation $name" --quiet >/dev/null 2>&1 || true
 }
 
+# A wake-up that waits for a running lead keeps its hop count (FRAIM_LEAD_DEPTH). Without it
+# the run that follows has the count of the run before, and leads that overlap never reach
+# the limit.
+digits_or_zero() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+keep_depth() {
+  local depth kept
+  depth="$(digits_or_zero "${FRAIM_LEAD_DEPTH:-}")"
+  kept="$(digits_or_zero "$(cat "$state_root/$1/queued.depth" 2>/dev/null)")"
+  [ "$depth" -le "$kept" ] || printf '%s\n' "$depth" > "$state_root/$1/queued.depth"
+}
+queued_depth() {
+  local own kept
+  own="$(digits_or_zero "${FRAIM_LEAD_DEPTH:-}")"
+  kept="$(digits_or_zero "$(cat "$state_root/$1/queued.depth" 2>/dev/null)")"
+  rm -f "$state_root/$1/queued.depth"
+  if [ "$kept" -gt "$own" ]; then echo "$kept"; else echo "$own"; fi
+}
+
 cmd_run() {
   local name="$1" trigger="$2" input="$3" dry="$4" auto="${5:-0}" f lock
   f="$(auto_file "$name")" || exit $?
@@ -645,6 +663,8 @@ cmd_run() {
       # Trigger input waits apart from manual input, so it keeps its origin (FRAIM_POLL_RUN).
       local qfile="$state_root/$name/queued"
       [ "${FRAIM_POLL_RUN:-}" != 1 ] || qfile="$state_root/$name/queued.poll"
+      # Before the input, so the run that picks the input up always finds the count.
+      keep_depth "$name"
       [ -z "$input" ] || printf '%s\n' "$input" >> "$qfile"
       [ -f "$qfile" ] || : > "$qfile"
       echo "Automation $name is running; it runs once more when this run ends."
@@ -668,7 +688,7 @@ cmd_run() {
     else
       input="$(cat "$state_root/$name/queued")"
       rm -f "$state_root/$name/queued"
-      FRAIM_POLL_RUN=0 run_once "$name" "$trigger" "$input" 0
+      FRAIM_POLL_RUN=0 FRAIM_LEAD_DEPTH="$(queued_depth "$name")" run_once "$name" "$trigger" "$input" 0
     fi
   done
   prune_runs "$autos/$name/runs"
