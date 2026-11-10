@@ -109,6 +109,39 @@ EOF
   /usr/local/sbin/fraim-isolation
 }
 
+# The updater runs on the host, outside every container, so no agent can reach it. A new
+# release replaces it through this same step.
+install_updater() {
+  install -m 0755 bin/fraim-updater /usr/local/sbin/fraim-updater
+  install -d -m 0755 /etc/fraim /var/lib/fraim/updates
+  install -m 0644 config/release-signers /etc/fraim/release-signers
+  cat > /etc/systemd/system/fraim-updater.service <<'EOF'
+[Unit]
+Description=fraimwork: install new releases
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fraim-updater run
+TimeoutStartSec=2h
+EOF
+  cat > /etc/systemd/system/fraim-updater.timer <<'EOF'
+[Unit]
+Description=fraimwork: look for new releases every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=15m
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now fraim-updater.timer >/dev/null 2>&1 || warn "could not start the update timer"
+}
+
 [ "$(id -u)" = 0 ] || die "run as root"
 
 if [ "${1:-}" != --lock-public-ssh ] && [ "${1:-}" != --space ] && [ -d .update-lock ] && [ "${FRAIM_LOCK_HELD:-}" != 1 ]; then
@@ -159,7 +192,7 @@ say "Generating secrets"
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 # Wait for Ubuntu's own apt runs (unattended-upgrades, apt-daily) instead of failing.
 apt_wait() { apt-get -o DPkg::Lock::Timeout=900 "$@"; }
-base_packages=(ca-certificates curl openssl jq ufw unattended-upgrades)
+base_packages=(ca-certificates curl openssl jq rsync ufw unattended-upgrades)
 if dpkg -s "${base_packages[@]}" >/dev/null 2>&1; then
   say "System packages already installed"
 else
@@ -300,6 +333,9 @@ for space_env in .env.space-*; do
   fi
   ( start_space "$space_name" ) || { warn "space $space_name did not start; see the lines above"; failed_spaces="$failed_spaces $space_name"; }
 done
+
+say "Installing the updater"
+install_updater
 
 say "Isolating spaces from each other's published ports"
 isolate_spaces || warn "could not add the firewall rules that keep spaces apart; spaces still have separate networks"

@@ -42,6 +42,39 @@ case "$path" in
   *) usage "PATH must start with /, e.g. fraim-api $name /v1/models" ;;
 esac
 
+# Runs may hold a rule for this command, so only options for one request to this API pass:
+# nothing that writes a file, reads a config, follows a redirect or names another address.
+body_ok() {
+  case "$1" in
+    @*) ;;
+    *) return 0 ;;
+  esac
+  local file="${1#@}"
+  case "$file" in
+    */../*|../*|*/..) return 1 ;;
+    "$HOME"/fraim/*|/tmp/*) return 0 ;;
+    /*) return 1 ;;
+  esac
+}
+args=("$@")
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X|--request|--max-time|-m)
+      [ $# -ge 2 ] || usage "$1 needs a value"; shift 2 ;;
+    -H|--header)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      case "$2" in @*) usage "a header cannot come from a file" ;; esac
+      shift 2 ;;
+    -d|--data|--data-raw|--data-binary|--data-urlencode|--json)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      body_ok "$2" || usage "a request body must be in this folder, ~/fraim or /tmp"
+      shift 2 ;;
+    -X?*|-G|--get|-i|--include|-s|-S|-sS|-Ss|--silent|--show-error|-f|--fail) shift ;;
+    *) usage "fraim-api does not allow '$1'; see fraim-api --help" ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+
 line="$(printf '%s\n' "$services" | awk -v n="$name" '$1 == n')"
 [ -n "$line" ] || die "no service '$name'. Ask the owner to add it from the laptop: fraim secret add $name --upstream https://HOST, then fraim secret set $name"
 header="$(printf '%s' "$line" | awk '{print $2}')"

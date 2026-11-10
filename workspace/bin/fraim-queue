@@ -417,6 +417,19 @@ export function decide(id, verdict, note = '', via = 'cli', editedText = undefin
 // (qN approved by the owner in the last 14 days) is approved at once: what was built for that
 // yes starts without a second question, and the owner hears that it runs.
 const GRANT_DAYS = 14
+// A yes covers the work that follows from it, so a run nobody watches may only spend its own:
+// a goal the yes it was started from, the engineer what it built for one. Nothing else.
+function grantAllowedForCaller(item, grantId) {
+  if (process.env.FRAIM_HEADLESS !== '1') return
+  const goal = process.env.FRAIM_GOAL
+  if (goal) {
+    if (!/^g\d{1,6}$/.test(goal) || readText(path.join(GOALS, goal, 'queue'), 40).trim() !== grantId) throw new Error(`${grantId} is not the yes this task was started from; ask the owner in the queue instead`)
+    return
+  }
+  if (process.env.FRAIM_LEAD_ROLE !== 'engineer') throw new Error(`only the owner can use ${grantId} for this; ask the owner in the queue instead`)
+  if (item.on_approve) throw new Error(`a new task needs its own yes; ask the owner in the queue instead`)
+}
+
 export function approvedByGrant(item, grantId) {
   if (!/^q\d{1,6}$/.test(grantId || '')) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
   const grant = readItem(grantId)
@@ -425,6 +438,7 @@ export function approvedByGrant(item, grantId) {
   if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
   if (grant.brain || grant.skill) throw new Error(`${grantId} approved a brain change; ask the owner in the queue instead`)
   if (grant.reply) throw new Error(`${grantId} approved one message to one person; ask the owner in the queue instead`)
+  grantAllowedForCaller(item, grantId)
   const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
   if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
   item.approved_by = grantId
@@ -562,7 +576,8 @@ const AUTO_STATE = process.env.FRAIM_AUTO_STATE_DIR || path.join(HOME, '.local/s
 const LEADS = process.env.FRAIM_LEADS_DIR || path.join(HOME, 'fraim/leads')
 
 function isChief(lead) {
-  return /^role:\s*chief/m.test(readText(path.join(LEADS, lead, 'lead.md'), 2000))
+  const res = spawnSync(tool('fraim-authority'), ['role-of', lead], { encoding: 'utf8', timeout: 10000, env: { ...process.env, FRAIM_LEADS_DIR: LEADS } })
+  return res.status === 0 && res.stdout.trim() === 'chief'
 }
 
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
@@ -635,7 +650,7 @@ export function team() {
     const when = h.schedule ? `schedule ${h.schedule}` : h.every ? `every ${h.every}` : h.trigger ? h.trigger : 'by hand'
     const base = { name, title: displayName(h.lead || name), when, description: (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''), off: /^(false|no|off|0)$/i.test(h.enabled || ''), ...lastStatus(name) }
     if (!h.lead) { automations.push(base); continue }
-    const role = /^role:\s*chief/m.test(readText(path.join(LEADS, h.lead, 'lead.md'), 2000)) ? 'chief' : 'lead'
+    const role = isChief(h.lead) ? 'chief' : 'lead'
     leads.push({ ...base, lead: h.lead, role })
     if (role === 'chief') chief = { name: h.lead, title: displayName(h.lead), schedule: h.schedule || '', ...(latestRun(path.join(LEADS, h.lead, 'runs')) || {}) }
   }

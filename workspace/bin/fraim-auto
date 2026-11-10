@@ -335,13 +335,7 @@ record_failure() {
 # else. With an engineer lead, the engineer gets the failure at once and fixes it; the item only
 # informs. Without one, approving it starts a goal that finds the cause and fixes the
 # automation. A login or a usage limit is not something an agent can fix, so those only inform.
-the_engineer() {
-  local f
-  for f in "$leads_dir"/*/lead.md; do
-    grep -q '^role: engineer' "$f" 2>/dev/null && { basename "$(dirname "$f")"; return 0; }
-  done
-  return 1
-}
+the_engineer() { FRAIM_LEADS_DIR="$leads_dir" fraim-authority role engineer 2>/dev/null; }
 failure_to_queue() {
   local name="$1" reason="$2" run_rel="$3" fix=() eng="" lead
   command -v fraim-queue >/dev/null || return 0
@@ -928,8 +922,10 @@ cmd_new() {
 lead_automation() {
   local name="$1" cron="$2" what
   what="$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front && /^## Area/ { getline; print; exit }' "$leads_dir/$name/lead.md" | cut -c1-100)"
-  grep -q '^role: chief' "$leads_dir/$name/lead.md" && what="chief of staff: ranks the queue and sends the daily digest"
-  grep -q '^role: engineer' "$leads_dir/$name/lead.md" && what="engineer: builds and fixes automations, leads, plugins and skills"
+  case "$(FRAIM_LEADS_DIR="$leads_dir" fraim-authority role-of "$name" 2>/dev/null)" in
+    chief) what="chief of staff: ranks the queue and sends the daily digest" ;;
+    engineer) what="engineer: builds and fixes automations, leads, plugins and skills" ;;
+  esac
   mkdir -p "$autos/$name"
   printf -- '---\ndescription: Lead %s: %s\nschedule: "%s"\nlead: %s\ntimeout: 40m\noutput: none\n---\nThe lead brief is ~/fraim/leads/%s/lead.md. This automation only sets when the lead runs.\n' \
     "$name" "${what:-see its brief}" "$cron" "$name" "$name" > "$autos/$name/automation.md"

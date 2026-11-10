@@ -56,22 +56,10 @@ lead_dir() {
   [ -f "$leads/$1/lead.md" ] || die "no lead $1; create it with: fraim-lead new $1"
   printf '%s' "$leads/$1"
 }
-is_chief() { grep -q '^role: chief' "$1/lead.md" 2>/dev/null; }
-is_engineer() { grep -q '^role: engineer' "$1/lead.md" 2>/dev/null; }
-the_engineer() {
-  local f
-  for f in "$leads"/*/lead.md; do
-    grep -q '^role: engineer' "$f" 2>/dev/null && { basename "$(dirname "$f")"; return 0; }
-  done
-  return 1
-}
-the_chief() {
-  local f
-  for f in "$leads"/*/lead.md; do
-    grep -q '^role: chief' "$f" 2>/dev/null && { basename "$(dirname "$f")"; return 0; }
-  done
-  return 1
-}
+is_chief() { [ "$(fraim-authority role-of "$(basename "$1")" 2>/dev/null)" = chief ]; }
+is_engineer() { [ "$(fraim-authority role-of "$(basename "$1")" 2>/dev/null)" = engineer ]; }
+the_engineer() { fraim-authority role engineer 2>/dev/null; }
+the_chief() { fraim-authority role chief 2>/dev/null; }
 # The name the owner gave an agent: the display: line at the top of its lead.md.
 lead_display() {
   awk 'NR == 1 && /^---$/ { f = 1; next } f && /^---$/ { exit } f && sub(/^display:[[:space:]]*/, "") { print; exit }' "$1" 2>/dev/null
@@ -132,10 +120,12 @@ cmd_new() {
   done
   valid_name "$name" || usage "'$name' is not a lead name (lowercase letters, digits and -)"
   [ "$chief$engineer" != 11 ] || usage "a lead is the chief or the engineer, not both"
+  if [ "${FRAIM_HEADLESS:-}" = 1 ] && [ "$chief$engineer" != 00 ]; then die "only the owner makes a chief or an engineer"; fi
   [ "${FRAIM_LEAD_ROLE:-}" != engineer ] || off=1
   [ ! -e "$leads/$name" ] || die "lead $name already exists: $leads/$name"
   [ ! -e "$autos/$name" ] || die "an automation is already called $name; pick another name"
   if [ "$engineer" = 1 ] && role="$(the_engineer)"; then die "lead $role is already the engineer"; fi
+  if [ "$chief" = 1 ] && role="$(the_chief)"; then die "lead $role is already the chief"; fi
   if [ "$chief" = 1 ]; then at="${at:-30 7 * * *}"; budget="${budget:-2}"
   elif [ "$engineer" = 1 ]; then at="${at:-0 6 * * 1}"; budget="${budget:-99}"
   else at="${at:-0 7 * * 1-5}"; budget="${budget:-3}"; fi
@@ -147,6 +137,8 @@ cmd_new() {
   if [ "$chief" = 1 ]; then fraim-prompt render brief-chief > "$leads/$name/lead.md"
   elif [ "$engineer" = 1 ]; then fraim-prompt render brief-engineer > "$leads/$name/lead.md"
   else fraim-prompt render brief-lead --set "name=$name" --set "area=$area" > "$leads/$name/lead.md"; fi
+  if [ "$chief" = 1 ]; then fraim-authority set-role chief "$name" || die "could not record the chief"; fi
+  if [ "$engineer" = 1 ]; then fraim-authority set-role engineer "$name" || die "could not record the engineer"; fi
   # Paused before its schedule exists, so it cannot run before the owner switches it on.
   [ "$off" = 0 ] || touch "$leads/$name/paused"
   printf '# Notes of lead %s\n\nNothing yet.\n' "$name" > "$leads/$name/state.md"
@@ -384,6 +376,7 @@ cmd_run() {
   [ ! -d "$(code_dir)" ] || dirs=(--add-dir "$(code_dir)")
   # What the engineer creates starts switched off (fraim-auto new and fraim-lead new read it).
   if is_engineer "$dir"; then export FRAIM_LEAD_ROLE=engineer; else unset FRAIM_LEAD_ROLE; fi
+  export FRAIM_LEAD_NAME="$name"
   # stream-json writes each step as it happens, so the queue page shows what the run does now
   # (.running/live.jsonl). The answer is the last "result" line; plain text is kept as it is.
   local live="$dir/.running/live.jsonl"
@@ -572,6 +565,12 @@ cmd_tell() {
   done
   text="$*"
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "tell $name needs a text"
+  # A run nobody watches writes under its own name, never as the owner or another agent.
+  if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
+    if [ -n "${FRAIM_LEAD_NAME:-}" ]; then from="$FRAIM_LEAD_NAME"
+    elif [ -n "${FRAIM_GOAL:-}" ]; then from="$FRAIM_GOAL"
+    elif [ "$from" = owner ]; then from=agent; fi
+  fi
   dir="$(lead_dir "$name")" || exit $?
   # A note about a conversation lands in the chat the owner reads and carries its id to the receiver.
   if printf '%s' "$thread" | grep -Eq '^t[0-9]{1,6}$'; then

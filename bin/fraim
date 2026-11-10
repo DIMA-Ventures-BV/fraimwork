@@ -1203,6 +1203,24 @@ cmd_update() {
   die "update to $target failed AND the rollback to $current did not pass health checks. Run 'fraim support-bundle' and send it to the fraimwork maintainer."
 }
 
+# The server installs releases by itself (bin/fraim-updater); this looks at it and steers it.
+cmd_autoupdate() {
+  load_config
+  [ "$FRAIM_ACCESS" != local ] || usage "auto-update is for servers; locally, use fraim update"
+  local action="${1:-status}" key value
+  case "$action" in
+    status) admin "/usr/local/sbin/fraim-updater status --json" ;;
+    now) ADMIN_TIMEOUT=3600 admin "/usr/local/sbin/fraim-updater run --now" ;;
+    on|off|canary|stable)
+      key=AUTO_UPDATE; value="$action"
+      case "$action" in canary|stable) key=UPDATE_RING ;; esac
+      admin "if grep -q '^$key=' .env; then sed -i 's|^$key=.*|$key=$value|' .env; else echo '$key=$value' >> .env; fi"
+      say "Auto-update: $key is now $value."
+      ;;
+    *) usage "fraim autoupdate [status|on|off|canary|stable|now]" ;;
+  esac
+}
+
 cmd_login() {
   parse_flags "$@"
   load_config
@@ -3088,6 +3106,7 @@ Operate
                                              lead agents that watch an area; the chief routes work, the engineer builds
   fraim brain [show | note "TEXT" | why rN | forget rN | undo | history | stats | distill | skills]
                                              preferences and skills learned from reviews
+  fraim autoupdate [status|on|off|canary|stable|now]   the server installs new releases by itself
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
   fraim whatsapp status|link [--number N]|relink|test|check
   fraim browser [--print-url] | stop         server browser view URL and VNC password
@@ -3160,7 +3179,7 @@ main() {
   done
   # These act on the whole server (every space at once).
   case "$cmd" in
-    init|deploy|update|use|lock|tailscale|support-bundle)
+    init|deploy|update|autoupdate|use|lock|tailscale|support-bundle)
       [ "$FRAIM_SPACE" = main ] || usage "fraim $cmd works on the whole server (every space); leave out --space"
       ;;
   esac
@@ -3169,6 +3188,7 @@ main() {
     local) cmd_local "$@" ;;
     deploy) cmd_deploy "$@" ;;
     update) cmd_update "$@" ;;
+    autoupdate) cmd_autoupdate "$@" ;;
     use)
       case "${1:-}" in
         local) set_current local ;;

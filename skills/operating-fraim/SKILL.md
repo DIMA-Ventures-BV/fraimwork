@@ -124,7 +124,9 @@ First check the simple causes: the Mac's Tailscale icon says Connected; the serv
 
 ## Updating
 
-Triggers: the user says "a fraimwork update is available" (the server sends this on WhatsApp once a week), "update fraim", or you see it yourself with `$F exec -- fraim-version-check` (exit 10 = an update exists, 0 = up to date, 3 = could not check: tell the user "I could not check for updates", never "up to date").
+Servers install new releases by themselves at night, check their health and go back if something breaks. `$F autoupdate status` shows the version, ring and last result. `$F autoupdate now` installs the newest release at once. `$F autoupdate off` stops automatic updates; only do that when the user asks. A server on a hand-deployed build shows `dev-build` and is left alone until `$F autoupdate now`.
+
+Manual path. Triggers: the user says "a fraimwork update is available" (the server sends this on WhatsApp once a week), "update fraim", or you see it yourself with `$F exec -- fraim-version-check` (exit 10 = an update exists, 0 = up to date, 3 = could not check: tell the user "I could not check for updates", never "up to date").
 1. Tell the user: "Updating fraim, this takes a few minutes. Your files stay."
 2. `$F update` in the background (`--to vX.Y.Z` for a given version). On a server it reinstalls, so allow several minutes. It prints stage lines and a summary; the full log path is on its "Full log:" line. On failure, read the 15 lines it prints first.
 3. Exit 0: report the new version and run `$F status --json`.

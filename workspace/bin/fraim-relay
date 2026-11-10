@@ -44,14 +44,7 @@ die() { echo "fraim-relay: $*" >&2; exit 1; }
 # answer is silent when its last non-empty line is SILENT, with or without brackets or stars.
 is_silent() { [ "$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -1 | tr -d '[:space:][]*`.:')" = SILENT ]; }
 
-the_chief() {
-  local f
-  for f in "$leads"/*/lead.md; do
-    [ -f "$f" ] || continue
-    grep -q '^role: chief' "$f" && { basename "$(dirname "$f")"; return 0; }
-  done
-  return 1
-}
+the_chief() { FRAIM_LEADS_DIR="$leads" fraim-authority role chief 2>/dev/null; }
 
 cmd_on() {
   [ "${FRAIM_RELAY:-on}" != off ] || return 1

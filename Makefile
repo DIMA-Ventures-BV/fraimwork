@@ -1,4 +1,4 @@
-.PHONY: check check-linux lint test test-unit test-node e2e e2e-spaces test-secrets
+.PHONY: check check-linux lint test test-unit test-node e2e e2e-spaces e2e-update test-secrets
 
 # What CI runs: everything that needs no Docker daemon or server. About 1 minute.
 check: lint test
@@ -28,6 +28,10 @@ e2e:
 # Two spaces on a local stack: separation, policy, previews, MCP, hosts, GitHub. About 5 minutes.
 e2e-spaces:
 	tests/e2e-spaces.sh
+
+# Self-updating on a real Ubuntu VM: update, rollback, tampered release, crash recovery. About 40 minutes.
+e2e-update:
+	tests/e2e-update.sh
 
 # The secrets proxy in Docker, with a fake API. About 1 minute.
 test-secrets:

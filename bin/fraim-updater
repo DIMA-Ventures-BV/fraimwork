@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# Runs on the server as root, outside every container (install.sh installs it as
+# /usr/local/sbin/fraim-updater with an hourly timer), so no agent can reach it.
+# Installs signed fraimwork releases by itself, checks health and rolls back on failure.
+#
+#   fraim-updater check              up-to-date | available vX.Y.Z | held vX.Y.Z | dev-build | off
+#   fraim-updater run                what the timer calls: updates inside the night window
+#   fraim-updater run --now          the newest release at once, even with auto-update off
+#   fraim-updater run --to vX.Y.Z    this release, also an older one
+#   fraim-updater status --json
+#
+# .env settings: AUTO_UPDATE (on, off), UPDATE_RING (stable waits 24 hours, canary does not),
+# UPDATE_WINDOW (default 3-5: from 03:00 until 05:00 local time).
+# A server on a hand-deployed build is never overwritten without --now or --to.
+# Exit codes: 0 ok or nothing to do, 1 failure, 2 usage, 3 could not check.
+set -uo pipefail
+
+DIR="${FRAIM_UPDATER_DIR:-/opt/fraimwork}"
+STATE="${FRAIM_UPDATER_STATE:-/var/lib/fraim/updates}"
+SIGNERS="${FRAIM_UPDATER_SIGNERS:-/etc/fraim/release-signers}"
+HOLD_HOURS="${FRAIM_UPDATER_HOLD_HOURS:-24}"
+SETTLE="${FRAIM_UPDATER_SETTLE:-10}"
+TRIES="${FRAIM_UPDATER_TRIES:-36}"
+POLL="${FRAIM_UPDATER_POLL:-5}"
+MAX_DEFERRED=3
+SIGNER=fraim-release
+LOCK="$DIR/.update-lock"
+
+usage() { echo "fraim-updater: $*" >&2; exit 2; }
+log() { mkdir -p "$STATE"; printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$STATE/updater.log"; }
+
+env_get() { grep -E "^$1=" "${2:-$DIR/.env}" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+env_set() {
+  local tmp
+  tmp="$(mktemp)" || return 1
+  awk -v k="$1" -v v="$2" 'BEGIN { p = k "=" } index($0, p) == 1 { if (!d) print p v; d = 1; next } { print } END { if (!d) print p v }' "$DIR/.env" > "$tmp" \
+    && cat "$tmp" > "$DIR/.env"
+  rm -f "$tmp"
+}
+
+is_release() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
+now() { echo "${FRAIM_UPDATER_NOW:-$(date +%s)}"; }
+hour() { echo "${FRAIM_UPDATER_HOUR:-$(date +%-H)}"; }
+auto() { local a; a="$(env_get AUTO_UPDATE)"; echo "${a:-on}"; }
+ring() { local r; r="$(env_get UPDATE_RING)"; echo "${r:-stable}"; }
+window() { local w; w="$(env_get UPDATE_WINDOW)"; echo "${w:-3-5}"; }
+current() { env_get FRAIM_VERSION; }
+repo() { local r; r="$(env_get FRAIM_RELEASES_REPO)"; echo "${r:-DIMA-Ventures-BV/fraimwork}"; }
+is_bad() { grep -qxF "$1" "$STATE/bad" 2>/dev/null; }
+
+in_window() {
+  local w start end h
+  w="$(window)"; h="$(hour)"
+  start="${w%-*}"; end="${w#*-}"
+  if [ "$start" -le "$end" ]; then [ "$h" -ge "$start" ] && [ "$h" -lt "$end" ]
+  else [ "$h" -ge "$start" ] || [ "$h" -lt "$end" ]; fi
+}
+
+# Newest usable release as "TAG EPOCH", empty when there is none. Exit 3: could not check.
+newest_release() {
+  local json line tag best=""
+  json="$(curl -fsS --max-time 30 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$(repo)/releases?per_page=30")" || return 3
+  line="$(jq -r '.[] | select((.draft | not) and (.prerelease | not)) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | "\(.tag_name) \(.published_at | fromdateiso8601)"' <<<"$json")" || return 3
+  while read -r tag _; do
+    [ -n "$tag" ] || continue
+    is_bad "$tag" && continue
+    if [ -z "$best" ] || newer "$tag" "$best"; then best="$tag"; fi
+  done <<<"$line"
+  [ -z "$best" ] || grep -m1 "^$best " <<<"$line"
+}
+
+# Sets TARGET and prints the decision for a scheduled update.
+decide() {
+  local cur rel at
+  TARGET=""
+  if [ "$(auto)" = off ]; then echo off; return 0; fi
+  cur="$(current)"
+  # "-dirty": a release tag with uncommitted changes on top is a hand-deployed build too.
+  if ! is_release "$cur" || [[ "$(env_get FRAIM_COMMIT)" == *-dirty ]]; then echo dev-build; return 0; fi
+  rel="$(newest_release)" || return 3
+  read -r TARGET at <<<"$rel"
+  if [ -z "$TARGET" ] || ! newer "$TARGET" "$cur"; then TARGET=""; echo up-to-date; return 0; fi
+  if [ "$(ring)" != canary ] && [ "$(( $(now) - at ))" -lt "$(( HOLD_HOURS * 3600 ))" ]; then echo "held $TARGET"; return 0; fi
+  echo "available $TARGET"
+}
+
+# The compose command of one space, run from the install dir.
+in_space() {
+  local space="$1"; shift
+  (
+    cd "$DIR" || exit 1
+    if [ "$space" = main ]; then docker compose exec -T -u claude workspace "$@"
+    else docker compose -p "fraimwork-$space" --env-file ".env.space-$space" exec -T -u claude workspace "$@"; fi
+  )
+}
+spaces() {
+  local f name
+  echo main
+  for f in "$DIR"/.env.space-*; do
+    [ -f "$f" ] || continue
+    name="${f##*/.env.space-}"
+    [[ "$name" =~ ^[a-z][a-z0-9-]{0,15}$ ]] || continue
+    [ "$(env_get STOPPED "$f")" = 1 ] || echo "$name"
+  done
+}
+
+tell_owner() {
+  log "owner: $1"
+  in_space main env FRAIM_NOTIFY_NO_ALERT="${2:-}" fraim-notify "$1" >/dev/null 2>&1 || true
+}
+
+# One sorted name per failing check. Other spaces carry their name: "work:queue-page".
+failing_checks() {
+  local s json prefix
+  for s in $(spaces); do
+    prefix=""; [ "$s" = main ] || prefix="$s:"
+    json="$(in_space "$s" fraim-doctor --json 2>/dev/null || true)"
+    if ! jq -e .checks >/dev/null 2>&1 <<<"$json"; then echo "${prefix}workspace-unreachable"; continue; fi
+    # Memory is tight right after a rebuild on a small server; that is no reason to roll back.
+    jq -r '.checks[] | select(.ok | not) | .name | select(. != "memory-headroom")' <<<"$json" | sed "s/^/$prefix/"
+  done | sort
+}
+
+healthy_after() {
+  local before="$1" tries=0 now_failing regressions
+  sleep "$SETTLE"
+  while :; do
+    now_failing="$(failing_checks)"
+    if grep -q 'workspace-unreachable$' <<<"$before"; then
+      regressions="$(grep -E '(^|:)(workspace-unreachable|claude-session-running)$' <<<"$now_failing" || true)"
+    else
+      regressions="$(comm -13 <(grep . <<<"$before" | sort) <(grep . <<<"$now_failing" | sort))"
+    fi
+    [ -n "$regressions" ] || return 0
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$TRIES" ]; then log "new failing checks: $(paste -sd, <<<"$regressions")"; return 1; fi
+    sleep "$POLL"
+  done
+}
+
+copy_code() {
+  rsync -a --delete --filter 'P /config/authorized_keys' \
+    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' \
+    --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked "$@"
+}
+
+snapshot() {
+  rm -rf "$STATE/previous"
+  mkdir -p "$STATE/previous"
+  copy_code --exclude /config/authorized_keys "$DIR/" "$STATE/previous/" || return 1
+  printf 'FRAIM_VERSION=%s\nFRAIM_COMMIT=%s\n' "$(current)" "$(env_get FRAIM_COMMIT)" > "$STATE/previous.version"
+}
+
+run_install() { ( cd "$DIR" && FRAIM_LOCK_HELD=1 ./install.sh ) >> "$STATE/install.log" 2>&1; }
+
+mark_bad() { is_bad "$1" || echo "$1" >> "$STATE/bad"; }
+result() { printf '%s\n' "$*" > "$STATE/last-result"; }
+
+roll_back() {
+  local tag="$1"
+  mark_bad "$tag"
+  copy_code "$STATE/previous/" "$DIR/"
+  env_set FRAIM_VERSION "$(env_get FRAIM_VERSION "$STATE/previous.version")"
+  env_set FRAIM_COMMIT "$(env_get FRAIM_COMMIT "$STATE/previous.version")"
+  if run_install; then
+    rm -rf "$LOCK"
+    result "rolled back from $tag to $(current)"
+    tell_owner "The fraimwork update to $tag did not work, so your server went back to $(current). Nothing is lost."
+    return 0
+  fi
+  rm -rf "$LOCK"
+  result "rollback from $tag failed"
+  tell_owner "The fraimwork update to $tag failed and going back did not work either. Ask Claude on your laptop to fix fraim."
+  return 1
+}
+
+# Downloads, verifies and unpacks a release into $STATE/new. Exit 3: download failed, try later.
+fetch() {
+  local tag="$1" tar="$STATE/fraimwork-$1.tar.gz" base
+  base="https://github.com/$(repo)/releases/download/$tag/fraimwork-$tag.tar.gz"
+  rm -f "$tar" "$tar.sig"
+  curl -fsSL --max-time 900 -o "$tar.part" "$base" && curl -fsSL --max-time 60 -o "$tar.sig.part" "$base.sig" || { rm -f "$tar.part" "$tar.sig.part"; return 3; }
+  mv "$tar.part" "$tar"; mv "$tar.sig.part" "$tar.sig"
+  if ! ssh-keygen -q -Y verify -f "$SIGNERS" -I "$SIGNER" -n "$SIGNER" -s "$tar.sig" < "$tar" >/dev/null 2>&1; then
+    refuse "$tag" "its signature is not valid"; return 1
+  fi
+  rm -rf "$STATE/new"; mkdir -p "$STATE/new"
+  tar -xzf "$tar" -C "$STATE/new" || { refuse "$tag" "it could not be unpacked"; return 1; }
+  if [ "$(env_get version "$STATE/new/RELEASE")" != "$tag" ]; then refuse "$tag" "it is not the release it claims to be"; return 1; fi
+}
+
+refuse() {
+  log "refused $1: $2"
+  if ! grep -qxF "$1" "$STATE/refused" 2>/dev/null; then
+    echo "$1" >> "$STATE/refused"
+    tell_owner "Your server refused fraimwork update $1 because $2. Nothing changed. Tell the fraimwork maintainer."
+  fi
+}
+
+# Goals restart with the containers, so wait for them. Once per night, at most MAX_DEFERRED nights.
+deferred_for_goals() {
+  local tag="$1" s busy="" n=0 day="" t="" today
+  for s in $(spaces); do
+    if in_space "$s" fraim-goal list 2>/dev/null | grep -Eq '^g[0-9]+ +running'; then busy=1; fi
+  done
+  if [ -z "$busy" ]; then return 1; fi
+  today="$(date +%F)"
+  [ ! -f "$STATE/deferred" ] || read -r n day t < "$STATE/deferred"
+  if [ "$t" != "$tag" ]; then n=0; day=""; fi
+  if [ "$n" -ge "$MAX_DEFERRED" ]; then return 1; fi
+  if [ "$day" != "$today" ]; then echo "$((n + 1)) $today $tag" > "$STATE/deferred"; fi
+  log "waiting for running goals before installing $tag"
+  return 0
+}
+
+apply() {
+  local tag="$1" before from commit
+  from="$(env_get FRAIM_COMMIT)"
+  commit="$(env_get commit "$STATE/new/RELEASE")"
+  before="$(failing_checks)"
+  snapshot || { log "could not save the current code"; return 1; }
+  if ! mkdir "$LOCK" 2>/dev/null; then log "another update started"; return 0; fi
+  printf 'started=%s from=%s to=%s by=fraim-updater tag=%s\n' "$(date -u +%FT%TZ)" "$from" "$commit" "$tag" > "$LOCK/info"
+  log "installing $tag"
+  if copy_code "$STATE/new/" "$DIR/"; then
+    env_set FRAIM_VERSION "$tag"
+    env_set FRAIM_COMMIT "$commit"
+    if run_install && healthy_after "$before"; then
+      rm -rf "$LOCK"
+      rm -f "$STATE/deferred" "$STATE"/fraimwork-*.tar.gz "$STATE"/fraimwork-*.tar.gz.sig
+      rm -rf "$STATE/new"
+      result "updated to $tag"
+      tell_owner "Fraimwork is updated to $tag. No new problems after the update." 1
+      docker image prune -f >/dev/null 2>&1 || true
+      docker builder prune -f --filter until=168h >/dev/null 2>&1 || true
+      return 0
+    fi
+  fi
+  log "update to $tag failed"
+  roll_back "$tag" || true
+  return 1
+}
+
+# An update that was cut off (reboot, power) left the marker and nobody is running it.
+recover_if_needed() {
+  [ -e "$LOCK" ] || return 1
+  local info tag
+  info="$(cat "$LOCK/info" 2>/dev/null)"
+  case "$info" in *by=fraim-updater*) ;; *) return 0 ;; esac
+  tag="$(sed -n 's/.*tag=\([^ ]*\).*/\1/p' <<<"$info")"
+  log "recovering from an unfinished update to $tag"
+  if [ -d "$STATE/previous" ] && [ -f "$STATE/previous.version" ]; then
+    roll_back "$tag" || true
+  else
+    rm -rf "$LOCK"
+  fi
+  return 0
+}
+
+cmd_check() {
+  local out code
+  mkdir -p "$STATE"
+  out="$(decide)"; code=$?
+  [ "$code" -eq 0 ] || { echo "could not check for releases" >&2; exit "$code"; }
+  echo "$out"
+}
+
+cmd_status() {
+  [ "${1:-}" = --json ] || usage "status --json"
+  mkdir -p "$STATE"
+  local rel latest="" at
+  if rel="$(newest_release)"; then read -r latest at <<<"$rel"; fi
+  jq -n --arg current "$(current)" --arg commit "$(env_get FRAIM_COMMIT)" --arg auto "$(auto)" --arg ring "$(ring)" \
+    --arg window "$(window)" --arg latest "$latest" --arg last "$(cat "$STATE/last-result" 2>/dev/null)" \
+    --arg bad "$(paste -sd, "$STATE/bad" 2>/dev/null)" \
+    '{current: $current, commit: $commit, auto: $auto, ring: $ring, window: $window, latest: $latest, last_result: $last, bad: ($bad | split(",") | map(select(length > 0)))}'
+}
+
+cmd_run() {
+  local now_flag="" to="" out code rel at
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --now) now_flag=1; shift ;;
+      --to) to="${2:-}"; is_release "$to" || usage "--to needs a version like v1.2.3"; shift 2 ;;
+      *) usage "unknown option $1" ;;
+    esac
+  done
+  mkdir -p "$STATE"
+  exec 9>"$STATE/lock"
+  flock -n 9 || exit 0
+  if recover_if_needed; then exit 0; fi
+
+  TARGET=""
+  if [ -n "$to" ]; then TARGET="$to"
+  elif [ -n "$now_flag" ]; then
+    rel="$(newest_release)" || exit 3
+    read -r TARGET at <<<"$rel"
+    if is_release "$(current)" && { [ -z "$TARGET" ] || ! newer "$TARGET" "$(current)"; }; then echo "up to date"; exit 0; fi
+    [ -n "$TARGET" ] || { echo "no releases published yet"; exit 0; }
+  else
+    in_window || exit 0
+    out="$(decide)"; code=$?
+    [ "$code" -eq 0 ] || exit "$code"
+    case "$out" in available*) ;; *) log "$out"; exit 0 ;; esac
+    TARGET="${out#available }"
+  fi
+
+  fetch "$TARGET"; code=$?
+  [ "$code" -eq 0 ] || exit "$code"
+  if [ -z "$to$now_flag" ] && deferred_for_goals "$TARGET"; then exit 0; fi
+  apply "$TARGET"
+}
+
+case "${1:-}" in
+  check) shift; cmd_check "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  run) shift; cmd_run "$@" ;;
+  *) usage "check | run [--now | --to vX.Y.Z] | status --json" ;;
+esac

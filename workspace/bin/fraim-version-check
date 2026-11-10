@@ -20,7 +20,8 @@ if [ "$current" = "$latest" ] || [ "$(printf '%s\n%s\n' "$current" "$latest" | s
 fi
 
 echo "update available: $current -> $latest"
-if [ "${1:-}" = "--notify" ]; then
+# With auto-update on, the server installs it by itself (bin/fraim-updater): nothing to ask.
+if [ "${1:-}" = "--notify" ] && [ "${FRAIM_AUTO_UPDATE:-on}" = off ]; then
   state="$HOME/.local/state/fraim/version.notified"
   mkdir -p "$(dirname "$state")"
   if [ "$(cat "$state" 2>/dev/null)" != "$latest" ]; then

@@ -23,9 +23,17 @@ done
 settings="$home/.claude/settings.json"
 if [ -f "$settings" ] && [ ! -L "$settings" ] && jq -e . "$settings" >/dev/null 2>&1; then
   tmp="$(mktemp)"
-  # Goals, automations, the queue, leads, the brain and session commands run without a prompt, also in older homes.
-  jq 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
-        | reduce ("Bash(fraim-goal:*)", "Bash(fraim-auto:*)", "Bash(fraim-queue:*)", "Bash(fraim-lead:*)", "Bash(fraim-brain:*)", "Bash(fraim-style:*)", "Bash(fraim-sessions:*)", "Bash(fraim-herdr ls:*)", "mcp__whatsapp__session_command") as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
+  # This file also applies to runs with their own tool list, so with PERMISSIONS=all (nothing
+  # prompts anyway) it only grants what every run may do. PERMISSIONS=ask keeps the wide rules,
+  # so the fraim commands run without a prompt there.
+  wide='["Bash(fraim-goal:*)","Bash(fraim-auto:*)","Bash(fraim-queue:*)","Bash(fraim-lead:*)","Bash(fraim-brain:*)","Bash(fraim-sessions:*)"]'
+  narrow='["Bash(fraim-queue add:*)","Bash(fraim-queue list:*)","Bash(fraim-queue show:*)","Bash(fraim-goal list:*)","Bash(fraim-goal show:*)","Bash(fraim-lead list:*)","Bash(fraim-lead show:*)","Bash(fraim-auto list:*)","Bash(fraim-auto show:*)","Bash(fraim-brain show:*)","Bash(fraim-sessions list:*)"]'
+  common='["Bash(fraim-style:*)","Bash(fraim-herdr ls:*)","mcp__whatsapp__session_command"]'
+  if [ "${FRAIM_PERMISSIONS:-all}" = ask ]; then remove='[]'; add="$(jq -cn --argjson a "$wide" --argjson b "$common" '$a + $b')"
+  else remove="$wide"; add="$(jq -cn --argjson a "$narrow" --argjson b "$common" '$a + $b')"; fi
+  jq --argjson remove "$remove" --argjson add "$add" 'if .permissions.allow then .permissions.allow |= (map(select(. != "WebFetch"))
+        | map(. as $x | select($remove | index($x) | not))
+        | reduce $add[] as $r (.; if index($r) then . else . + [$r] end)) else . end' "$settings" > "$tmp" \
     && cat "$tmp" > "$settings"
   # fraim-claude skips permission prompts (PERMISSIONS=all); without this the always-on
   # session would stop at the "Bypass Permissions mode" warning screen at every start.
