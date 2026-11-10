@@ -5,10 +5,10 @@ import http from 'node:http'
 import path from 'node:path'
 import { createSettings } from './fraim-settings.mjs'
 import {
-  HOME, MEDIA_TYPES, UsageError, allItems, itemDir, now, promptText, rank, readItem, readText, readThread, runtimeEnv,
-  token, tool, usage, writeThread,
+  HOME, UsageError, allItems, now, promptText, rank, readText, readThread, runtimeEnv, mediaFile, token, tool, usage,
+  writeThread,
 } from './fraim-queue-store.mjs'
-import { createApi } from './fraim-queue-api.mjs'
+import { createApi, readJson } from './fraim-queue-api.mjs'
 import { decide, setPriority } from './fraim-queue-approve.mjs'
 import { dismissThread, restoreThread, sayInThread, tellContact } from './fraim-queue-threads.mjs'
 import {
@@ -31,18 +31,7 @@ function send(res, code, body, type = 'application/json') {
   res.end(type === 'application/json' ? JSON.stringify(body) : body)
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (c) => {
-      data += c
-      if (data.length > 100000) reject(new Error('request too large'))
-    })
-    req.on('end', () => {
-      try { resolve(data ? JSON.parse(data) : {}) } catch { reject(new Error('invalid JSON')) }
-    })
-  })
-}
+const readBody = (req) => readJson(req, 100000)
 
 export function createServer(secret = token()) {
   const settings = createSettings({ employees, team, tool, runtimeEnv, send, readBody })
@@ -121,13 +110,10 @@ export function createServer(secret = token()) {
       }
       const media = /^\/media\/(q\d{1,6})\/([^/]+)$/.exec(url.pathname)
       if (req.method === 'GET' && media) {
-        const item = readItem(media[1])
-        const name = decodeURIComponent(media[2])
-        if (!item.media.includes(name)) return send(res, 404, { error: 'no such file' })
-        const file = path.join(itemDir(item.id), 'media', name)
-        const type = MEDIA_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream'
-        res.writeHead(200, { 'Content-Type': type, 'Content-Length': fs.statSync(file).size, 'Cache-Control': 'private, max-age=3600' })
-        return fs.createReadStream(file).pipe(res)
+        const m = mediaFile(media[1], decodeURIComponent(media[2]))
+        if (!m) return send(res, 404, { error: 'no such file' })
+        res.writeHead(200, { 'Content-Type': m.type, 'Content-Length': m.size, 'Cache-Control': 'private, max-age=3600' })
+        return fs.createReadStream(m.file).pipe(res)
       }
       const action = /^\/api\/items\/(q\d{1,6})\/(decide|priority)$/.exec(url.pathname)
       if (req.method === 'POST' && action) {
@@ -139,7 +125,7 @@ export function createServer(secret = token()) {
       }
       return send(res, 404, { error: 'not found' })
     } catch (err) {
-      const code = err instanceof UsageError ? 400 : /^no queue item|already/.test(err.message) ? 409 : 500
+      const code = err.status || (err instanceof UsageError ? 400 : /^no queue item|already/.test(err.message) ? 409 : 500)
       return send(res, code, { error: err.message })
     }
   })

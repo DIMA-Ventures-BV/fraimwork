@@ -3,8 +3,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  AUTOS, KINDS, LEADS, MEDIA_TYPES, QUEUE, Refused, STATES, THREADS, UsageError, allItems, allThreads, itemDir, promptText,
-  rank, readChat, readItem, readText, readThread, roleOf, validId, validThread,
+  AUTOS, KINDS, QUEUE, Refused, STATES, THREADS, UsageError, allItems, allThreads, promptText, isLead, mediaFile, rank,
+  readChat, readItem, readText, readThread, roleOf, validId, validThread,
 } from './fraim-queue-store.mjs'
 import { addItem, decide } from './fraim-queue-approve.mjs'
 import { sayInThread, tellContact } from './fraim-queue-threads.mjs'
@@ -36,20 +36,20 @@ function identify(req, isPageCookie) {
   throw new Problem(401, 'unauthorized', 'send Authorization: Bearer TOKEN')
 }
 
-function readJson(req) {
+export function readJson(req, max = MAX_BODY) {
   return new Promise((resolve, reject) => {
-    const tooLarge = () => reject(new Problem(413, 'too_large', `a request is at most ${MAX_BODY} bytes`))
-    if (Number(req.headers['content-length']) > MAX_BODY) return tooLarge()
+    const tooLarge = () => reject(new Problem(413, 'too_large', `a request is at most ${max} bytes`))
+    if (Number(req.headers['content-length']) > max) return tooLarge()
     const chunks = []
     let size = 0
     req.on('data', (c) => {
       size += c.length
-      if (size > MAX_BODY) return tooLarge()
+      if (size > max) return tooLarge()
       chunks.push(c)
     })
     req.on('error', reject)
     req.on('end', () => {
-      if (size > MAX_BODY) return
+      if (size > max) return
       let body = {}
       try { if (size) body = JSON.parse(Buffer.concat(chunks).toString()) } catch { return reject(bad('invalid JSON')) }
       if (!body || typeof body !== 'object' || Array.isArray(body)) return reject(bad('the body must be a JSON object'))
@@ -113,13 +113,12 @@ function createItem({ body, who }) {
 }
 
 function media({ params, res }) {
-  const item = readItem(params.item)
   let name = ''
   try { name = decodeURIComponent(params.file) } catch {}
-  if (!item.media.includes(name)) throw new Problem(404, 'not_found', 'no such file')
-  const file = path.join(itemDir(item.id), 'media', name)
-  res.writeHead(200, { 'Content-Type': MEDIA_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream', 'Content-Length': fs.statSync(file).size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-  fs.createReadStream(file).pipe(res)
+  const m = mediaFile(params.item, name)
+  if (!m) throw new Problem(404, 'not_found', 'no such file')
+  res.writeHead(200, { 'Content-Type': m.type, 'Content-Length': m.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+  fs.createReadStream(m.file).pipe(res)
 }
 
 const lastTouched = (t) => [t.changed, t.active].sort().at(-1) || ''
@@ -167,7 +166,7 @@ async function listAgents() {
 
 async function tell({ params, body, who }) {
   const name = params.agent
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name) || !fs.existsSync(path.join(LEADS, name, 'lead.md'))) throw new Problem(404, 'not_found', `no agent ${name}`)
+  if (!isLead(name)) throw new Problem(404, 'not_found', `no agent ${name}`)
   const out = await run('fraim-lead', ['tell', name, '--from', who.from, '--', requiredText(body)], 15000)
   if (out == null) throw new Problem(502, 'agent_unreachable', `could not reach ${name}`)
   return [202, { ok: true, from: who.from }]

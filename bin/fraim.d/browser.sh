@@ -38,25 +38,17 @@ cmd_browser() {
     *) usage "the server browser is off; switch it on with: fraim space policy ${FRAIM_SPACE:-main} --modules $profiles,browser" ;;
   esac
   local url
-  # --url-only: a fixed URL for bookmarks and the cmux Dock. No tunnel, no password.
-  if [ -n "$(flag url-only)" ]; then
-    case "$FRAIM_ACCESS" in
-      tailscale) say "http://$FRAIM_HOST:6080/vnc.html" ;;
-      local) say "http://localhost:$(env_get VNC_PORT | grep . || echo 6080)/vnc.html" ;;
-      *) die "public mode has no fixed browser URL; use fraim browser --print-url" ;;
-    esac
-    return
-  fi
-  if [ "$FRAIM_ACCESS" = tailscale ]; then
-    url="http://$FRAIM_HOST:$vnc/vnc.html"
-  else
-    if [ "$FRAIM_ACCESS" = local ]; then
-      url="http://localhost:$vnc/vnc.html"
-    else
+  case "$FRAIM_ACCESS" in
+    tailscale) url="http://$FRAIM_HOST:$vnc/vnc.html" ;;
+    local) url="http://localhost:$vnc/vnc.html" ;;
+    *)
+      [ -z "$(flag url-only)" ] || die "public mode has no fixed browser URL; use fraim browser --print-url"
       # The tunnel runs through the space's workspace to the browser container on port 6080.
       url="http://localhost:$(TUNNEL_TARGET_PORT=6080 tunnel start "$vnc" "$(space_get BROWSER_IP 172.30.0.10)")/vnc.html"
-    fi
-  fi
+      ;;
+  esac
+  # --url-only: a fixed URL for bookmarks and the cmux Dock. No tunnel, no password.
+  if [ -n "$(flag url-only)" ]; then say "$url"; return; fi
   open_url "$url"
   say "VNC password: $(remote_env VNC_PASSWORD)"
 }

@@ -42,7 +42,7 @@ KEEP_RUNS=100
 KEEP_DAYS=30
 KNOWN_KEYS=" description schedule every trigger tools output timeout model enabled hours remember skill script_only lead "
 leads_dir="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
-LATER_KEYS=" whatsapp webhook mail "
+LATER_KEYS=" whatsapp webhook "
 
 usage() { echo "fraim-auto: $*" >&2; exit 2; }
 die() { echo "fraim-auto: $*" >&2; exit 1; }
@@ -133,10 +133,10 @@ outputs() {
   local v; v="$(get "$1" output)"
   [ -n "$v" ] || v=whatsapp
   printf '%s\n' "$v" | tr ',' '\n' | while IFS= read -r o; do
-    o="$(printf '%s' "$o" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    o="$(trim "$o")"
     [ -n "$o" ] || continue
     case "$o" in
-      *:*) printf '%s:%s\n' "$(printf '%s' "${o%%:*}" | sed 's/[[:space:]]*$//')" "$(printf '%s' "${o#*:}" | sed 's/^[[:space:]]*//')" ;;
+      *:*) printf '%s:%s\n' "$(trim "${o%%:*}")" "$(trim "${o#*:}")" ;;
       *) printf '%s\n' "$o" ;;
     esac
   done
@@ -232,7 +232,8 @@ problems() {
         case "$key" in
           file|files) echo "write a file trigger as 'trigger: files: FOLDER'" ;;
           after) echo "write it as 'trigger: after: NAME'" ;;
-          *) echo "unknown setting '$key:' (known: $(printf '%s' "$KNOWN_KEYS" | sed 's/ /, /g; s/^, //; s/, $//'))" ;;
+          *) if plugin triggers "$key" >/dev/null; then echo "write it as 'trigger: $key: VALUE'"
+             else echo "unknown setting '$key:' (known: $(printf '%s' "$KNOWN_KEYS" | sed 's/ /, /g; s/^, //; s/, $//'))"; fi ;;
         esac ;;
     esac
   done < <(header "$f" | awk '/^[ \t]*#/ || !/:/ { next } { k = substr($0, 1, index($0, ":") - 1); gsub(/^[ \t]+|[ \t]+$/, "", k); print k }')
@@ -987,7 +988,6 @@ cmd_new() {
     { echo ---; echo 'enabled: false'; tail -n +2 "$dest/automation.md"; } > "$dest/automation.md.new" \
       && mv "$dest/automation.md.new" "$dest/automation.md"
   fi
-  # shellcheck disable=SC2088
   local state=""
   [ "$off" = 0 ] || state=", switched off"
   echo "Made ~/fraim/automations/$name/automation.md$state. Change it, then: fraim-auto check $name; fraim-auto run $name --dry"
@@ -1073,7 +1073,7 @@ case "$action" in
   on) [ $# -eq 1 ] || usage "on NAME"; cmd_on "$1" ;;
   mark-unreviewed) [ $# -eq 1 ] || usage "mark-unreviewed PATH"; cmd_mark_unreviewed "$1" ;;
   check) cmd_check "$@" ;;
-  catalog|plugins|examples) cmd_catalog ;;
+  catalog) cmd_catalog ;;
   sources) cmd_sources "$@" ;;
   new) [ $# -ge 1 ] || usage "new NAME [--from EXAMPLE] [--off]"; cmd_new "$@" ;;
   lead)

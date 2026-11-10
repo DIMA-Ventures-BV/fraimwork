@@ -3,5 +3,4 @@ version: 1.0.0
 min_fraim_version: 0.1.0
 description: A real Chrome on the server, for sites that need a browser login
 profile: browser
-requires:
 check: server-browser curl -fsS "${BROWSER_CDP_URL}/json/version"

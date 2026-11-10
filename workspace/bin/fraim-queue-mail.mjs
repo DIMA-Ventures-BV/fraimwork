@@ -9,7 +9,7 @@ function person(from) {
 
 // What was written now and what is only quoted from earlier mails. When no quote is found, or the
 // cut would leave nothing, the whole text stays.
-export function splitQuote(body) {
+function splitQuote(body) {
   const lines = String(body).split('\n')
   const start = lines.findIndex((l, i) => {
     const two = `${l} ${lines[i + 1] || ''}`
@@ -45,7 +45,7 @@ function cleanHtml(html) {
 
 const isDesigned = (html) => (html.match(/<img\b/gi) || []).length >= 3 || (html.match(/<table\b/gi) || []).length >= 4
 
-export function parseGmailThread(text, html = '') {
+function parseGmailThread(text, html = '') {
   const parts = (s) => {
     const p = String(s).replace(/\r\n/g, '\n').split(/^=== Message \d+ ===$/m)
     return { head: p[0], bodies: p.slice(1).map((b) => {

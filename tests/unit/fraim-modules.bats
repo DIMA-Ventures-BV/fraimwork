@@ -184,7 +184,7 @@ check: nothing-to-run'
   for id in whatsapp browser sync scheduler google; do
     f="$REPO/modules/$id.manifest"
     [ -f "$f" ]
-    for key in id version min_fraim_version description profile requires; do
+    for key in id version min_fraim_version description profile; do
       grep -q "^$key:" "$f"
     done
     grep -q "^id: $id$" "$f"

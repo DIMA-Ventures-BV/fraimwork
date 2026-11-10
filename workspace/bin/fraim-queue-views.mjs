@@ -43,10 +43,6 @@ function leadRuns(dir, count) {
   })
 }
 
-function latestRun(dir) {
-  return leadRuns(dir, 1)[0] || null
-}
-
 function automationRuns(dir, count) {
   let names = []
   try { names = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}T/.test(f)).sort().reverse().slice(0, count) } catch {}
@@ -71,7 +67,7 @@ export function team() {
     if (!h.lead) { automations.push(base); continue }
     const role = h.lead === contact ? 'chief' : 'lead'
     leads.push({ ...base, lead: h.lead, role })
-    if (h.lead === contact) chief = { name: h.lead, title: displayName(h.lead), schedule: h.schedule || '', ...(latestRun(path.join(LEADS, h.lead, 'runs')) || {}) }
+    if (h.lead === contact) chief = { name: h.lead, title: displayName(h.lead), schedule: h.schedule || '', ...leadRuns(path.join(LEADS, h.lead, 'runs'), 1)[0] }
   }
   return { chief, leads, automations }
 }
@@ -90,7 +86,7 @@ export function run(cmd, args, timeout = 8000) {
 // The steps of a headless run (claude -p --output-format stream-json), as lines a person reads:
 // what Claude wrote and each tool it used, newest last.
 const TOOL_ARG = ['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt', 'skill']
-export function transcript(jsonl) {
+function transcript(jsonl) {
   const out = []
   for (const raw of String(jsonl || '').split('\n')) {
     let e
@@ -115,7 +111,7 @@ export function transcript(jsonl) {
 
 // The live log of a lead or automation run: while it works, the file it writes now; after,
 // the log of its last run.
-export function runLog(name) {
+function runLog(name) {
   const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
   if (!Object.keys(h).length) return null
   const newest = (dir, re) => { try { return fs.readdirSync(dir).filter((f) => re.test(f)).sort().at(-1) } catch { return undefined } }
@@ -134,7 +130,7 @@ export function runLog(name) {
 
 // The steps of a run for the lead page: what Claude said and did, in the words a person uses.
 const TOOL_WORD = { Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Changed', Grep: 'Searched', Glob: 'Looked for', WebFetch: 'Opened', WebSearch: 'Searched the web', Task: 'Asked a helper', Agent: 'Asked a helper', Skill: 'Used skill' }
-export function runSteps(jsonl) {
+function runSteps(jsonl) {
   const out = []
   for (const raw of String(jsonl || '').split('\n')) {
     let e
@@ -159,7 +155,6 @@ export function member(name) {
   if (!text) return null
   const h = header(text)
   const lead = /^[a-z0-9][a-z0-9-]{0,39}$/.test(h.lead || '') ? h.lead : ''
-  const area = lead ? /^## Area\n+((?:[^\n#][^\n]*\n?)+)/m.exec(readText(path.join(LEADS, lead, 'lead.md'))) : null
   const lock = path.join(AUTO_STATE, name, 'lock')
   const running = fs.existsSync(lock)
   const log = running ? runLog(name) : ''
@@ -167,7 +162,7 @@ export function member(name) {
   try { since = fs.statSync(lock).mtime.toISOString() } catch {}
   return {
     name, running, since,
-    about: area ? area[1].trim() : (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''),
+    about: (lead && leadArea(lead)) || (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''),
     steps: log ? runSteps(readText(log, 4000000)).slice(-40).reverse() : [],
     runs: lead ? leadRuns(path.join(LEADS, lead, 'runs'), 10) : automationRuns(path.join(AUTOS, name, 'runs'), 10),
   }
@@ -196,7 +191,7 @@ export async function active() {
   return out.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name))
 }
 
-export const validAgent = (n) => /^[a-z0-9][a-z0-9_-]{0,47}$/.test(n)
+const validAgent = (n) => /^[a-z0-9][a-z0-9_-]{0,47}$/.test(n)
 
 export async function agentScreen(name) {
   if (!validAgent(name)) usage('not an agent name')
@@ -219,7 +214,7 @@ export async function agentSend(name, text) {
 }
 
 // The name people see is the display: line of the lead's brief; without one, its folder name.
-export function displayName(name) {
+function displayName(name) {
   const n = String(name || '')
   if (n === 'owner') return 'You'
   if (n === 'manual') return 'Fraim'

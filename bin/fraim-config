@@ -418,7 +418,7 @@ main() {
   case "$command" in
     init) cmd_init ;;
     apply) cmd_apply ;;
-    status|doctor) cmd_status ;;
+    status) cmd_status ;;
     mcp) cmd_mcp "$@" ;;
     skill) cmd_skill "$@" ;;
     exec) cmd_exec "$@" ;;

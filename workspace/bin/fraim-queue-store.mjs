@@ -3,11 +3,14 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { runtimeEnv } from './fraim-channels.mjs'
+
+export { runtimeEnv }
 
 export const HOME = process.env.HOME || '/home/claude'
 export const QUEUE = process.env.FRAIM_QUEUE_DIR || path.join(HOME, 'fraim/queue')
 export const GOALS = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim/goals')
-export const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
+const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
 export const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
 export const KINDS = ['review', 'decision', 'idea', 'info', 'failed']
 export const STATES = ['open', 'approved', 'rejected', 'dismissed']
@@ -34,17 +37,6 @@ export function fire(cmd, args, env = process.env) {
   } catch {}
 }
 export const setServing = () => { SERVING = true }
-
-export function runtimeEnv() {
-  const env = {}
-  try {
-    for (const line of fs.readFileSync(process.env.FRAIM_RUNTIME_ENV || '/etc/fraim/runtime.env', 'utf8').split('\n')) {
-      const m = line.match(/^([A-Z_]+)=(.*)$/)
-      if (m) env[m[1]] = m[2].replace(/^'(.*)'$/, '$1').replace(/\\(.)/g, '$1')
-    }
-  } catch {}
-  return { ...env, ...process.env }
-}
 
 // The command on PATH; otherwise the script next to this one (a checkout without an install).
 export function tool(name) {
@@ -140,6 +132,13 @@ export function copyMedia(dir, files, taken = []) {
   return names
 }
 
+export function mediaFile(id, name) {
+  const item = readItem(id)
+  if (!item.media.includes(name)) return null
+  const file = path.join(itemDir(item.id), 'media', name)
+  return { file, type: MEDIA_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream', size: fs.statSync(file).size }
+}
+
 export function queueUrl() {
   const env = runtimeEnv()
   const start = parseInt(String(env.FRAIM_PREVIEW_PORTS || '3100-3109').split('-')[0], 10)
@@ -157,6 +156,7 @@ export function queueUrl() {
 export const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim/automations')
 export const AUTO_STATE = process.env.FRAIM_AUTO_STATE_DIR || path.join(HOME, '.local/state/fraim/automations')
 export const LEADS = process.env.FRAIM_LEADS_DIR || path.join(HOME, 'fraim/leads')
+export const isLead = (name) => /^[a-z0-9][a-z0-9-]{0,39}$/.test(name || '') && fs.existsSync(path.join(LEADS, name, 'lead.md'))
 
 function authority(...args) {
   const res = spawnSync(tool('fraim-authority'), args, { encoding: 'utf8', timeout: 10000, env: { ...process.env, FRAIM_LEADS_DIR: LEADS } })
@@ -170,7 +170,7 @@ export const theChatAgent = () => authority('get', 'chat')
 
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
 export function tellLead(lead, from, text, thread = '') {
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(lead) || !fs.existsSync(path.join(LEADS, lead, 'lead.md'))) return
+  if (!isLead(lead)) return
   fire('fraim-lead', ['tell', lead, '--from', from, ...(thread ? ['--thread', thread] : []), '--', text])
 }
 

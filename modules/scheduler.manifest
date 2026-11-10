@@ -3,5 +3,4 @@ version: 1.0.0
 min_fraim_version: 0.1.0
 description: Runs automations and the hourly health check
 profile: scheduler
-requires:
 # No check: Docker watches this one (healthcheck in compose.yaml).

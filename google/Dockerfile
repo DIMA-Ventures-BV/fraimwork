@@ -13,8 +13,7 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/requ
  && install -d -o app -g app -m 0700 /data/google
 
 COPY entrypoint.sh /usr/local/bin/fraim-google-entrypoint
-COPY fraim-google /usr/local/bin/fraim-google
-COPY fraim-reply fraim-mail-watch fraim_gmail.py /usr/local/bin/
+COPY fraim-google fraim-reply fraim-mail-watch fraim_gmail.py /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/fraim-google-entrypoint /usr/local/bin/fraim-google /usr/local/bin/fraim-reply /usr/local/bin/fraim-mail-watch
 
 USER app

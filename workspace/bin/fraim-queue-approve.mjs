@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { channelWord } from './fraim-channels.mjs'
 import {
-  ADVICE, GOALS, HOME, KINDS, LEADS, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId,
-  now, promptText, queueUrl, readItem, readText, runtimeEnv, tellLead, theContact, tool, usage, validThread, writeItem,
+  ADVICE, GOALS, KINDS, LEADS, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId, now,
+  promptText, queueUrl, readItem, runtimeEnv, tellLead, theContact, tool, usage, validId, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
@@ -22,7 +22,7 @@ export const ADVICE_WORD = { approve: 'Approve', reject: 'Send back', dismiss: '
 
 // The message about a new item says what it is about and what the owner gains or risks, so the
 // owner can decide from the message alone.
-export function newText(item) {
+function newText(item) {
   const lines = [`New in your queue: ${item.title}`]
   if (item.ask) lines.push(item.ask)
   if (item.need) lines.push(`Why: ${item.need}`)
@@ -36,7 +36,7 @@ export function newText(item) {
 // One job, one card: the card a goal was started from, when it can carry the next step.
 function cardToContinue(id) {
   if (!id) return null
-  if (!/^q\d{1,6}$/.test(id)) usage('--continues needs a queue item id (q1, q2, ...)')
+  if (!validId(id)) usage('--continues needs a queue item id (q1, q2, ...)')
   try {
     const card = readItem(id)
     return card.brain || card.skill || card.reply ? null : card
@@ -58,7 +58,7 @@ function continueCard(card, step, nothingToDecide) {
 
 // The conversation an item belongs to: said outright, set for this run, or that of its goal.
 function itemThread(opts) {
-  const fromGoal = opts.goal ? readText(path.join(GOALS, String(opts.goal), 'thread'), 40).trim() : ''
+  const fromGoal = opts.goal ? readGoalFile(String(opts.goal), 'thread') : ''
   const id = String(opts.thread || process.env.FRAIM_THREAD || fromGoal)
   return validThread(id) && fs.existsSync(path.join(THREADS, id, 'thread.json')) ? id : ''
 }
@@ -76,7 +76,7 @@ export function addItem(opts) {
   if (opts.brain && !/^p\d{1,6}$/.test(opts.brain)) usage('--brain needs a proposal id (p1, p2, ...)')
   if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
   if (opts.switchOn && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(opts.switchOn)) usage('--switch-on needs an automation name')
-  if (opts.approvedBy && !/^q\d{1,6}$/.test(opts.approvedBy)) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
+  if (opts.approvedBy && !validId(opts.approvedBy)) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
   if (opts.switchOn) requireTrial(opts.switchOn)
   const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
   if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
@@ -182,13 +182,13 @@ function readGoalFile(goal, name, max = 4000) {
   try { return fs.readFileSync(path.join(GOALS, goal, name), 'utf8').slice(0, max).trim() } catch { return '' }
 }
 
-export function reworkText(item, note) {
+function reworkText(item, note) {
   const original = readGoalFile(item.goal, 'goal.md') || item.title
   const result = readGoalFile(item.goal, 'result.md') || item.summary
   return promptText('queue-rework', { id: item.id, title: item.title, original, result, note, goal: item.goal })
 }
 
-export function approveText(item, note) {
+function approveText(item, note) {
   return promptText('queue-approved', { id: item.id, title: item.title, on_approve: item.on_approve, note, goal: item.goal })
 }
 
@@ -217,30 +217,30 @@ export function decide(id, verdict, note = '', via = 'cli', editedText = undefin
 // (qN approved by the owner in the last 14 days) is approved at once: what was built for that
 // yes starts without a second question, and the owner hears that it runs.
 const GRANT_DAYS = 14
+// A card that moved on to its next question still carries the owner's last decision.
+const lastDecision = (card) => [card, ...[...(card.history || [])].reverse()].find((s) => s.state !== 'open')
+const recent = (decision) => Date.now() - Date.parse(String(decision.decided).replace(' ', 'T')) < GRANT_DAYS * 86400000
 // A yes covers the work that follows from it, so a run nobody watches may only spend its own:
 // a goal the yes it was started from, the engineer what it built for one. Nothing else.
 function grantAllowedForCaller(item, grantId) {
   if (process.env.FRAIM_HEADLESS !== '1') return
   const goal = process.env.FRAIM_GOAL
   if (goal) {
-    if (!/^g\d{1,6}$/.test(goal) || readText(path.join(GOALS, goal, 'queue'), 40).trim() !== grantId) throw new Error(`${grantId} is not the yes this task was started from; ask the owner in the queue instead`)
+    if (readGoalFile(goal, 'queue') !== grantId) throw new Error(`${grantId} is not the yes this task was started from; ask the owner in the queue instead`)
     return
   }
   if (process.env.FRAIM_BUILDS_OFF !== '1') throw new Error(`only the owner can use ${grantId} for this; ask the owner in the queue instead`)
   if (item.on_approve) throw new Error(`a new task needs its own yes; ask the owner in the queue instead`)
 }
 
-export function approvedByGrant(item, grantId) {
-  if (!/^q\d{1,6}$/.test(grantId || '')) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
+function approvedByGrant(item, grantId) {
   const grant = readItem(grantId)
-  // A card that moved on to its next question still carries the owner's last decision.
-  const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')
+  const decision = lastDecision(grant)
   if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
   if (grant.brain || grant.skill) throw new Error(`${grantId} approved a brain change; ask the owner in the queue instead`)
   if (grant.reply) throw new Error(`${grantId} approved one message to one person; ask the owner in the queue instead`)
   grantAllowedForCaller(item, grantId)
-  const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
-  if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
+  if (!recent(decision)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
   item.approved_by = grantId
   const done = applyDecision(item, 'approved', `The owner already said yes: "${grant.title}" (${grantId})${decision.note ? `: ${decision.note}` : ''}`, 'grant', { HEADLESS_OK: true })
   grant.used_by = [...(grant.used_by || []), item.id]
@@ -251,15 +251,14 @@ export function approvedByGrant(item, grantId) {
 
 // The default contact starts the task the owner asked for in the chat: that request covers one goal.
 export function useYesForGoal(grantId) {
-  if (!/^q\d{1,6}$/.test(grantId || '')) usage('use-yes needs a queue id (q1, q2, ...)')
+  if (!validId(grantId || '')) usage('use-yes needs a queue id (q1, q2, ...)')
   const lead = process.env.FRAIM_LEAD_NAME || ''
   if (!lead || lead !== theContact()) throw new Error('only the default contact can start a task from the owner\'s request')
   const grant = readItem(grantId)
   if (grant.source !== 'the owner in the chat') throw new Error(`${grantId} is not a request from the owner's chat`)
-  const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')
+  const decision = lastDecision(grant)
   if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner`)
-  const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
-  if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days`)
+  if (!recent(decision)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days`)
   if (grant.goal_started) throw new Error(`${grantId} already started a task`)
   grant.goal_started = true
   writeItem(grant)
@@ -315,15 +314,13 @@ function applyDecision(item, verdict, note, via, opts = {}) {
 // decision succeeded: close those failures (not a decision of the owner, so no brain note).
 // origin: the queue item the goals were started from (~/fraim/goals/gN/queue).
 export function supersedeFailed(origin, by) {
-  if (!/^q\d{1,6}$/.test(origin || '') || !/^g\d{1,6}$/.test(by || '')) usage('supersede --origin qN --by gN')
-  const goals = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim', 'goals')
-  const read = (g, f) => { try { return fs.readFileSync(path.join(goals, g, f), 'utf8').trim() } catch { return '' } }
+  if (!validId(origin || '') || !/^g\d{1,6}$/.test(by || '')) usage('supersede --origin qN --by gN')
   // Only a goal that really finished for this decision closes its earlier failures.
-  if (!read(by, 'state').startsWith('done') || read(by, 'queue') !== origin) throw new Error(`goal ${by} did not finish ${origin}`)
+  if (!readGoalFile(by, 'state').startsWith('done') || readGoalFile(by, 'queue') !== origin) throw new Error(`goal ${by} did not finish ${origin}`)
   const closed = []
   for (const item of allItems()) {
     if (item.state !== 'open' || item.kind !== 'failed' || !/^g\d+$/.test(item.goal || '') || item.goal === by) continue
-    if (read(item.goal, 'queue') !== origin) continue
+    if (readGoalFile(item.goal, 'queue') !== origin) continue
     let fresh
     try { fresh = readItem(item.id) } catch { continue }
     if (fresh.state !== 'open') continue

@@ -41,7 +41,7 @@ for f in $(files '*.json'); do jq empty "$f" 2>/dev/null || fail "invalid JSON: 
 
 step "compose file, every profile"
 if command -v docker >/dev/null && docker compose version >/dev/null 2>&1; then
-  BIND_IP=127.0.0.1 COMPOSE_PROFILES=sync,browser,whatsapp,scheduler \
+  BIND_IP=127.0.0.1 COMPOSE_PROFILES=sync,browser,whatsapp,scheduler,google \
     docker compose --env-file .env.example -f compose.yaml config -q || fail "compose config"
 else skip "docker compose"; fi
 

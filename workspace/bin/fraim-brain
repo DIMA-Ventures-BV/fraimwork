@@ -30,6 +30,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runtimeEnv } from './fraim-channels.mjs'
 
 const HOME = process.env.HOME || '/home/claude'
 const BRAIN = process.env.FRAIM_BRAIN_DIR || path.join(HOME, 'fraim/brain')
@@ -348,15 +349,16 @@ export function distillPrompt(model, evs, since, feedback) {
   return prompt('brain-distill', { rules: renderRules(model).trim() || '(none yet)', log: log.slice(-20000), feedback: feedback || '', max_rule_chars: String(MAX_RULE_CHARS) })
 }
 
-export function parseOps(output) {
+// The list named KEY in the JSON object of Claude's answer.
+export function listFrom(output, key) {
   const text = String(output || '')
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end < start) throw new Error('the answer has no JSON')
   let data
   try { data = JSON.parse(text.slice(start, end + 1)) } catch { throw new Error('the answer is not valid JSON') }
-  if (!data || !Array.isArray(data.ops)) throw new Error('the answer has no "ops" list')
-  return data.ops
+  if (!data || !Array.isArray(data[key])) throw new Error(`the answer has no "${key}" list`)
+  return data[key]
 }
 
 function claude(prompt, model = '') {
@@ -386,7 +388,7 @@ function distill(opts) {
 
   const output = claude(distillPrompt(before.model, before.evs, before.state.distilledUpTo, opts.feedback))
   let ops
-  try { ops = parseOps(output) } catch (err) {
+  try { ops = listFrom(output, 'ops') } catch (err) {
     writeAtomic(path.join(BRAIN, 'distill.err'), output)
     throw new Error(`distill gave no usable answer (${err.message}); the rules are unchanged`)
   }
@@ -483,15 +485,6 @@ const REVIEW_BATCH = 10
 const REVIEW_MAX_ITEMS = 5
 const FIRST_RUN_DAYS = 2
 
-function runtimeEnv() {
-  const env = {}
-  for (const line of read(process.env.FRAIM_RUNTIME_ENV || '/etc/fraim/runtime.env').split('\n')) {
-    const m = line.match(/^([A-Z_]+)=(.*)$/)
-    if (m) env[m[1]] = m[2].replace(/^'(.*)'$/, '$1').replace(/\\(.)/g, '$1')
-  }
-  return { ...env, ...process.env }
-}
-
 const CHANNEL_RE = /^<channel source="whatsapp"([^>]*)>\n?([\s\S]*?)\n?<\/channel>\s*$/
 const attr = (attrs, name) => (new RegExp(`${name}="([^"]*)"`).exec(attrs) || [])[1] || ''
 
@@ -571,17 +564,6 @@ export function reviewPrompt(model, convs) {
   return prompt('brain-review', { rules: renderRules(model).trim() || '(none yet)', chats: chats.slice(-30000), max_items: String(REVIEW_MAX_ITEMS), max_rule_chars: String(MAX_RULE_CHARS) })
 }
 
-export function parseItems(output) {
-  const text = String(output || '')
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start < 0 || end < start) throw new Error('the answer has no JSON')
-  let data
-  try { data = JSON.parse(text.slice(start, end + 1)) } catch { throw new Error('the answer is not valid JSON') }
-  if (!data || !Array.isArray(data.items)) throw new Error('the answer has no "items" list')
-  return data.items
-}
-
 const squash = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
 
 // Checked items only: a quote that is not the owner's own words drops the item.
@@ -622,7 +604,7 @@ function review(opts) {
 
   const output = claude(reviewPrompt(before.model, before.convs), process.env.FRAIM_BRAIN_MODEL || 'sonnet')
   let items
-  try { items = parseItems(output) } catch (err) {
+  try { items = listFrom(output, 'items') } catch (err) {
     writeAtomic(path.join(BRAIN, 'distill.err'), output)
     throw new Error(`the review gave no usable answer (${err.message}); it tries again next time`)
   }

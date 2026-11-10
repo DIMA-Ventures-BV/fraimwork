@@ -11,7 +11,7 @@ async function replyTarget(t) {
   return await channelTarget(t, runtimeEnv()) || usage('only a mail or a WhatsApp conversation has someone to answer')
 }
 
-export function draftText(item) {
+function draftText(item) {
   const r = item.reply
   return [`Reply ready for ${r.name} (${r.to}), by ${channelWord(r.channel)}. Nothing has gone out.`, '', r.text, '', ...(item.need ? [`Why: ${item.need}`] : []), 'Send it? You can change it in the inbox first:', queueUrl()].join('\n')
 }

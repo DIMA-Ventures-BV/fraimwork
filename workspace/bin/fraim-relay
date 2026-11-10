@@ -158,17 +158,21 @@ background() {
   done
 }
 
+# The values both the relay and the chat prompt get, in the array `sets`.
+agent_sets() {
+  sets=(--set "display=$(fraim-lead display "$1" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')"
+    --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$1/lead.md")"
+    --set "rules=$(fraim-brain show --for "$1" --all 2>/dev/null)"
+    --set "recent=$(cmd_context 2>/dev/null)"
+    --set "style=$(fraim-style prompt whatsapp 2>/dev/null)")
+}
+
 # How the chief writes to the owner is the prompt file "relay" (fraim-prompt).
 prompt_for() {
-  local agent="$1" notices="$2"
-  FRAIM_LEADS_DIR="$leads" fraim-prompt render relay --lead "$agent" \
-    --set "chief=$agent" --set "display=$(fraim-lead display "$agent" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
-    --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$agent/lead.md")" \
-    --set "rules=$(fraim-brain show --for "$agent" --all 2>/dev/null)" \
-    --set "recent=$(cmd_context 2>/dev/null)" \
-    --set "background=$(background "$notices")" \
-    --set "notices=$notices" \
-    --set "style=$(fraim-style prompt whatsapp 2>/dev/null)"
+  local agent="$1" notices="$2" sets
+  agent_sets "$agent"
+  FRAIM_LEADS_DIR="$leads" fraim-prompt render relay --lead "$agent" "${sets[@]}" \
+    --set "background=$(background "$notices")" --set "notices=$notices"
 }
 
 send() {
@@ -303,16 +307,11 @@ cmd_chat() {
   done
   # shellcheck disable=SC2064
   trap "rmdir $(printf '%q' "$lock") 2>/dev/null" EXIT
-  local limit=()
+  local limit=() sets
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_CHAT_TIMEOUT:-300}")
-  output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1 FRAIM_OWNER_CHAT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$agent" \
-      --set "chief=$agent" --set "display=$(fraim-lead display "$agent" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
-      --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$agent/lead.md")" \
-      --set "rules=$(fraim-brain show --for "$agent" --all 2>/dev/null)" \
-      --set "knows=$(fraim-lead brief "$agent" 2>/dev/null | head -c 60000)" \
-      --set "recent=$(cmd_context 2>/dev/null)" \
-      --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
-      --set "text=$text")" \
+  agent_sets "$agent"
+  output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1 FRAIM_OWNER_CHAT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$agent" "${sets[@]}" \
+      --set "chief=$agent" --set "knows=$(fraim-lead brief "$agent" 2>/dev/null | head -c 60000)" --set "text=$text")" \
     --allowedTools "Read,Glob,Grep,Bash(fraim-watch open:*),Bash(fraim-watch list:*),Bash(fraim-watch undo:*),Bash(fraim-relay timing:*),Bash(fraim-prompt list:*),Bash(fraim-prompt show:*),Bash(fraim-prompt own:*),Bash(fraim-prompt check:*),Bash(fraim-prompt reset:*),Edit(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Edit(~/fraim/ui/**),Write(~/fraim/ui/**),Bash(fraim-ui:*),Bash(fraim-lead display:*),Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style:*),Bash(fraim-relay said:*),Bash(fraim-prompt:*),Bash(fraim-auto check:*),Bash(fraim-auto sync:*),Bash(fraim-auto pause:*),Bash(fraim-auto resume:*),Bash(fraim-auto on:*),Bash(fraim-lead pause:*),Bash(fraim-lead resume:*),Edit(~/fraim/leads/**),Write(~/fraim/leads/**),Edit(~/fraim/automations/**),Write(~/fraim/automations/**),Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/claude/**),Write(~/fraim/claude/**),Edit(~/fraim/styles/**),Edit(~/fraim/inbox-rules.md),Edit(~/.claude/skills/**)" \
     2>>"$relay/errors.log")"
   code=$?

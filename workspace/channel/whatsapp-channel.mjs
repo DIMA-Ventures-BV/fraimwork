@@ -42,7 +42,7 @@ const SHARED_ROOTS = { [path.join(HOME, 'fraim')]: 'fraim', [path.join(HOME, 'pc
 // Chats the owner wrote from; only these may run session_command.
 const ownerChats = new Set()
 // Messages without an answer on WhatsApp yet; they get a reminder into the session.
-const unanswered = new Unanswered({ after: Number(env.FRAIM_REPLY_REMIND_MS) || 180000 })
+const unanswered = new Unanswered()
 
 const log = (...parts) => process.stderr.write(`[whatsapp-channel] ${parts.join(' ')}\n`)
 
@@ -310,18 +310,18 @@ async function handleEvent(event) {
   unanswered.received(event.chat_id, event.text, event.name)
 }
 
-// The herdr terminal this session runs in (the always-on session is "main").
-const TERMINAL = env.FRAIM_TERMINAL || 'main'
+// The herdr terminal of the always-on session, the only one that reads messages.
+const TERMINAL = 'main'
 
 async function sessionState() {
-  const r = await runTool('hc', ['get', TERMINAL, '--json'], 10000)
-  try { return JSON.parse(r.out)?.status?.state || '' } catch { return '' }
+  const r = await runTool('fraim-herdr', ['status', TERMINAL], 10000)
+  return r.ok ? r.out.trim() : ''
 }
 
 // After the reminders, the bridge sends what Claude wrote on its screen, so the owner always
 // hears back. Without readable text it says the message arrived and is being looked at.
 async function sendFallback(r) {
-  const screen = await runTool('hc', ['read', TERMINAL, '--lines', '300'], 10000)
+  const screen = await runTool('fraim-herdr', ['hc', 'read', TERMINAL, '--lines', '300'], 10000)
   const answer = screen.ok ? lastAnswer(screen.out) : ''
   const text = answer || 'Your message arrived, but my answer did not come through. I am looking at it now.'
   await gateway('/send', { chat_id: r.chatId, text })

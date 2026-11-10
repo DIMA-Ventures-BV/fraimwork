@@ -3,7 +3,6 @@ version: 1.0.0
 min_fraim_version: 0.1.0
 description: Talk to your server on WhatsApp
 profile: whatsapp
-requires:
 check: whatsapp-connected fraim-gateway GET /status | jq -e .connected
 # Connected is not enough: Claude must be listening, or messages only wait in the gateway.
 check: whatsapp-reaches-claude logged_in || exit 0; for _ in 1 2 3; do fraim-gateway GET /status | jq -e ".listeners > 0" && exit 0; sleep "${FRAIM_DOCTOR_RETRY:-10}"; done; exit 1

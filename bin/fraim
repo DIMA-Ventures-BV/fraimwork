@@ -150,7 +150,8 @@ add_authorized_key() {
 # user's ~/.ssh/known_hosts and `fraim deploy` can safely forget an old server's keys.
 KNOWN_HOSTS="$STATE_DIR/known_hosts-$FRAIM_TARGET"
 mkdir -p "$STATE_DIR"
-SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
+reset_ssh_base() { SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR); }
+reset_ssh_base
 # Use only fraim's key: with many keys in an agent (1Password) ssh fails or pops up approvals.
 use_ssh_key() {
   [ -n "${1:-}" ] || return 0
@@ -237,17 +238,20 @@ workspace_ssh() { ssh $(ssh_opts) "claude@$FRAIM_HOST" "$@"; }
 attached() { [ "${FRAIM_ADMIN:-}" = none ]; }
 NO_ADMIN="this computer is connected as a user of this fraim and has no admin access to the server; the person who runs your server does this"
 
+admin_command() {  # the command, with `docker compose` pointed at the selected space
+  local c="$COMPOSE_ARGS"
+  [ "$FRAIM_ADMIN" != local ] || c="-p $LOCAL_PROJECT --env-file $ENV_FILE"
+  if [ -n "$c" ]; then printf '%s' "${*//docker compose/docker compose $c}"; else printf '%s' "$*"; fi
+}
 admin() {
   attached && die "$NO_ADMIN"
   if [ "$FRAIM_ADMIN" = local ]; then
     # No stdin, like the remote branch: `docker compose exec` would eat a key piped to fraim.
-    (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}") </dev/null
+    (cd "$REPO" && eval "$(admin_command "$@")") </dev/null
   else
-    local cmd="$*"
-    [ -z "$COMPOSE_ARGS" ] || cmd="${cmd//docker compose/docker compose $COMPOSE_ARGS}"
     # ADMIN_TIMEOUT: seconds; long operations (install, builds) raise it.
     # shellcheck disable=SC2046
-    with_timeout "${ADMIN_TIMEOUT:-90}" ssh $(tty_flag) "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $cmd"
+    with_timeout "${ADMIN_TIMEOUT:-90}" ssh $(tty_flag) "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $(admin_command "$@")"
   fi
 }
 server_env() { admin "grep -E '^$1=' $REMOTE_ENV 2>/dev/null | tail -1 | cut -d= -f2- || true"; }
@@ -422,15 +426,13 @@ cmd_deploy() {
   FRAIM_TARGET=default
   KNOWN_HOSTS="$STATE_DIR/known_hosts-default"
   rm -f "$KNOWN_HOSTS"
-  SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
+  reset_ssh_base
   use_ssh_key "$(find_ssh_key)"
   ssh "${SSH_BASE[@]}" -o BatchMode=yes "$target" true 2>/dev/null \
     || human "Claude cannot log in to $target. Add the public key from ~/.ssh/id_ed25519.pub to the server (Hetzner: Security > SSH keys, then rebuild), or check the IP."
   say "Copying fraimwork to $target:$REMOTE_DIR"
   ssh "${SSH_BASE[@]}" "$target" "mkdir -p $REMOTE_DIR/config"
-  rsync -az --delete --filter 'P /config/authorized_keys' -e "ssh ${SSH_BASE[*]}" \
-    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
-    "$REPO/" "$target:$REMOTE_DIR/"
+  push_code "$target"
   if [ -n "$(flag force-env)" ] || ! ssh "${SSH_BASE[@]}" "$target" "test -f $REMOTE_DIR/.env"; then
     scp -q "${SSH_BASE[@]}" "$REPO/.env" "$target:$REMOTE_DIR/.env"
   fi
@@ -515,8 +517,11 @@ stamp_command() {
   printf '%s' "$cmd"
 }
 
-# The commit the target actually runs (empty when it predates version stamping).
-deployed_commit() { remote_env FRAIM_COMMIT; }
+push_code() {  # LOGIN: the checkout to the server; its .env files and keys stay
+  rsync -az --delete --filter 'P /config/authorized_keys' -e "ssh ${SSH_BASE[*]}" \
+    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
+    "$REPO/" "$1:$REMOTE_DIR/"
+}
 
 # Server-side update lock: a directory in the fraimwork folder, created atomically.
 # It is only removed when an update or deploy finishes (well or with a completed rollback).
@@ -546,9 +551,7 @@ push_and_rebuild() {
     done
     return 0
   fi
-  rsync -az --delete --filter 'P /config/authorized_keys' -e "ssh ${SSH_BASE[*]}" \
-    --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
-    "$REPO/" "$FRAIM_ADMIN:$REMOTE_DIR/" || return 1
+  push_code "$FRAIM_ADMIN" || return 1
   admin "$(stamp_command)" || return 1
   if ! ADMIN_TIMEOUT=3600 run_logged update admin "FRAIM_LOCK_HELD=1 ./install.sh"; then
     # Never leave the server down: start the containers with whatever code is now in place.
@@ -641,7 +644,8 @@ cmd_update() {
 
   # "current" is what the server runs, not what this laptop has checked out.
   checkout_commit="$(repo_commit)"
-  current="$(deployed_commit)"
+  # Empty when the server predates version stamping.
+  current="$(remote_env FRAIM_COMMIT)"
   if [ -z "$current" ]; then
     current="$checkout_commit"
     say "The server does not report its version (installed before version stamping); assuming it runs this checkout."
@@ -760,9 +764,8 @@ login_from_space() {
 # the human opens the link and passes the code with `fraim login --code` in their own
 # Terminal, so the code never shows up in a chat.
 login_full_start() {
-  local link="" space_flag=""
-  [ "$FRAIM_SPACE" = main ] || space_flag=" --space $FRAIM_SPACE"
-  if workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; then
+  local link=""
+  if has_full_login; then
     say "Space $FRAIM_SPACE already has a full Claude login (Remote Control and claude.ai connectors work)."
     return
   fi
@@ -782,8 +785,10 @@ login_full_start() {
     login_full_code
     return
   fi
-  human "Open this link on your phone or computer and sign in with your Claude account: $link  If the page then shows a code, run in your own Terminal app (not in the Claude chat): fraim login --code$space_flag  and paste the code. Then tell Claude 'done'."
+  human "Open this link on your phone or computer and sign in with your Claude account: $link  If the page then shows a code, run in your own Terminal app (not in the Claude chat): fraim login --code$(space_hint)  and paste the code. Then tell Claude 'done'."
 }
+
+has_full_login() { workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; }
 
 login_full_code() {
   local code=""
@@ -793,7 +798,7 @@ login_full_code() {
     read -r -s -p "Paste the code from the Claude sign-in page (it stays hidden), then press Enter: " code
     printf '\n'
   else
-    human "In your own Terminal app (not in the Claude chat), run: fraim login --code$([ "$FRAIM_SPACE" = main ] || printf ' --space %s' "$FRAIM_SPACE")  and paste the code. Then tell Claude 'done'."
+    human "In your own Terminal app (not in the Claude chat), run: fraim login --code$(space_hint)  and paste the code. Then tell Claude 'done'."
   fi
   code="$(printf '%s' "$code" | tr -d '[:space:]')"
   [ -n "$code" ] || usage "no code given"
@@ -823,11 +828,9 @@ store_login_token() {
 admin_stdin() {
   attached && die "$NO_ADMIN"
   if [ "$FRAIM_ADMIN" = local ]; then
-    (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}")
+    (cd "$REPO" && eval "$(admin_command "$@")")
   else
-    local cmd="$*"
-    [ -z "$COMPOSE_ARGS" ] || cmd="${cmd//docker compose/docker compose $COMPOSE_ARGS}"
-    ssh -T "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $cmd"
+    ssh -T "${SSH_BASE[@]}" "$FRAIM_ADMIN" "cd $REMOTE_DIR && $(admin_command "$@")"
   fi
 }
 

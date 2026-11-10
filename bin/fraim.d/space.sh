@@ -157,9 +157,11 @@ space_rm() {
   say "Space $name and all its data are deleted."
 }
 
-SPACE_MODULES="browser,scheduler,whatsapp,sync,google"
+# Every module with a manifest, so a new module needs no change here.
+space_modules() { sed -n 's/^id: *//p' "$(dirname "${BASH_SOURCE[0]}")"/../../modules/*.manifest | paste -sd, -; }
 check_modules() {
-  local mod
+  local mod SPACE_MODULES
+  SPACE_MODULES="$(space_modules)"
   printf '%s' "$1" | grep -Eq '^([a-z]+)(,[a-z]+)*$' || usage "--modules is a comma list of: $SPACE_MODULES"
   for mod in ${1//,/ }; do
     case ",$SPACE_MODULES," in *,"$mod",*) ;; *) usage "unknown module '$mod'; use $SPACE_MODULES" ;; esac

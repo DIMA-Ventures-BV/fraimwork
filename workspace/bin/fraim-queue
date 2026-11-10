@@ -55,20 +55,6 @@ import { captureMail } from './fraim-queue-mail.mjs'
 import { draftReply, sendApproved } from './fraim-queue-replies.mjs'
 import { createServer } from './fraim-queue-server.mjs'
 
-export { rank } from './fraim-queue-store.mjs'
-export {
-  addItem, approveText, approvedByGrant, closeRecovered, decide, grantRequest, markSolved, newText, reworkText,
-  setPriority, supersedeFailed, useYesForGoal,
-} from './fraim-queue-approve.mjs'
-export {
-  active, agentScreen, agentSend, describeThread, displayName, employees, inboxRows, member, ownerChat, runSteps, team,
-  threadDetail, transcript,
-} from './fraim-queue-views.mjs'
-export { addWhatsApp, closeThread, dismissThread, putThread, restoreThread, sayInThread } from './fraim-queue-threads.mjs'
-export { captureMail, parseGmailThread, splitQuote } from './fraim-queue-mail.mjs'
-export { draftReply, draftText, sendApproved } from './fraim-queue-replies.mjs'
-export { createServer } from './fraim-queue-server.mjs'
-
 // The page's secret can decide, so a run nobody watches does not get it.
 function ownerOnly(what) {
   if (process.env.FRAIM_HEADLESS === '1') throw new Refused(`only the owner gets ${what}; a goal, lead or automation cannot`)

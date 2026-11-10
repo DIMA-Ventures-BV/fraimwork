@@ -71,18 +71,18 @@ COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs c
 # image, so a voice message never waits for a download. "base" needs about 500 MB while it
 # runs; "small" is more exact but needs 1.2 GB, too much next to Claude on a 4 GB server.
 # VOICE=off leaves it out (622 MB): install.sh does that on a server without WhatsApp.
+# Pillow, with PyAV from faster-whisper, makes still pictures from videos (fraim-frames).
 ARG VOICE=on
 ARG FASTER_WHISPER_VERSION=1.2.1
 ARG WHISPER_MODEL=base
+ARG PILLOW_VERSION=11.3.0
 RUN python3 -m venv /opt/fraim/whisper/venv \
  && if [ "${VOICE}" = on ]; then \
-      /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" \
+      /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "faster-whisper==${FASTER_WHISPER_VERSION}" "pillow==${PILLOW_VERSION}" \
       && /opt/fraim/whisper/venv/bin/python -c "from faster_whisper import download_model; download_model('${WHISPER_MODEL}', output_dir='/opt/fraim/whisper/model')"; \
     fi
-# Pillow: still pictures from videos (fraim-frames). poppler-utils: Claude reads PDFs with it.
-ARG PILLOW_VERSION=11.3.0
-RUN /opt/fraim/whisper/venv/bin/pip install --no-cache-dir "pillow==${PILLOW_VERSION}" \
- && apt-get update \
+# poppler-utils: Claude reads PDFs with it.
+RUN apt-get update \
  && apt-get install -y --no-install-recommends poppler-utils \
  && rm -rf /var/lib/apt/lists/*
 COPY whisper/transcribe.py whisper/frames.py /opt/fraim/whisper/

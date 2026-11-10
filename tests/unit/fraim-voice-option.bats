@@ -9,15 +9,15 @@ setup() {
 }
 
 @test "a server without voice says so and fails like any failed transcript" {
-  FRAIM_WHISPER_MODEL_DIR="$BATS_TEST_TMPDIR/none" run "$ROOT/workspace/bin/fraim-transcribe" "$HOME/fraim/inbox/memo.ogg"
+  FRAIM_WHISPER_MODEL="$BATS_TEST_TMPDIR/none" run "$ROOT/workspace/bin/fraim-transcribe" "$HOME/fraim/inbox/memo.ogg"
   [ "$status" -eq 1 ]
   [[ "$output" == *"voice is not installed"* ]]
 }
 
-@test "the image only gets the speech engine with VOICE=on, and pictures always work" {
+@test "the image only gets the speech engine and video pictures with VOICE=on" {
   grep -q '^ARG VOICE=on' "$ROOT/workspace/Dockerfile"
   grep -q 'if \[ "${VOICE}" = on \]' "$ROOT/workspace/Dockerfile"
-  grep -q 'pillow==' "$ROOT/workspace/Dockerfile"
+  grep -q 'faster-whisper==.*pillow==' "$ROOT/workspace/Dockerfile"
 }
 
 @test "compose passes the setting to the build, on by default for existing servers" {
