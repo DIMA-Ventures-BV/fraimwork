@@ -205,6 +205,15 @@ Its schedule (default Monday 06:00) is a weekly check for automations that fail,
 
 Every lead run and every goal is a Claude run on your plan. Start with one lead per product and a budget of 3 goals per day. Raise it when the queue stays short.
 
+## One job, one card
+
+A task started from a card reports on that card, so approving step after step keeps one card. The card waits for you again with the new question, and the earlier steps stay under "Earlier steps of this job".
+
+- A task with nothing for you to decide leaves an approved card closed. A task that was not started from a card goes straight to the closed list. You still get its report on WhatsApp.
+- Work you sent back and failed tasks always come back to you.
+- Extra questions from a task ("more" in queue.json) get their own card, because you decide them separately.
+- A goal cannot add a card itself. Only the server does that, from the goal's queue.json.
+
 ## Not built yet
 
 - Screen recordings depend on the agent: the server browser makes screenshots, but there is no recorder in the image yet.

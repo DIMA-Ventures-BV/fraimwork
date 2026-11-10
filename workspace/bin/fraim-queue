@@ -6,6 +6,9 @@
 //                   [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
 //                   [--priority 1|2|3] [--source S] [--goal gN] [--lead NAME] [--link URL]...
 //                   [--media FILE]... [--on-approve TEXT] [--brain pN | --skill sN] [--switch-on NAME] [--quiet]
+//                   [--result] [--continues qN]                 --result: a goal's finished work, added by the
+//                                                               server; without a question nothing waits.
+//                                                               --continues: the next step of that card's job
 //                                                               prints the id (q1, q2, ...)
 //   fraim-queue list [--all] [--json] [--lead NAME]   open items, most urgent first
 //   fraim-queue show ID [--json]
@@ -141,7 +144,7 @@ function newId() {
   return `q${n}`
 }
 
-function copyMedia(dir, files) {
+function copyMedia(dir, files, taken = []) {
   const names = []
   if (!files.length) return names
   fs.mkdirSync(path.join(dir, 'media'), { recursive: true })
@@ -156,7 +159,7 @@ function copyMedia(dir, files) {
       continue
     }
     let name = path.basename(file).replace(/[^\w.-]/g, '_')
-    while (names.includes(name)) name = `1-${name}`
+    while (names.includes(name) || taken.includes(name)) name = `1-${name}`
     fs.copyFileSync(file, path.join(dir, 'media', name))
     names.push(name)
   }
@@ -199,9 +202,35 @@ export function newText(item) {
   return lines.join('\n')
 }
 
+// One job, one card: the card a goal was started from, when it can carry the next step.
+function cardToContinue(id) {
+  if (!id) return null
+  if (!/^q\d{1,6}$/.test(id)) usage('--continues needs a queue item id (q1, q2, ...)')
+  try {
+    const card = readItem(id)
+    return card.brain || card.skill ? null : card
+  } catch { return null }
+}
+
+// The next step of a job lands on the job's card and the step before it moves to the card's
+// history. With a new question the card waits for the owner again. With nothing to decide a
+// card the owner approved stays closed; rework the owner sent back always comes back to them.
+function continueCard(card, step, nothingToDecide) {
+  const history = [...(card.history || []), {
+    title: card.title, ask: card.ask, state: card.state, note: card.note, created: card.created, decided: card.decided,
+    via: card.via || '', goal: card.goal, summary: card.summary.slice(0, 4000), links: card.links, media: card.media,
+  }]
+  const result = { summary: step.summary, goal: step.goal, source: step.source, lead: step.lead || card.lead, links: step.links, media: step.media, history }
+  if (nothingToDecide && card.state === 'approved') return { ...card, ...result }
+  return { ...card, ...step, ...result, id: card.id, title: card.title, started: card.started || card.created, follow_up: '', outcome: '', via: '', approved_by: '', switch_on: '' }
+}
+
 export function addItem(opts) {
   const title = String(opts.title || '').trim()
   if (!title) usage('add needs --title')
+  if (process.env.FRAIM_GOAL && !opts.result && !opts.brain && !opts.skill && !opts.switchOn && !opts.approvedBy) {
+    usage(`a goal does not add queue items itself: write ~/fraim/goals/${process.env.FRAIM_GOAL}/queue.json and the server makes the card; other questions go in its "more" list`)
+  }
   const kind = opts.kind || 'review'
   if (!KINDS.includes(kind)) usage(`--kind must be one of ${KINDS.join(', ')}`)
   const priority = parseInt(opts.priority || '2', 10)
@@ -213,9 +242,11 @@ export function addItem(opts) {
   const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
   if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
   const why = (Array.isArray(opts.why) ? opts.why : opts.why ? [opts.why] : []).map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
-  const id = newId()
+  const origin = cardToContinue(opts.continues)
+  const id = origin ? origin.id : newId()
   const dir = itemDir(id)
-  const item = {
+  const takenMedia = origin ? [...origin.media, ...(origin.history || []).flatMap((s) => s.media || [])] : []
+  const step = {
     id,
     title: title.slice(0, 200),
     // The decision in one look: the question for the owner, the advice, why it is needed, what
@@ -233,7 +264,7 @@ export function addItem(opts) {
     goal: opts.goal || '',
     lead: opts.lead || '',
     links: opts.links || [],
-    media: copyMedia(dir, opts.media || []),
+    media: copyMedia(dir, opts.media || [], takenMedia),
     on_approve: String(opts.onApprove || ''),
     brain: opts.brain || '',
     skill: opts.skill || '',
@@ -244,6 +275,9 @@ export function addItem(opts) {
     created: now(),
     decided: '',
   }
+  const nothingToDecide = Boolean(opts.result) && !step.ask && !step.on_approve && kind !== 'failed'
+  const item = origin ? continueCard(origin, step, nothingToDecide) : step
+  if (!origin && nothingToDecide) Object.assign(item, { state: 'dismissed', note: 'Nothing to decide.', decided: now(), via: 'system' })
   writeItem(item)
   if (opts.approvedBy) {
     try {
@@ -253,7 +287,7 @@ export function addItem(opts) {
       process.stderr.write(`fraim-queue: ${err.message}. ${id} waits in the queue as a normal question.\n`)
     }
   }
-  if (!opts.quiet) notify(newText(item))
+  if (!opts.quiet && item.state === 'open') notify(newText(item))
   // A lead hears at once when a goal it started ends; the chief hears through its queue events.
   if (item.goal && item.lead && !isChief(item.lead)) {
     tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`)
@@ -345,12 +379,14 @@ const GRANT_DAYS = 14
 export function approvedByGrant(item, grantId) {
   if (!/^q\d{1,6}$/.test(grantId || '')) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
   const grant = readItem(grantId)
-  if (grant.state !== 'approved' || grant.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
+  // A card that moved on to its next question still carries the owner's last decision.
+  const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')
+  if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
   if (grant.brain || grant.skill) throw new Error(`${grantId} approved a brain change; ask the owner in the queue instead`)
-  const age = Date.now() - Date.parse(String(grant.decided).replace(' ', 'T'))
+  const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
   if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
   item.approved_by = grantId
-  const done = applyDecision(item, 'approved', `The owner already said yes: "${grant.title}" (${grantId})${grant.note ? `: ${grant.note}` : ''}`, 'grant', { HEADLESS_OK: true })
+  const done = applyDecision(item, 'approved', `The owner already said yes: "${grant.title}" (${grantId})${decision.note ? `: ${decision.note}` : ''}`, 'grant', { HEADLESS_OK: true })
   grant.used_by = [...(grant.used_by || []), item.id]
   writeItem(grant)
   notify(`Started, because you already said yes to "${grant.title}": ${item.title}.${item.if_yes ? ` ${item.if_yes}` : ''}${done.follow_up ? ' A task for it has started.' : ''}`)
@@ -627,6 +663,7 @@ function describe(item) {
   if (item.summary) parts.push('', item.ask ? 'Details:' : '', item.summary)
   if (item.links.length) parts.push('', ...item.links.map((l) => `link: ${l}`))
   if (item.media.length) parts.push('', ...item.media.map((m) => `media: ${path.join(itemDir(item.id), 'media', m)}`))
+  if (item.history?.length) parts.push('', 'Earlier steps:', ...item.history.map((s) => `- ${s.ask || s.title} (${s.state}${s.note ? `: ${s.note}` : ''})`))
   if (item.switch_on) parts.push('', `On approve: switch on ${item.switch_on}`)
   if (item.on_approve) parts.push('', `On approve: ${item.on_approve}`)
   if (item.note) parts.push('', `Owner: ${item.note}`)
@@ -1147,6 +1184,7 @@ function renderDetail() {
     (it.links.length ? '<div class="h3">Links</div><div class="att">' + it.links.map(linkHtml).join('') + '</div>' : '') +
     (it.on_approve && !card ? '<div class="h3">On approve, the server starts</div><div class="next">' + esc(it.on_approve) + '</div>' : '') +
     (open ? '' : '<div class="h3">Activity</div><div class="activity">' + statusIcon(it) + '<span>' + VERB[it.state] + (it.note ? ': ' + esc(it.note) : '') + (it.follow_up ? '. Started goal ' + esc(it.follow_up) + '.' : '') + '</span></div>') +
+    (it.history && it.history.length ? '<details class="more" style="margin-top:20px"><summary>Earlier steps of this job (' + it.history.length + ')</summary>' + it.history.slice().reverse().map(stepHtml).join('') + '</details>' : '') +
     '</div></div>'
   if (open) {
     html += '<div class="composer"><div class="composer-in"><textarea id="note" rows="1" placeholder="Leave a note for the agent. Sending back needs one."></textarea>' +
@@ -1155,6 +1193,9 @@ function renderDetail() {
   }
   el.innerHTML = html
   var ta = $('#note'); if (ta) ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px' })
+}
+function stepHtml(s) {
+  return '<div class="h3">' + esc(s.ask || s.title) + '</div><div class="activity">' + statusIcon(s) + '<span>' + esc(VERB[s.state] || 'Waited') + (s.note ? ': ' + esc(s.note) : '') + ' ' + ago(s.decided || s.created) + ' ago</span></div>' + (s.summary ? '<div class="desc">' + esc(s.summary) + '</div>' : '')
 }
 function agentIcon(a) {
   var c = AGENT_COLOR[a.status] || 'var(--faint)'
@@ -1291,7 +1332,7 @@ function parseArgs(argv, multi = []) {
     if (a === '--') { out._.push(...argv.slice(i + 1)); break }
     if (!a.startsWith('--')) { out._.push(a); continue }
     const key = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())
-    if (['all', 'json', 'quiet'].includes(key)) { out[key] = true; continue }
+    if (['all', 'json', 'quiet', 'result'].includes(key)) { out[key] = true; continue }
     if (i + 1 >= argv.length) usage(`${a} needs a value`)
     const value = argv[++i]
     if (multi.includes(key)) (out[key] ||= []).push(value)
@@ -1309,7 +1350,7 @@ function main(argv) {
       let summary = args.summary || ''
       if (args.summaryFile) summary = fs.readFileSync(args.summaryFile, 'utf8')
       const item = addItem({ ...args, summary, links: args.link, media: args.media })
-      console.log(item.id)
+      if (!args.result || item.state === 'open') console.log(item.id)
       return
     }
     case 'grant': {

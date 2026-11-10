@@ -429,6 +429,21 @@ Not logged in · Please run /login"
   [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = system ]
 }
 
+@test "a goal from an approved card reports on that card, not on a new one" {
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
+  fraim-queue add --quiet --title "Meta pixel tests" --ask "Rerun?" --on-approve "rerun" >/dev/null
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  jq '.state = "approved" | .decided = "2026-11-10T08:00:00Z"' "$item" > "$item.new"
+  mv "$item.new" "$item"
+  FRAIM_GOAL_FROM_QUEUE=1 "$GOAL" start --queue q1 -- 'The owner approved queue item q1 ("Meta pixel tests"). Do this approved next step now: rerun them'
+  wait_state g1 done
+  for _ in $(seq 30); do [ "$(jq -r '.history // [] | length' "$item")" = 1 ] && break; sleep 0.1; done
+  [ "$(jq -r '.history | length' "$item")" = 1 ]
+  [ "$(jq -r .goal "$item")" = g1 ]
+  [ "$(jq -r .state "$item")" = approved ]
+  [ ! -e "$FRAIM_QUEUE_DIR/q2" ]
+}
+
 @test "bad input is a usage error" {
   run "$GOAL" start
   [ "$status" -eq 2 ]

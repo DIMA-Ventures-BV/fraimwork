@@ -20,10 +20,14 @@ done | jq -R . | jq -sc .)"
 newest="$(printf '%s' "$items" | jq '[.[].id | ltrimstr("q") | tonumber] | max // 0')"
 last="$(cat "$state/last" 2>/dev/null)"
 printf '%s\n' "$newest" > "$state/last"
+# A card that moved on to the next step of its job keeps its id; its history length tells.
+seen='{}'
+[ ! -s "$state/steps" ] || seen="$(cat "$state/steps")"
+printf '%s' "$items" | jq -c 'map(select(.history) | {key: .id, value: (.history | length)}) | from_entries' > "$state/steps"
 [ -n "$last" ] || exit 0
 
-printf '%s' "$items" | jq -r --argjson last "$last" --argjson chiefs "$chiefs" --arg filter "$filter" '
-  map(select((.id | ltrimstr("q") | tonumber) > $last and .state == "open"))
+printf '%s' "$items" | jq -r --argjson last "$last" --argjson seen "$seen" --argjson chiefs "$chiefs" --arg filter "$filter" '
+  map(select(((.id | ltrimstr("q") | tonumber) > $last or (.history // [] | length) > ($seen[.id] // 0)) and .state == "open"))
   | map(select(.lead as $l | ($chiefs | index($l)) | not))
   | map(select(
       if $filter == "all" then true
