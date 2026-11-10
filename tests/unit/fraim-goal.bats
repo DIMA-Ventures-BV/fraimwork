@@ -11,6 +11,7 @@ setup() {
   export FRAIM_GOAL_POLL=0.1 FRAIM_GOAL_KEEP=0 FRAIM_GOAL_READY=1
   cp "$BATS_TEST_DIRNAME/fakes/hc" "$T/bin/hc"
   ln -s "$BATS_TEST_DIRNAME/../../workspace/bin/fraim-herdr" "$T/bin/fraim-herdr"
+  ln -s "$BATS_TEST_DIRNAME/../../workspace/bin/fraim-prompt" "$T/bin/fraim-prompt"
   # $T/offline: WhatsApp is down, so neither the gateway nor fraim-notify gets a message out.
   cat > "$T/bin/fraim-gateway" <<'EOF'
 #!/usr/bin/env bash

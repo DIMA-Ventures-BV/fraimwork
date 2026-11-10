@@ -1,0 +1,326 @@
+#!/usr/bin/env node
+// fraim-prompt: every instruction an agent gets is a text file the owner can change.
+// fraimwork ships the defaults; the owner's file wins, for one agent or for all of them.
+//
+//   fraim-prompt list [--lead L]             every prompt and whose version is used
+//   fraim-prompt show NAME [--lead L]        the text that is used now
+//   fraim-prompt path NAME [--lead L]        the file that is used now
+//   fraim-prompt own NAME [--lead L]         copy the default to the owner's file and print its path
+//   fraim-prompt diff NAME [--lead L]        the owner's file against the default
+//   fraim-prompt reset NAME [--lead L]       back to the default (the owner's file goes to .history)
+//   fraim-prompt check [NAME] [--lead L]     name every mistake in the owner's files
+//   fraim-prompt render NAME [--lead L] [--set KEY=VALUE]...
+//
+// Where a prompt is found, first match wins:
+//   ~/fraim/leads/L/prompts/NAME.md   one agent (with --lead L)
+//   ~/fraim/prompts/NAME.md           every agent
+//   /etc/fraim/prompts/NAME.md        the default (repo: workspace/prompts)
+//
+// Template language, nothing more:
+//   {{key}}               the value, empty when not set
+//   {{#key}}...{{/key}}   only when the value is not empty
+//   {{^key}}...{{/key}}   only when the value is empty
+//   {{> name}}            another prompt, found the same way
+//   {{! text}}            a note for whoever edits the file; not rendered
+// Values are inserted as they are: text in a value is never read as a template.
+//
+// A mistake in the owner's file must not stop an agent: render warns and uses the default.
+// Exit codes: 0 ok, 1 failure, 2 usage.
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const FILES = process.env.FRAIM_FILES_DIR || path.join(os.homedir(), 'fraim')
+const CHECKOUT = path.join(path.dirname(fs.realpathSync(process.argv[1])), '..', 'prompts')
+const DEFAULTS = process.env.FRAIM_PROMPT_DEFAULTS || (fs.existsSync(CHECKOUT) ? CHECKOUT : '/etc/fraim/prompts')
+const OWNER = process.env.FRAIM_PROMPTS_DIR || path.join(FILES, 'prompts')
+const LEADS = process.env.FRAIM_LEADS_DIR || path.join(FILES, 'leads')
+const NAME = /^[a-z0-9][a-z0-9-]*$/
+const MAX_DEPTH = 8
+
+const die = (msg, code = 1) => { process.stderr.write(`${msg}\n`); process.exit(code) }
+const read = (file) => { try { return fs.readFileSync(file, 'utf8') } catch { return null } }
+
+function layers(name, lead) {
+  const out = []
+  if (lead) out.push({ source: `lead ${lead}`, dir: path.join(LEADS, lead, 'prompts'), owner: true })
+  out.push({ source: 'yours', dir: OWNER, owner: true })
+  out.push({ source: 'default', dir: DEFAULTS, owner: false })
+  return out.map((l) => ({ ...l, file: path.join(l.dir, `${name}.md`) }))
+}
+
+const defaultFile = (name) => path.join(DEFAULTS, `${name}.md`)
+const ownerLayer = (name, lead) => layers(name, lead)[0]
+
+function resolve(name, lead) {
+  for (const layer of layers(name, lead)) {
+    const text = read(layer.file)
+    if (text !== null && text.trim()) return { ...layer, text }
+  }
+  return null
+}
+
+const TAG = /\{\{\s*([#^/>!]?)\s*([^{}]*?)\s*\}\}/g
+const KEY = /^[a-z0-9_-]+$/
+
+function parse(template) {
+  // A section tag or note alone on its line leaves no empty line behind.
+  const source = template.replace(/^[ \t]*(\{\{\s*[#^/!][^{}]*\}\})[ \t]*\r?\n/gm, '$1')
+  const root = { kids: [] }
+  const stack = [root]
+  let at = 0
+  for (const m of source.matchAll(TAG)) {
+    const [whole, sigil, body] = m
+    const top = stack[stack.length - 1]
+    if (m.index > at) top.kids.push({ text: source.slice(at, m.index) })
+    at = m.index + whole.length
+    if (sigil === '!') continue
+    if (sigil === '>') {
+      if (!NAME.test(body)) throw new Error(`"${whole}" does not name a prompt`)
+      top.kids.push({ partial: body })
+    } else if (sigil === '#' || sigil === '^') {
+      if (!KEY.test(body)) throw new Error(`"${whole}" is not a valid section`)
+      const node = { key: body, invert: sigil === '^', kids: [] }
+      top.kids.push(node)
+      stack.push(node)
+    } else if (sigil === '/') {
+      if (stack.length === 1 || top.key !== body) throw new Error(`"${whole}" closes a section that is not open`)
+      stack.pop()
+    } else {
+      if (!KEY.test(body)) throw new Error(`"${whole}" is not a valid value name`)
+      top.kids.push({ value: body })
+    }
+  }
+  if (stack.length > 1) throw new Error(`the section "${stack[stack.length - 1].key}" is never closed`)
+  if (at < source.length) root.kids.push({ text: source.slice(at) })
+  return root
+}
+
+function render(node, vars, lead, depth) {
+  let out = ''
+  for (const kid of node.kids) {
+    if (kid.text !== undefined) out += kid.text
+    else if (kid.value !== undefined) out += vars[kid.value] ?? ''
+    else if (kid.partial !== undefined) {
+      if (depth >= MAX_DEPTH) throw new Error(`prompts include each other too deep at "${kid.partial}"`)
+      const found = resolve(kid.partial, lead)
+      if (!found) throw new Error(`there is no prompt "${kid.partial}"`)
+      out += render(parse(found.text), vars, lead, depth + 1)
+    } else if (Boolean(vars[kid.key]) !== kid.invert) out += render(kid, vars, lead, depth)
+  }
+  return out
+}
+
+// Every value name a template and the prompts it includes can use.
+function namesIn(node, lead, seen = new Set(), depth = 0) {
+  const names = new Set()
+  for (const kid of node.kids) {
+    if (kid.value) names.add(kid.value)
+    if (kid.key) names.add(kid.key)
+    if (kid.partial && !seen.has(kid.partial) && depth < MAX_DEPTH) {
+      seen.add(kid.partial)
+      const found = resolve(kid.partial, lead)
+      if (found) for (const n of namesIn(parse(found.text), lead, seen, depth + 1)) names.add(n)
+    }
+    if (kid.kids) for (const n of namesIn(kid, lead, seen, depth)) names.add(n)
+  }
+  return names
+}
+
+function problems(name, lead) {
+  const blank = layers(name, lead).filter((l) => l.owner && read(l.file) !== null && !read(l.file).trim())
+  if (blank.length) return blank.map((l) => `${l.file}: the file is empty, so it is skipped`)
+  const found = resolve(name, lead)
+  if (!found || !found.owner) return []
+  let tree
+  try {
+    tree = parse(found.text)
+    render(tree, {}, lead, 0)
+  } catch (err) {
+    return [`${found.file}: ${err.message}`]
+  }
+  const shipped = read(defaultFile(name))
+  if (shipped === null) return []
+  const known = namesIn(parse(shipped), null)
+  return [...namesIn(tree, lead)].filter((n) => !known.has(n))
+    .map((n) => `${found.file}: "${n}" is not a value this prompt gets (it stays empty)`)
+}
+
+function allNames(lead) {
+  const names = new Set()
+  for (const dir of layers('x', lead).map((l) => l.dir)) {
+    let entries = []
+    try { entries = fs.readdirSync(dir) } catch {}
+    for (const e of entries) if (e.endsWith('.md') && NAME.test(e.slice(0, -3))) names.add(e.slice(0, -3))
+  }
+  return [...names].sort()
+}
+
+function baseFile(layer, name) { return path.join(layer.dir, '.base', `${name}.md`) }
+
+function args(argv) {
+  const out = { rest: [], set: {}, lead: '' }
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--lead') {
+      out.lead = argv[++i] ?? die('--lead needs a name', 2)
+      if (!NAME.test(out.lead)) die(`"${out.lead}" is not a lead name`, 2)
+    } else if (a === '--set') {
+      const pair = argv[++i] ?? die('--set needs KEY=VALUE', 2)
+      const eq = pair.indexOf('=')
+      if (eq < 1) die(`--set needs KEY=VALUE, got "${pair}"`, 2)
+      out.set[pair.slice(0, eq)] = pair.slice(eq + 1)
+    } else out.rest.push(a)
+  }
+  return out
+}
+
+function nameArg(a) {
+  const name = a.rest[0] ?? die('this command needs a prompt name; fraim-prompt list shows them', 2)
+  if (!NAME.test(name)) die(`"${name}" is not a prompt name`, 2)
+  return name
+}
+
+// A file with a mistake is skipped, so the next one in line is used: a broken file for one
+// agent must not cost the owner's good file for every agent.
+function cmdRender(a) {
+  const name = nameArg(a)
+  let tried = false
+  for (const layer of layers(name, a.lead)) {
+    const text = read(layer.file)
+    if (text === null || !text.trim()) continue
+    tried = true
+    try {
+      process.stdout.write(render(parse(text), a.set, a.lead, 0))
+      return
+    } catch (err) {
+      process.stderr.write(`fraim-prompt: ${layer.file}: ${err.message}; using the next version\n`)
+    }
+  }
+  if (!tried) die(`no prompt "${name}"; fraim-prompt list shows them`)
+  const shipped = read(defaultFile(name)) ?? die(`no default for "${name}"`)
+  try { process.stdout.write(renderDefault(shipped, a.set)) } catch (e) { die(`the default of "${name}" is broken: ${e.message}`) }
+}
+
+// The fallback reads only shipped files, so a broken owner's include cannot break it again.
+function renderDefault(text, vars) {
+  const walk = (node, depth) => {
+    let out = ''
+    for (const kid of node.kids) {
+      if (kid.text !== undefined) out += kid.text
+      else if (kid.value !== undefined) out += vars[kid.value] ?? ''
+      else if (kid.partial !== undefined) {
+        const inc = read(defaultFile(kid.partial))
+        if (inc === null || depth >= MAX_DEPTH) die(`no default for "${kid.partial}"`)
+        out += walk(parse(inc), depth + 1)
+      } else if (Boolean(vars[kid.key]) !== kid.invert) out += walk(kid, depth)
+    }
+    return out
+  }
+  return walk(parse(text), 0)
+}
+
+function cmdList(a) {
+  for (const name of allNames(a.lead)) {
+    const found = resolve(name, a.lead)
+    if (!found) { process.stdout.write(`${name.padEnd(24)} empty  (has a mistake: fraim-prompt check)\n`); continue }
+    let note = ''
+    if (found.owner) {
+      const base = read(baseFile(found, name))
+      const shipped = read(defaultFile(name))
+      if (base !== null && shipped !== null && base !== shipped) note = '  (fraimwork changed its default since you copied it)'
+      if (problems(name, a.lead).length) note += '  (has a mistake: fraim-prompt check)'
+    }
+    process.stdout.write(`${name.padEnd(24)} ${found.source}${note}\n`)
+  }
+}
+
+function cmdOwn(a) {
+  const name = nameArg(a)
+  const layer = ownerLayer(name, a.lead)
+  if (read(layer.file) !== null) { process.stdout.write(`${layer.file}\n`); return }
+  const found = resolve(name, a.lead)
+  if (!found) die(`no prompt "${name}"; fraim-prompt list shows them`)
+  fs.mkdirSync(path.join(layer.dir, '.base'), { recursive: true })
+  fs.writeFileSync(layer.file, found.text)
+  const shipped = read(defaultFile(name))
+  if (shipped !== null) fs.writeFileSync(baseFile(layer, name), shipped)
+  process.stdout.write(`${layer.file}\n`)
+}
+
+function cmdReset(a) {
+  const name = nameArg(a)
+  const layer = ownerLayer(name, a.lead)
+  if (read(layer.file) === null) { process.stdout.write(`${name} already uses the default\n`); return }
+  const history = path.join(layer.dir, '.history')
+  fs.mkdirSync(history, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+  fs.renameSync(layer.file, path.join(history, `${name}.${stamp}.md`))
+  fs.rmSync(baseFile(layer, name), { force: true })
+  process.stdout.write(`${name} is back to ${resolve(name, a.lead)?.source ?? 'nothing'}; the old text is in ${history}\n`)
+}
+
+function diffLines(a, b) {
+  const x = a.split('\n')
+  const y = b.split('\n')
+  const lcs = Array.from({ length: x.length + 1 }, () => new Array(y.length + 1).fill(0))
+  for (let i = x.length - 1; i >= 0; i--) {
+    for (let j = y.length - 1; j >= 0; j--) {
+      lcs[i][j] = x[i] === y[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+    }
+  }
+  const out = []
+  let i = 0
+  let j = 0
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) { i++; j++ }
+    else if (j < y.length && (i === x.length || lcs[i][j + 1] >= lcs[i + 1][j])) out.push(`+ ${y[j++]}`)
+    else out.push(`- ${x[i++]}`)
+  }
+  return out
+}
+
+function cmdDiff(a) {
+  const name = nameArg(a)
+  const found = resolve(name, a.lead)
+  if (!found) die(`no prompt "${name}"`)
+  if (!found.owner) { process.stdout.write(`${name} uses the default\n`); return }
+  const shipped = read(defaultFile(name)) ?? ''
+  const lines = diffLines(shipped, found.text)
+  process.stdout.write(lines.length ? `${lines.join('\n')}\n` : `${name} is the same as the default\n`)
+}
+
+function cmdCheck(a) {
+  const names = a.rest.length ? [nameArg(a)] : allNames(a.lead)
+  const all = names.flatMap((n) => problems(n, a.lead))
+  if (all.length) die(all.join('\n'))
+  process.stdout.write('No mistakes found.\n')
+}
+
+function ownerOnly() {
+  if (process.env.FRAIM_HEADLESS === '1') die('only the owner changes prompts; this run has no owner watching')
+}
+
+const [cmd, ...rest] = process.argv.slice(2)
+const parsed = args(rest)
+switch (cmd) {
+  case 'render': cmdRender(parsed); break
+  case 'list': cmdList(parsed); break
+  case 'show': {
+    const name = nameArg(parsed)
+    const found = resolve(name, parsed.lead) ?? die(`no prompt "${name}"; fraim-prompt list shows them`)
+    process.stdout.write(found.text)
+    break
+  }
+  case 'path': {
+    const name = nameArg(parsed)
+    const found = resolve(name, parsed.lead) ?? die(`no prompt "${name}"`)
+    process.stdout.write(`${found.file}\n`)
+    break
+  }
+  case 'own': ownerOnly(); cmdOwn(parsed); break
+  case 'reset': ownerOnly(); cmdReset(parsed); break
+  case 'diff': cmdDiff(parsed); break
+  case 'check': cmdCheck(parsed); break
+  default: die('usage: fraim-prompt list|show|path|own|diff|reset|check|render NAME [--lead L] [--set KEY=VALUE]', 2)
+}

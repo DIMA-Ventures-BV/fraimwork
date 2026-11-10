@@ -680,3 +680,16 @@ FAKE
   [ "$(fraim-queue show q1 --json | jq -r .state)" = open ]
   [ "$(fraim-queue show q2 --json | jq -r .state)" = open ]
 }
+
+@test "the owner's own chief prompt is what the chief gets, and other leads keep the default" {
+  fraim-lead new chief --chief
+  fraim-lead new shop
+  mkdir -p "$FRAIM_LEADS_DIR/chief/prompts"
+  printf 'Be blunt. Brief: {{brief}}\n' > "$FRAIM_LEADS_DIR/chief/prompts/chief-run.md"
+  fraim-lead run chief
+  grep -q 'Be blunt' "$CLAUDE_ARGS"
+  run grep -q 'How you route work' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
+  fraim-lead run shop
+  run grep -q 'Be blunt' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
+  grep -q 'What to do this run' "$CLAUDE_ARGS"
+}
