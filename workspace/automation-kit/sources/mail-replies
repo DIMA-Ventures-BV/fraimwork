@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# description: Open cards that came from mail, so you can check whether someone answered
+# tools: mcp__google__search_gmail_messages, mcp__google__get_gmail_message_content
+# Source plugin: prints plain text, or nothing. It exits non-zero when it could not look.
+set -uo pipefail
+items="$(fraim-queue list --all --json 2>/dev/null)" || exit 1
+cards="$(printf '%s' "$items" | jq -r '.[] | select(.state == "open" and ((.source // "") | startswith("automation mail"))) | "\(.id): \(.title)"')" || exit 1
+[ -n "$cards" ] || exit 0
+printf '%s\n' "$cards"
+echo "For each card, search Gmail for its sender or subject (read-only). A reply in that thread from the owner or the team means it is answered."

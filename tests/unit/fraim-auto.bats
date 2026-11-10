@@ -532,3 +532,15 @@ Meta spent 400 euro this week for 3 orders." run "$AUTO" run ads
   FRAIM_LEAD_ROLE=engineer fraim-auto new other >/dev/null
   grep -qx 'enabled: false' "$FRAIM_AUTOMATIONS_DIR/other/automation.md"
 }
+
+@test "a good run closes the failure card of that automation only" {
+  export FRAIM_QUEUE_DIR="$HOME/fraim/queue" FRAIM_QUEUE_QUIET=1
+  make_auto flaky 'schedule: "0 8 * * *"' 'Do it.'
+  FAKE_FAIL=1 run "$AUTO" fire flaky
+  fraim-queue add --quiet --source "automation other" --kind failed --title "Automation other failed" >/dev/null
+  [ "$(fraim-queue list --json | jq 'length')" = 2 ]
+  run "$AUTO" fire flaky
+  [ "$status" -eq 0 ]
+  [ "$(fraim-queue list --json | jq -r '.[].title')" = "Automation other failed" ]
+  [ "$(fraim-queue show q1 --json | jq -r .note)" = "Solved: the automation works again" ]
+}

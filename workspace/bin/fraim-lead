@@ -233,6 +233,7 @@ prompt_for() {
       --set "input=${input:0:8000}" --set "trigger=${FRAIM_LEAD_TRIGGER:-manual}"
       --set "automations=$(fraim-auto list 2>/dev/null | head -40)"
       --set "outbox=$(tail -c 4000 "${FRAIM_FILES_DIR:-$HOME/fraim}/outbox.md" 2>/dev/null)"
+      --set "sources=$(fraim-auto sources 2>/dev/null)"
       --set "style_whatsapp=$(style_block whatsapp)")
   else
     template="lead-run"
@@ -272,7 +273,10 @@ tools_for() {
     "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh pr list:*)" "Bash(gh pr view:*)" "Bash(gh run list:*)")
   t+=("Bash(fraim-goal start --lead $name:*)")
   t+=("Bash(fraim-lead tell:*)")
-  [ "$chief" = 0 ] || t+=("Bash(fraim-queue prio:*)")
+  if [ "$chief" = 1 ]; then
+    t+=("Bash(fraim-queue prio:*)" "Bash(fraim-queue solved:*)")
+    while IFS= read -r repo; do [ -z "$repo" ] || t+=("$repo"); done < <(fraim-auto sources --tools 2>/dev/null)
+  fi
   # The engineer builds: it writes automations, plugins, lead briefs and skill drafts, and tests
   # them. It cannot switch anything on (fraim-auto on, resume, fraim-lead resume).
   if is_engineer "$dir"; then
