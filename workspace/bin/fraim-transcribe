@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# fraim-transcribe: print the words of one audio file (a WhatsApp voice message, for example).
+# The speech engine runs on this server, so the audio stays here and no API key is needed.
+#
+#   fraim-transcribe FILE
+#
+# Exit codes: 0 ok, 1 failure (no file, or no memory free), 2 usage.
+set -uo pipefail
+# shellcheck source=/dev/null
+. "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" 2>/dev/null || true
+
+[ $# -eq 1 ] || { echo "usage: fraim-transcribe FILE" >&2; exit 2; }
+
+file="$1"
+case "$file" in
+  \~/*) file="$HOME/${file#\~/}" ;;
+esac
+[ -f "$file" ] || { echo "fraim-transcribe: no such file: $file" >&2; exit 1; }
+
+# The engine takes about 500 MB, like one more Claude.
+fraim-capacity wait --max 120 >/dev/null || { echo "fraim-transcribe: not enough free memory" >&2; exit 1; }
+
+exec nice -n 10 "${FRAIM_WHISPER_PYTHON:-/opt/fraim/whisper/venv/bin/python}" \
+  "${FRAIM_WHISPER_SCRIPT:-/opt/fraim/whisper/transcribe.py}" "$file"
