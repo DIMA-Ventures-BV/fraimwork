@@ -192,3 +192,14 @@ EOF
   run fraim-relay log someone -- hi
   [ "$status" -eq 2 ]
 }
+
+@test "how the chief writes to the owner is the owner's own prompt when they have one" {
+  make_chief
+  mkdir -p "$FRAIM_LEADS_DIR/chief/prompts"
+  printf 'Write like a pirate. {{notices}}\n' > "$FRAIM_LEADS_DIR/chief/prompts/relay.md"
+  run fraim-notify "Goal g9 done."
+  [ "$status" -eq 0 ]
+  grep -q 'Write like a pirate' "$CLAUDE_ARGS"
+  grep -q 'Goal g9 done' "$CLAUDE_ARGS"
+  run grep -q 'Never write ids' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
+}

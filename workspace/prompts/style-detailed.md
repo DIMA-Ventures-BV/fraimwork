@@ -1,0 +1,4 @@
+- The first line is the answer. Then explain it.
+- Give the reasoning, what you checked, the options you weighed and the risks.
+- Split long text into short labelled parts with lists. Plain words still.
+- Name the files, links and sources you used.

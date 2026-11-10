@@ -39,6 +39,22 @@ fi
 if [ "${FRAIM_PERMISSIONS:-all}" = all ]; then
   set -- --dangerously-skip-permissions "$@"
 fi
+# What every Claude on the server is told is the prompt file "server" (fraim-prompt). Agents
+# nobody watches may not rewrite their own instructions.
+if command -v fraim-prompt >/dev/null; then
+  prompt_dir="$HOME/.local/state/fraim"
+  mkdir -p "$prompt_dir" 2>/dev/null
+  prompt_tmp="$(mktemp "$prompt_dir/.server-prompt.XXXXXX" 2>/dev/null)"
+  if [ -n "$prompt_tmp" ] && fraim-prompt render server > "$prompt_tmp" 2>/dev/null && [ -s "$prompt_tmp" ]; then
+    mv "$prompt_tmp" "$prompt_dir/server-prompt.md"
+  else
+    rm -f "$prompt_tmp"
+  fi
+  [ ! -s "$prompt_dir/server-prompt.md" ] || set -- "$@" --append-system-prompt-file "$prompt_dir/server-prompt.md"
+fi
+if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
+  set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**)"
+fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
 if command -v fraim-config >/dev/null; then
   exec fraim-config exec -- claude "$@"
