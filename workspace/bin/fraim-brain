@@ -55,6 +55,7 @@ const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(HOME, 'fraim/automa
 const AUTHORITY = process.env.FRAIM_AUTHORITY_DIR || path.join(HOME, '.config/fraim/authority')
 const PLUGIN = path.join(AUTOS, '_brain/brain')
 const PLUGIN_MARK = path.join(AUTHORITY, 'unreviewed/_brain.brain')
+const PLUGIN_SECONDS = 20
 
 class UsageError extends Error {}
 const usage = (msg) => { throw new UsageError(msg) }
@@ -997,17 +998,39 @@ function parseArgs(argv) {
   return out
 }
 
+function cutForPrompt(text) {
+  if (text.length <= PROMPT_CHARS) return text
+  const head = text.slice(0, PROMPT_CHARS + 1)
+  const end = head.lastIndexOf('\n')
+  return `${end >= 0 ? head.slice(0, end) : head.slice(0, PROMPT_CHARS)}\n`
+}
+
 // The owner's own brain replaces this one (docs/brain.md). It runs with FRAIM_BRAIN_BUILTIN=1,
 // so a fraim-brain call inside it reaches this default and never itself.
 function handOffToPlugin(action, argv) {
   if (process.env.FRAIM_BRAIN_BUILTIN === '1' || fs.existsSync(PLUGIN_MARK)) return
   if (!fs.statSync(PLUGIN, { throwIfNoEntry: false })?.isFile()) return
   if (['note', 'forget', 'undo', 'apply', 'discard'].includes(action)) ownerOnly('change the rules')
-  const res = spawnSync(PLUGIN, argv, { stdio: 'inherit', env: { ...process.env, FRAIM_BRAIN_BUILTIN: '1' } })
-  if (res.error) throw new Error(`the brain plug-in could not run: ${res.error.message}`)
+  const isShow = action === 'show'
+  const seconds = Number(process.env.FRAIM_BRAIN_PLUGIN_TIMEOUT) > 0 ? Number(process.env.FRAIM_BRAIN_PLUGIN_TIMEOUT) : PLUGIN_SECONDS
+  const res = spawnSync(PLUGIN, argv, {
+    stdio: isShow ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+    encoding: 'utf8',
+    timeout: seconds * 1000,
+    killSignal: 'SIGKILL',
+    env: { ...process.env, FRAIM_BRAIN_BUILTIN: '1' },
+  })
+  const failure = res.error?.code
+  if (failure === 'ETIMEDOUT') {
+    process.stderr.write(`fraim-brain: the plug-in gave no answer within ${seconds} seconds\n`)
+    if (isShow) process.exit(0)
+    return
+  }
+  if (res.error && failure !== 'ENOBUFS') throw new Error(`the brain plug-in could not run: ${res.error.message}`)
   // A queue card the default brain made must still close when the plug-in has no such action.
   if (res.status === 2 && ['apply', 'discard'].includes(action)) return
-  process.exit(res.status ?? 1)
+  if (isShow) process.stdout.write(cutForPrompt(res.stdout || ''))
+  process.exit(failure === 'ENOBUFS' ? 0 : res.status ?? 1)
 }
 
 function main(argv) {

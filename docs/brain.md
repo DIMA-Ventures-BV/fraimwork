@@ -85,6 +85,8 @@ What stays with the engine:
 - `note`, `forget`, `undo`, `apply` and `discard` are refused for a run nobody watches, before your program starts.
 - A program written by a run nobody watches, or any other file in that folder changed by one, is marked and ignored until your yes (`fraim-auto on`); the default brain runs meanwhile. What you write or ask for in the chat goes live at once.
 
+Every call has a time limit: 20 seconds, or `FRAIM_BRAIN_PLUGIN_TIMEOUT` seconds. When `show` runs out of time it prints nothing and exits 0, so prompts still build. Any other action that runs out of time is handed to the default brain, so a `review` or `distill` that needs longer needs a higher limit, and an action cut off halfway also runs in the default brain. `show` output longer than 6000 characters is cut at the last line end before the limit.
+
 If your program crashes on `show`, prompts go out without rules: every caller discards the error and carries on. If it exists but cannot start, other actions fail with an error instead of quietly writing to the default brain.
 
 To build on the default, call `fraim-brain` from your program. Your program runs with `FRAIM_BRAIN_BUILTIN=1`, so that call reaches the default and not your program again. Set the same variable yourself to skip your program from outside.

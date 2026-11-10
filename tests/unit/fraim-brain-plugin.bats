@@ -188,6 +188,67 @@ EOF
   [ "$output" = "rules=[] status=7" ]
 }
 
+sleeper() {
+  printf '#!/usr/bin/env bash\necho partial\nexec sleep 30\n' > "$P"
+  chmod +x "$P"
+}
+
+@test "show that runs out of time prints nothing and exits 0" {
+  sleeper
+  FRAIM_BRAIN_PLUGIN_TIMEOUT=0.3 run bash -c 'fraim-brain show --for web 2>/dev/null'
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "another action that runs out of time falls through to the default brain" {
+  sleeper
+  FRAIM_BRAIN_PLUGIN_TIMEOUT=0.3 run fraim-brain note "Write in Dutch"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rule r1 added"* ]]
+  grep -q 'Write in Dutch' "$FRAIM_BRAIN_DIR/rules.md"
+}
+
+@test "a time limit that is not a number leaves the default limit" {
+  plugin
+  FRAIM_BRAIN_PLUGIN_TIMEOUT=soon run fraim-brain show --for web
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"plugin rules"* ]]
+}
+
+@test "show is cut at a line end within 6000 characters" {
+  printf '#!/usr/bin/env bash\nfor i in $(seq 1 300); do printf "%%050d\\n" "$i"; done\n' > "$P"
+  chmod +x "$P"
+  run fraim-brain show --for web
+  [ "$status" -eq 0 ]
+  [ "${#output}" -le 6000 ]
+  [ "${#lines[@]}" -eq 117 ]
+  [ "${#lines[116]}" -eq 50 ]
+}
+
+@test "show that fits is passed on whole" {
+  printf '#!/usr/bin/env bash\nfor i in $(seq 1 100); do printf "%%050d\\n" "$i"; done\n' > "$P"
+  chmod +x "$P"
+  run fraim-brain show --for web
+  [ "${#lines[@]}" -eq 100 ]
+}
+
+@test "show without a line end is still held to the limit" {
+  printf '#!/usr/bin/env bash\nhead -c 9000 /dev/zero | tr "\\0" x\n' > "$P"
+  chmod +x "$P"
+  run fraim-brain show --for web
+  [ "$status" -eq 0 ]
+  [ "${#output}" -eq 6000 ]
+}
+
+@test "show with a flood of output is cut, not failed" {
+  printf '#!/usr/bin/env bash\nyes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | head -c 3000000\n' > "$P"
+  chmod +x "$P"
+  run fraim-brain show --for web
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  [ "${#output}" -le 6000 ]
+}
+
 @test "a plug-in that cannot run is an error, not a silent switch to the default" {
   printf 'not executable\n' > "$P"
   chmod -x "$P"
