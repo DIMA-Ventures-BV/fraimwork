@@ -10,7 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { sessionCommandArgs } from './goal-command.mjs'
-import { withContext } from './context.mjs'
+import { catchUpNote, withContext } from './context.mjs'
 import { Unanswered, lastAnswer } from './unanswered.mjs'
 import { parseVerdict } from './verdict.mjs'
 import { startedByMainSession } from './main-session.mjs'
@@ -252,7 +252,19 @@ async function readable(event) {
   return withQuote(seen, transcribe)
 }
 
+// A message WhatsApp delivers twice is handled once. A broken check never loses a message.
+function firstTime(event) {
+  if (!event.id) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    execFile('fraim-channels', ['seen', 'whatsapp', String(event.id)], { timeout: 5000 }, (err) => resolve(err?.code !== 10))
+  })
+}
+
 async function handleEvent(event) {
+  if (!(await firstTime(event))) {
+    log('skipped a message that arrived twice')
+    return
+  }
   if (event.type === 'contact') {
     event = await readable(event)
     execFile('fraim-queue', ['thread', 'whatsapp', '--number', String(event.sender), '--name', String(event.name || ''), '--', String(event.text || '')], { timeout: 30000 }, (err) => {
@@ -261,7 +273,8 @@ async function handleEvent(event) {
     return
   }
   if (event.type !== 'message') return
-  const verdict = parseVerdict(event, OWNER)
+  // A yes or no that waited offline may answer a request that is long gone: it is read as text.
+  const verdict = event.catchup ? null : parseVerdict(event, OWNER)
   if (verdict) {
     await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
     return
@@ -269,7 +282,7 @@ async function handleEvent(event) {
   event = await readable(event)
   const fromOwner = Boolean(OWNER) && event.sender === OWNER
   if (fromOwner) ownerChats.add(event.chat_id)
-  let content = event.text || '(empty message)'
+  let content = [catchUpNote(event), event.text || '(empty message)'].filter(Boolean).join('\n')
   if (fromOwner) {
     content = withContext(content, ownerContext())
     logLine('owner', event.chat_id, event.text || '(empty message)')

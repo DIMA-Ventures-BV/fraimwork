@@ -66,6 +66,7 @@ reaches_claude() {
   return 1
 }
 has_module whatsapp && check "whatsapp-reaches-claude" reaches_claude
+has_module google && check "mail-watch" fraim-channels check email
 has_module browser && check "server-browser" curl -fsS "${BROWSER_CDP_URL}/json/version"
 has_module sync && check "syncthing" curl -fsS http://syncthing:8384/rest/noauth/health
 

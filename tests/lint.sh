@@ -34,7 +34,7 @@ if command -v shellcheck >/dev/null; then
 else skip shellcheck; fi
 
 step "node syntax"
-for f in $(files '*.mjs' '*.js') workspace/bin/fraim-preview workspace/bin/fraim-queue workspace/bin/fraim-brain; do node --check "$f" || fail "node --check $f"; done
+for f in $(files '*.mjs' '*.js') workspace/bin/fraim-preview workspace/bin/fraim-queue workspace/bin/fraim-brain workspace/bin/fraim-channels; do node --check "$f" || fail "node --check $f"; done
 
 step "JSON files parse"
 for f in $(files '*.json'); do jq empty "$f" 2>/dev/null || fail "invalid JSON: $f"; done

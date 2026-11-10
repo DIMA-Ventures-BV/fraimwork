@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""fraim-mail-watch: notices new mail and leaves one line per mail for the server to pick up.
+
+Gmail is asked what changed since the last look. Without Google push it looks every 30 seconds;
+with push (fraim google push) a Pub/Sub message wakes it at once. The subscription is pulled, so
+the server needs no public address. No mail text is stored: only the ids of the mail and chain.
+"""
+import json
+import os
+import sys
+import time
+
+DIR = os.environ.get("FRAIM_GOOGLE_DIR", "/data/google")
+STATE = os.path.join(DIR, "mail-watch.json")
+EVENTS = os.path.join(DIR, "mail-events.jsonl")
+PUSH = os.path.join(DIR, "mail-push.json")
+POLL = int(os.environ.get("FRAIM_MAIL_POLL", "30"))
+KEEP = 500
+DAY = 86400
+NOT_NEW = {"SENT", "DRAFT", "SPAM", "TRASH", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"}
+
+
+def log(text):
+    print(f"fraim-mail-watch: {text}", file=sys.stderr, flush=True)
+
+
+def load(path, default):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return default
+
+
+def save(path, text):
+    with open(f"{path}.tmp", "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(f"{path}.tmp", path)
+
+
+def new_mail(history):
+    found, ids = [], set()
+    for entry in history:
+        for added in entry.get("messagesAdded", []):
+            message = added.get("message", {})
+            labels = set(message.get("labelIds", []))
+            if "INBOX" in labels and not labels & NOT_NEW and message.get("id") not in ids:
+                ids.add(message.get("id"))
+                found.append({"id": message.get("id"), "thread": message.get("threadId")})
+    return found
+
+
+def append_events(path, mails, seq):
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    for mail in mails:
+        seq += 1
+        lines.append(json.dumps({"seq": seq, **mail}))
+    save(path, "\n".join(lines[-KEEP:]) + "\n")
+    return seq
+
+
+def changes_since(service, start):
+    """(history, latest id); (None, None) when Google no longer has that far back."""
+    history, token, latest = [], None, start
+    while True:
+        try:
+            page = service.users().history().list(
+                userId="me", startHistoryId=start, historyTypes=["messageAdded"], labelId="INBOX", pageToken=token
+            ).execute()
+        except Exception as err:  # pylint: disable=broad-except
+            if getattr(getattr(err, "resp", None), "status", 0) == 404:
+                return None, None
+            raise
+        history += page.get("history", [])
+        latest = page.get("historyId", latest)
+        token = page.get("nextPageToken")
+        if not token:
+            return history, latest
+
+
+def look(service, state, events_file=EVENTS):
+    """Events go to disk before the position moves: a crash repeats a mail and never loses one."""
+    start = state.get("history_id")
+    if start:
+        history, latest = changes_since(service, start)
+        if history is not None:
+            mails = new_mail(history)
+            if mails:
+                state["seq"] = append_events(events_file, mails, int(state.get("seq", 0)))
+            state["history_id"] = latest
+            return len(mails)
+        log("Gmail has no history that far back; the scheduled mail check covers the gap")
+    state["history_id"] = service.users().getProfile(userId="me").execute()["historyId"]
+    return 0
+
+
+def renew_watch(service, state, push, now):
+    if not push:
+        return
+    if state.get("watch_topic") == push["topic"] and state.get("watch_expires", 0) - now > DAY:
+        return
+    body = {"topicName": push["topic"], "labelIds": ["INBOX"], "labelFilterBehavior": "INCLUDE"}
+    out = service.users().watch(userId="me", body=body).execute()
+    state["watch_expires"] = int(out["expiration"]) // 1000
+    state["watch_topic"] = push["topic"]
+
+
+def pull_client(push):
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    credentials = service_account.Credentials.from_service_account_info(
+        push["service_account"], scopes=["https://www.googleapis.com/auth/pubsub"]
+    )
+    return build("pubsub", "v1", credentials=credentials, cache_discovery=False)
+
+
+def wait_for_news(client, push, sleep=time.sleep):
+    """A push wakes this at once. A timeout only means Google had nothing to say."""
+    if not client:
+        sleep(POLL)
+        return
+    subscriptions = client.projects().subscriptions()
+    try:
+        out = subscriptions.pull(subscription=push["subscription"], body={"maxMessages": 50}).execute()
+    except TimeoutError:
+        return
+    except Exception as err:  # pylint: disable=broad-except
+        log(f"Google push did not answer ({type(err).__name__}); looking at the mail anyway")
+        sleep(POLL)
+        return
+    ids = [item["ackId"] for item in out.get("receivedMessages", [])]
+    if ids:
+        subscriptions.acknowledge(subscription=push["subscription"], body={"ackIds": ids}).execute()
+
+
+def signed_in():
+    from fraim_gmail import credentials_file
+
+    try:
+        return os.path.getsize(credentials_file()) > 0
+    except OSError:
+        return False
+
+
+def main():
+    from fraim_gmail import connect
+
+    state = load(STATE, {})
+    service, client, client_for = None, None, None
+    while True:
+        if not signed_in():
+            service = None
+            time.sleep(POLL)
+            continue
+        push = load(PUSH, None)
+        try:
+            service = service or connect()
+            renew_watch(service, state, push, time.time())
+            if push != client_for:
+                client, client_for = pull_client(push) if push else None, push
+            look(service, state)
+            state["last_check"] = int(time.time())
+            state["mode"] = "push" if push else "check"
+            save(STATE, json.dumps(state))
+        except Exception as err:  # pylint: disable=broad-except
+            log(f"could not read the mail ({type(err).__name__})")
+            service = None
+            time.sleep(POLL)
+            continue
+        wait_for_news(client, push)
+
+
+if __name__ == "__main__":
+    main()
