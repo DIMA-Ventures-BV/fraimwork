@@ -5,6 +5,7 @@
 # Claude login token in the macOS Keychain, then opens Claude with "set up fraim".
 # Env: FRAIM_NO_ALIASES=1, FRAIM_NO_TOKEN=1, FRAIM_NO_LAUNCH=1 skip those steps.
 #      FRAIM_MARKETPLACE=<path or owner/repo> installs the plugin from elsewhere (tests, forks).
+#      FRAIM_PROMPT="..." is the first thing Claude is asked (default: set up fraim).
 set -euo pipefail
 
 MARKETPLACE="${FRAIM_MARKETPLACE:-DIMA-Ventures-BV/fraimwork}"
@@ -153,7 +154,7 @@ fi
 say "All set. Claude opens now and sets up the rest with you."
 echo "  Later, open a new terminal and type: c"
 [ -n "${FRAIM_NO_LAUNCH:-}" ] && exit 0
-exec claude "set up fraim" </dev/tty
+exec claude "${FRAIM_PROMPT:-set up fraim}" </dev/tty
 }
 
 main "$@"

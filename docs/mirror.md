@@ -37,6 +37,12 @@ One item per line. `#` starts a comment.
 | `connect NAME URL oauth` | adds the MCP server and starts its sign-in; skipped when connected | `fraim connect NAME --url URL --oauth` |
 | `connect NAME URL key ENVVAR [HEADER [FORMAT]]` | adds the MCP server, its key from `$ENVVAR` goes to the secrets proxy | `fraim connect NAME --url URL --key` |
 | `host NAME [LAPTOP_ALIAS]` | gives the space its own SSH key for the host this laptop reaches as `ssh LAPTOP_ALIAS`; skipped when the space already reaches it | `fraim host add NAME --like ALIAS` |
+| `connect NAME URL claudekey HEADER [FORMAT]` | adds the MCP server; its key comes from this laptop's `~/.claude.json` and goes to the secrets proxy | `fraim connect NAME --url URL --key` |
+| `stdio NAME npx\|uvx\|bunx\|pnpx ARGS...` | adds an MCP server that the space runs itself | `fraim connect NAME --command` |
+| `mcpenv SERVER NAME` | copies the value of `NAME` in the `env` of this laptop's MCP server `SERVER` | `fraim secret env NAME` |
+| `claude PATH` | copies `CLAUDE.md`, `skills/X`, `commands/X.md` or `agents/X.md` from this laptop's `~/.claude`; skipped when the space has one | none |
+
+`fraim mirror scan --out FILE` writes a mirror file from this laptop's Claude setup, with names only. See docs/invite.md.
 
 ## Example
 

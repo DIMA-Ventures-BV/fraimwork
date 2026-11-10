@@ -234,7 +234,12 @@ tty_flag() { if is_tty; then printf -- '-t'; else printf -- '-T'; fi; }
 # shellcheck disable=SC2046
 workspace_ssh() { ssh $(ssh_opts) "claude@$FRAIM_HOST" "$@"; }
 
+# An invited laptop (fraim attach) reaches the workspace only; it has no root on the server.
+attached() { [ "${FRAIM_ADMIN:-}" = none ]; }
+NO_ADMIN="this computer is connected as a user of this fraim and has no admin access to the server; the person who runs your server does this"
+
 admin() {
+  attached && die "$NO_ADMIN"
   if [ "$FRAIM_ADMIN" = local ]; then
     # No stdin, like the remote branch: `docker compose exec` would eat a key piped to fraim.
     (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}") </dev/null
@@ -312,7 +317,9 @@ SPACE_INFO=""
 # One read per run of the selected space's ports and settings.
 space_info() {
   if [ -z "$SPACE_INFO" ]; then
-    if [ "$FRAIM_ACCESS" = local ]; then
+    if attached; then
+      SPACE_INFO=" "
+    elif [ "$FRAIM_ACCESS" = local ]; then
       SPACE_INFO="$(grep -E "^($SPACE_KEYS)=" "$ENV_FILE" 2>/dev/null || true)"
     else
       SPACE_INFO="$(admin "grep -E '^($SPACE_KEYS)=' $REMOTE_ENV 2>/dev/null || true")"
@@ -1297,6 +1304,7 @@ store_login_token() {
 # admin with this command's stdin passed through. admin's with_timeout runs ssh in the
 # background, and a background job gets /dev/null as stdin, so a piped key would be lost.
 admin_stdin() {
+  attached && die "$NO_ADMIN"
   if [ "$FRAIM_ADMIN" = local ]; then
     (cd "$REPO" && eval "${*//docker compose/docker compose -p $LOCAL_PROJECT --env-file $ENV_FILE}")
   else
@@ -1319,7 +1327,7 @@ cmd_secret() {
   load_config
   case "$action" in
     list)
-      admin "docker compose exec -T secrets fraim-secret list"
+      attached || admin "docker compose exec -T secrets fraim-secret list"
       local envs
       envs="$(workspace_ssh 'fraim-env list' 2>/dev/null || true)"
       if [ -n "$envs" ]; then
@@ -1350,7 +1358,8 @@ cmd_secret() {
       local header format
       header="$(flag header)"; header="${header:-Authorization}"
       format="$(flag format)"; format="${format:-Bearer %s}"
-      admin "docker compose exec -T secrets fraim-secret add $(printf '%q' "$name") --upstream $(printf '%q' "$(flag upstream)") --header $(printf '%q' "$header") --format $(printf '%q' "$format")"
+      secret_define "$name" "$(flag upstream)" "$header" "$format"
+      say "Added $name ($(flag upstream))."
       ;;
     set)
       [ -n "$name" ] || usage "$usage_line"
@@ -1363,7 +1372,8 @@ cmd_secret() {
         human "In your own Terminal app (not in the Claude chat), run: fraim secret set $name  and paste the key when it asks. Then tell Claude 'done'."
       fi
       [ -n "$value" ] || usage "no key given for $name"
-      printf '%s' "$value" | admin_stdin "docker compose exec -T secrets fraim-secret set $(printf '%q' "$name")"
+      printf '%s' "$value" | secret_store "$name"
+      say "Key for $name stored. It is never shown again."
       ;;
     rm)
       [ -n "$name" ] || usage "$usage_line"
@@ -1419,13 +1429,39 @@ cmd_google() {
 }
 
 # --- secrets helpers for repo and connect -------------------------------------------
+gate_file() { printf '%s/%s.gate' "$CONFIG_DIR" "$FRAIM_TARGET"; }
+# gate_call REQUEST [with-value]: one request to the secrets gate. With-value: the key is on
+# stdin. The token and the key travel on stdin only. Prints what follows "ok".
+gate_call() {
+  local answer
+  [ -s "$(gate_file)" ] || die "no gate token on this computer; ask the person who runs your server for a new invite"
+  answer="$( { cat "$(gate_file)"; printf '%s\n' "$1"; if [ -n "${2:-}" ]; then cat; printf '\n'; fi; } | workspace_ssh fraim-gate )" \
+    || die "the secrets gate does not answer; the server may need an update (the person who runs your server does this)"
+  case "$answer" in
+    ok*) printf '%s\n' "${answer#ok }" ;;
+    *) die "the secrets gate refused this: ${answer#error }" ;;
+  esac
+}
+
 secret_define() {  # NAME UPSTREAM HEADER FORMAT
+  if attached; then
+    gate_call "$(printf 'add\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4")" >/dev/null
+    return
+  fi
   admin "docker compose exec -T secrets fraim-secret add $(printf '%q' "$1") --upstream $(printf '%q' "$2") --header $(printf '%q' "$3") --format $(printf '%q' "$4")" >/dev/null
 }
 secret_store() {  # NAME, value on stdin
+  if attached; then
+    gate_call "$(printf 'set\t%s' "$1")" with-value >/dev/null
+    return
+  fi
   admin_stdin "docker compose exec -T secrets fraim-secret set $(printf '%q' "$1")" >/dev/null
 }
 secret_has_key() {  # NAME
+  if attached; then
+    [ "$(gate_call "$(printf 'has\t%s' "$1")")" = yes ]
+    return
+  fi
   admin "docker compose exec -T secrets fraim-secret list" 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n && $4 == "key set" { found = 1 } END { exit !found }'
 }
 # A key for this command comes from --stdin or a hidden prompt in a terminal. Without
@@ -1781,7 +1817,7 @@ cmd_tool() {
 # that is already done is skipped, so running the file again only does what is missing.
 # A mirror file can be shared, so nothing runs before the user has seen the plan (--yes).
 # See docs/mirror.md.
-MIRROR_KINDS="plugin repo tool env file connect host"
+MIRROR_KINDS="plugin repo tool env file connect host stdio mcpenv claude"
 
 # Home-folder paths a file line may not read here or write there: login keys, and files
 # that control the shell, git, Claude Code or fraim in the space.
@@ -1796,6 +1832,15 @@ mirror_file_allowed() {
 # mirror_check KIND ARGS...: exit 0 when the line is well formed.
 mirror_check() {
   local kind="$1" a; shift
+  # The one kind whose arguments are options of the program it starts (npx -y): only safe
+  # characters, because they reach a remote shell.
+  if [ "$kind" = stdio ]; then
+    [ $# -ge 3 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || return 1
+    case "$2" in npx|uvx|bunx|pnpx) ;; *) return 1 ;; esac
+    shift 2
+    for a in "$@"; do printf '%s' "$a" | grep -Eq '^[A-Za-z0-9@._:/=+-]+$' || return 1; done
+    return 0
+  fi
   # No word may look like an option: the words reach the building blocks as arguments.
   for a in "$@"; do case "$a" in -*) return 1 ;; esac; done
   case "$kind" in
@@ -1817,8 +1862,18 @@ mirror_check() {
           [ -z "${5:-}" ] || printf '%s' "$5" | grep -Eq '^[A-Za-z][A-Za-z0-9-]{0,63}$' || return 1
           [ -z "${6:-}" ] || { printf '%s' "$6" | grep -Eq '^[^[:space:]]{1,64}$' && case "$6" in *%s*) true ;; *) false ;; esac; }
           ;;
+        claudekey)
+          [ $# -ge 4 ] && [ $# -le 5 ] && printf '%s' "$4" | grep -Eq '^[A-Za-z][A-Za-z0-9-]{0,63}$' || return 1
+          [ -z "${5:-}" ] || { printf '%s' "$5" | grep -Eq '^[^[:space:]]{1,64}$' && case "$5" in *%s*) true ;; *) false ;; esac; }
+          ;;
         *) false ;;
       esac
+      ;;
+    mcpenv) [ $# -eq 2 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "$2" | grep -Eq '^[A-Z_][A-Z0-9_]{0,63}$' ;;
+    claude)
+      [ $# -eq 1 ] || return 1
+      case "/$1/" in */../*|*/./*) return 1 ;; esac
+      [ "$1" = CLAUDE.md ] || printf '%s' "$1" | grep -Eq '^(skills/[A-Za-z0-9._-]+|(commands|agents)/[A-Za-z0-9._-]+\.md)$'
       ;;
     host) [ $# -ge 1 ] && [ $# -le 2 ] && printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' && printf '%s' "${2:-$1}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' ;;
     *) false ;;
@@ -1836,11 +1891,18 @@ mirror_plan() {
     file) say "file    copy ~/$1 from this computer into the space (Claude there can read it)" ;;
     connect)
       if [ "$3" = oauth ]; then say "connect add MCP server $1 ($2) and sign in to it"
+      elif [ "$3" = claudekey ]; then say "connect add MCP server $1: its key from this computer's Claude goes to $(printf '%s' "$2" | sed -E 's#^https://([^/:]+).*#\1#') with every request"
       else say "connect add MCP server $1: the key in \$$4 goes to $(printf '%s' "$2" | sed -E 's#^https://([^/:]+).*#\1#') with every request"; fi
       ;;
     host) say "host    give the space SSH access to ${2:-$1} as this computer reaches it (adds a key to its authorized_keys)" ;;
+    stdio) say "stdio   add MCP server $1: runs ${*:2} in the space" ;;
+    mcpenv) say "mcpenv  copy $2 of MCP server $1 from this computer's Claude into the space (Claude there can read it)" ;;
+    claude) say "claude  copy ~/.claude/$1 from this computer into the space, when the space has none" ;;
   esac
 }
+
+claude_dir() { printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
+claude_json() { if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then printf '%s/.claude.json' "$CLAUDE_CONFIG_DIR"; else printf '%s/.claude.json' "$HOME"; fi; }
 
 # A value with something other than white space in it.
 mirror_has_value() { [ -n "$(printf '%s' "$1" | tr -d '[:space:]')" ]; }
@@ -1881,6 +1943,14 @@ mirror_step() {
         cmd_connect "$1" --url "$2" --oauth < /dev/null
         return
       fi
+      if [ "$3" = claudekey ]; then
+        grep -qxF "$1" <<<"$MIRROR_CONNECTED" && { echo "connected"; return 4; }
+        local claude_extra=(--header "$4")
+        [ -z "${5:-}" ] || claude_extra+=(--format "$5")
+        jq -e --arg n "$1" --arg h "$4" '.mcpServers[$n].headers[$h] | strings' "$(claude_json)" >/dev/null 2>&1 || { echo "no such key in this computer's Claude"; return 4; }
+        jq -j --arg n "$1" --arg h "$4" '.mcpServers[$n].headers[$h] | sub("^Bearer "; "")' "$(claude_json)" | cmd_connect "$1" --url "$2" --key --stdin "${claude_extra[@]}"
+        return
+      fi
       grep -qxF "$1" <<<"$MIRROR_CONNECTED" && { echo "connected; a new key: fraim connect $1 --url $2 --key"; return 4; }
       mirror_has_value "${!4:-}" || { echo "key $4 not set on this computer"; return 4; }
       local extra=()
@@ -1892,13 +1962,36 @@ mirror_step() {
       workspace_ssh "fraim-hosts test $(printf '%q' "$1")" < /dev/null >/dev/null 2>&1 && { echo "reachable"; return 4; }
       cmd_host add "$1" --like "${2:-$1}" < /dev/null
       ;;
+    stdio)
+      grep -qxF "$1" <<<"$MIRROR_CONNECTED" && { echo "connected"; return 4; }
+      cmd_connect "$1" --command "${*:2}" < /dev/null
+      ;;
+    mcpenv)
+      jq -e --arg n "$1" --arg v "$2" '.mcpServers[$n].env[$v] | strings' "$(claude_json)" >/dev/null 2>&1 || { echo "not on this computer"; return 4; }
+      local out
+      out="$(jq -j --arg n "$1" --arg v "$2" '.mcpServers[$n].env[$v]' "$(claude_json)" | workspace_ssh "fraim-env set $(printf '%q' "$2")")"
+      case "$out" in Unchanged*) echo "unchanged"; return 4 ;; esac
+      ;;
+    claude)
+      local src size
+      src="$(claude_dir)"
+      [ -e "$src/$1" ] || { echo "not on this computer"; return 4; }
+      workspace_ssh "test -e ~/.claude/$(printf '%q' "$1")" < /dev/null && { echo "the space already has one"; return 4; }
+      size="$(du -sLk "$src/$1" | cut -f1)"
+      [ "$size" -le 20480 ] || { echo "larger than 20 MB"; return 4; }
+      COPYFILE_DISABLE=1 tar -C "$src" -chf - "$1" | workspace_ssh "mkdir -p ~/.claude && tar -xf - -C ~/.claude"
+      ;;
   esac
 }
 
 cmd_mirror() {
+  if [ "${1:-}" = scan ]; then
+    shift
+    exec "$REPO/bin/fraim-scan" "$@"
+  fi
   parse_flags "$@"
   local file="${POSITIONAL[0]:-}"
-  local usage_line="fraim mirror FILE [--only KIND,KIND...] [--dry-run] [--yes]   (kinds: $MIRROR_KINDS)"
+  local usage_line="fraim mirror FILE [--only KIND,KIND...] [--dry-run] [--yes] | scan [--out FILE]   (kinds: $MIRROR_KINDS)"
   [ -n "$file" ] || usage "$usage_line"
   [ -f "$file" ] || usage "no mirror file $file"
   local only k
@@ -1956,7 +2049,7 @@ cmd_mirror() {
     case "$rc" in
       0)
         done=$((done + 1)); say "done    $line"
-        case "${words[0]}" in env|plugin) reload=1 ;; esac
+        case "${words[0]}" in env|plugin|mcpenv|claude) reload=1 ;; esac
         ;;
       4) skipped=$((skipped + 1)); say "skip    $line${out:+ ($(printf '%s\n' "$out" | tail -1))}" ;;
       3)
@@ -1976,6 +2069,158 @@ cmd_mirror() {
   say "Space $FRAIM_SPACE: $done done, $skipped skipped, $failed failed."
   [ -z "$steps" ] || human "Some lines need the user (run ${MIRROR_RERUN:-fraim mirror $file --yes} again afterwards; done lines are skipped):$steps"
   [ "$failed" -eq 0 ] || exit 1
+}
+
+# --- invite and attach: a laptop joins a server that someone else runs ----------------------
+# The operator runs `fraim invite NAME`. It makes a login key for this one person and a token
+# for the secrets gate, and writes both to a file. On the person's laptop `fraim attach` reads
+# that file. The laptop reaches the workspace only: no root on the server. See docs/invite.md.
+INVITE_PREFIX=fraim-invite-v1:
+BOOTSTRAP_URL=https://raw.githubusercontent.com/DIMA-Ventures-BV/fraimwork/main/bootstrap.sh
+INVITE_INSTALL_KEYS='docker compose exec -T workspace install -o root -g root -m 0644 /etc/fraim/authorized_keys /etc/ssh/authorized_keys/claude'
+
+sha256_of() { if command -v sha256sum >/dev/null; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
+
+invite_drop_key() {  # NAME: removes the key line of this invite and loads the file
+  admin "grep -v ' fraim-invite-$1\$' config/authorized_keys > config/.authorized_keys.tmp || true; test -s config/.authorized_keys.tmp && cat config/.authorized_keys.tmp > config/authorized_keys; rm -f config/.authorized_keys.tmp; $INVITE_INSTALL_KEYS" >/dev/null
+}
+
+cmd_invite() {
+  parse_flags "$@"
+  local name="${POSITIONAL[0]:-}" target="${POSITIONAL[1]:-}"
+  local usage_line="fraim invite NAME --share-url URL | NAME --no-share | list | revoke NAME"
+  [ -n "$name" ] || usage "$usage_line"
+  load_config
+  case "$name" in
+    list) admin "docker compose exec -T secrets fraim-secret gate-list"; return ;;
+    revoke)
+      printf '%s' "$target" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "$usage_line"
+      invite_drop_key "$target"
+      admin "docker compose exec -T secrets fraim-secret gate-rm $target" >/dev/null
+      rm -f "$CONFIG_DIR/invites/$target.invite"
+      say "Invite $target is revoked: that laptop can no longer log in or store keys. Keys it already stored stay on the server."
+      return
+      ;;
+  esac
+  printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "NAME must be lowercase letters, digits and dashes, starting with a letter"
+  [ "$FRAIM_ACCESS" = tailscale ] || die "an invite holds a login key, so it only works for a server on Tailscale (this one is $FRAIM_ACCESS)"
+  local share
+  share="$(flag share-url)"
+  if [ -z "$share" ] && [ -z "$(flag no-share)" ]; then
+    human "Share this server with the person: open https://login.tailscale.com/admin/machines, open the menu of $FRAIM_HOST, click Share, and copy the link. Then Claude runs: fraim invite $name --share-url LINK"
+  fi
+  [ -z "$share" ] || printf '%s' "$share" | grep -Eq '^https://login\.tailscale\.com/[^[:space:]]+$' || usage "--share-url must be a https://login.tailscale.com/ link"
+
+  local address host_key tmp token hash file
+  address="$(server_env BIND_IP | tr -d '\r')"
+  printf '%s' "$address" | grep -Eq '^100\.[0-9.]+$' || die "could not read the Tailscale address of the server"
+  host_key="$(admin "docker compose exec -T workspace cat /etc/ssh/keys/ssh_host_ed25519_key.pub" | tr -d '\r' | awk '{ print $1, $2 }')"
+  case "$host_key" in "ssh-ed25519 "*) ;; *) die "could not read the SSH host key of the workspace" ;; esac
+
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064  # the path is fixed now
+  trap "rm -rf '$tmp'" EXIT
+  ssh-keygen -q -t ed25519 -N "" -C "fraim-invite-$name" -f "$tmp/key"
+  token="$(openssl rand -hex 32)"
+  hash="$(printf '%s' "$token" | sha256_of)"
+
+  printf '%s' "$hash" | admin_stdin "docker compose exec -T secrets fraim-secret gate-add $name" >/dev/null \
+    || die "the server has no secrets gate yet; run fraim update first"
+  invite_drop_key "$name"
+  admin_stdin "cat >> config/authorized_keys" < "$tmp/key.pub"
+  admin "$INVITE_INSTALL_KEYS" >/dev/null
+
+  mkdir -p "$CONFIG_DIR/invites"
+  file="$CONFIG_DIR/invites/$name.invite"
+  (
+    umask 077
+    jq -n --arg name "$name" --arg host "$address" --arg port "$FRAIM_SSH_PORT" --arg known "$host_key" \
+      --arg token "$token" --arg share "$share" --rawfile key "$tmp/key" \
+      '{v: 1, name: $name, host: $host, port: $port, known: $known, token: $token, share: $share, key: $key}' \
+      | base64 | tr -d '\n' | { printf '%s' "$INVITE_PREFIX"; cat; printf '\n'; } > "$file"
+  )
+  if command -v pbcopy >/dev/null; then pbcopy < "$file" || true; fi
+  say "Invite for $name is ready in $file (and on your clipboard). It holds a login key: send it by a private channel."
+  say "On their computer, in a terminal:"
+  say "  curl -fsSL $BOOTSTRAP_URL | FRAIM_NO_TOKEN=1 FRAIM_NO_ALIASES=1 FRAIM_PROMPT='connect me to my fraim' bash"
+  say "Then they copy the invite. Their Claude does the rest."
+}
+
+attach_reach() {  # the steps after the invite was stored; run again with --check
+  local share=""
+  [ ! -s "$CONFIG_DIR/$FRAIM_TARGET.share" ] || share="$(cat "$CONFIG_DIR/$FRAIM_TARGET.share")"
+  if ! port_open "$FRAIM_HOST" "$FRAIM_SSH_PORT"; then
+    if [ -n "$share" ]; then
+      human "Connect this computer to your server: install Tailscale from https://tailscale.com/download and sign in with your own account (a free one is fine). Then open this link and accept the shared server: $share  Tell Claude 'done'; Claude then runs: fraim attach --check"
+    fi
+    human "This computer cannot reach the server. Check that Tailscale is on and signed in. Tell Claude 'done'; Claude then runs: fraim attach --check"
+  fi
+  workspace_ssh true < /dev/null || die "the server answers but refused the login; ask the person who runs your server for a new invite"
+  say "Connected to $FRAIM_TARGET. This computer can use the server, but has no admin access to it."
+}
+
+cmd_attach() {
+  parse_flags "$@"
+  if [ -n "$(flag check)" ]; then
+    load_config
+    attached || die "fraim attach --check is for a computer that joined with an invite"
+    attach_reach
+    return
+  fi
+  local raw=""
+  if [ -n "$(flag file)" ]; then
+    [ -s "$(flag file)" ] || usage "no invite file at $(flag file)"
+    raw="$(cat "$(flag file)")"
+  elif [ -n "$(flag stdin)" ]; then
+    raw="$(cat)"
+  else
+    usage "fraim attach --stdin | --file INVITE [--use] | --check"
+  fi
+  raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  case "$raw" in "$INVITE_PREFIX"*) ;; *) usage "that is not a fraim invite; ask the person who runs your server to send it again" ;; esac
+  local json
+  json="$(printf '%s' "${raw#"$INVITE_PREFIX"}" | { base64 -d 2>/dev/null || base64 -D; })" || usage "that invite is damaged; ask for a new one"
+  jq -e . >/dev/null 2>&1 <<<"$json" || usage "that invite is damaged; ask for a new one"
+  local name host port known token share key_path existing_admin
+  name="$(jq -r '.name // ""' <<<"$json")"
+  host="$(jq -r '.host // ""' <<<"$json")"
+  port="$(jq -r '.port // ""' <<<"$json")"
+  known="$(jq -r '.known // ""' <<<"$json")"
+  token="$(jq -r '.token // ""' <<<"$json")"
+  share="$(jq -r '.share // ""' <<<"$json")"
+  printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || usage "that invite has a bad name"
+  printf '%s' "$host" | grep -Eq '^100\.[0-9]+\.[0-9]+\.[0-9]+$' || usage "that invite has a bad address"
+  printf '%s' "$port" | grep -Eq '^[0-9]{1,5}$' || usage "that invite has a bad port"
+  printf '%s' "$known" | grep -Eq '^ssh-ed25519 [A-Za-z0-9+/=]+$' || usage "that invite has a bad host key"
+  printf '%s' "$token" | grep -Eq '^[0-9a-f]{64}$' || usage "that invite has a bad token"
+  [ -z "$share" ] || printf '%s' "$share" | grep -Eq '^https://login\.tailscale\.com/[^[:space:]]+$' || usage "that invite has a bad share link"
+  jq -r '.key // ""' <<<"$json" | head -1 | grep -q 'BEGIN OPENSSH PRIVATE KEY' || usage "that invite has no login key"
+
+  FRAIM_TARGET="$name"
+  CONFIG="$CONFIG_DIR/$name.config"
+  KNOWN_HOSTS="$STATE_DIR/known_hosts-$name"
+  if [ -f "$CONFIG" ]; then
+    # shellcheck source=/dev/null
+    existing_admin="$(. "$CONFIG"; printf '%s' "$FRAIM_ADMIN")"
+    [ "$existing_admin" = none ] || die "this computer already manages a server named $name; nothing was changed"
+  fi
+
+  key_path="$HOME/.ssh/fraim-$name"
+  mkdir -p "$HOME/.ssh" "$CONFIG_DIR"
+  chmod 700 "$HOME/.ssh"
+  (
+    umask 077
+    jq -r '.key' <<<"$json" > "$key_path"
+    printf '%s\n' "$token" > "$(gate_file)"
+    printf '%s' "$share" > "$CONFIG_DIR/$name.share"
+  )
+  chmod 600 "$key_path"
+  printf '[%s]:%s %s\n' "$host" "$port" "$known" > "$KNOWN_HOSTS"
+  FRAIM_HOST="$host" FRAIM_ADMIN=none FRAIM_ACCESS=tailscale FRAIM_SSH_PORT="$port" FRAIM_SSH_KEY="$key_path" FRAIM_PUBLIC_HOST=""
+  save_config
+  if [ -n "$(flag use)" ] || [ ! -f "$CONFIG_DIR/current" ]; then set_current "$name"; fi
+  load_config
+  attach_reach
 }
 
 # --- project: a repo's .fraim folder on this space (docs/projects.md) --------------------
@@ -2714,8 +2959,7 @@ cmd_status() {
         ok: $health.ok, services: $services, health: $health}'
     printf '%s' "$health" | jq -e .ok >/dev/null
   else
-    admin "docker compose ps --format 'table {{.Service}}\t{{.Status}}'"
-    echo
+    attached || { admin "docker compose ps --format 'table {{.Service}}\t{{.Status}}'"; echo; }
     workspace_ssh fraim-doctor
   fi
 }
@@ -2774,6 +3018,12 @@ fraim: control a fraimwork server (an always-on Claude Code server). Built to be
 Conventions: never prompts without a terminal; long-running parts run in the background;
 a human-only step prints one "HUMAN STEP: ..." line. Exit codes: 0 ok, 1 failure,
 2 usage or missing input, 3 human step needed.
+
+Join a server that someone else runs
+  fraim invite NAME --share-url LINK | NAME --no-share   (operator) make an invite for one person
+  fraim invite list | revoke NAME                        (operator) see or end invites
+  fraim attach --stdin | --file INVITE [--use] | --check connect this computer with an invite
+  fraim mirror scan [--out FILE]                         list this computer's Claude setup, names only
 
 Try locally (Docker on this computer)
   fraim local up [--whatsapp-owner N] [--whatsapp-allow N,N] [--modules browser,whatsapp,scheduler]
@@ -2916,6 +3166,8 @@ main() {
     connect) cmd_connect "$@" ;;
     tool) cmd_tool "$@" ;;
     mirror) cmd_mirror "$@" ;;
+    invite) cmd_invite "$@" ;;
+    attach) cmd_attach "$@" ;;
     project|projects) cmd_project "$@" ;;
     google) cmd_google "$@" ;;
     preview) cmd_preview "$@" ;;

@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# fraim-scan: write a mirror file from this computer's Claude setup, so an existing setup can
+# move to a fraim server. The file holds names only, never a key.
+#
+#   fraim-scan [--out FILE]
+#
+# A line starting with "#ask:" is off until a person turns it on: keys, repositories and hosts
+# are not moved without a yes. "# manual:" names what a person must set up by hand.
+# Exit codes: 0 ok, 2 usage.
+set -euo pipefail
+
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) out="${2:-}"; shift 2 || { echo "fraim-scan: --out FILE" >&2; exit 2; } ;;
+    *) echo "fraim-scan: unknown option $1 (use --out FILE)" >&2; exit 2 ;;
+  esac
+done
+
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then CLAUDE_JSON="$CLAUDE_CONFIG_DIR/.claude.json"; else CLAUDE_JSON="$HOME/.claude.json"; fi
+
+# Names that often unlock money, production or infrastructure: always a question first.
+RISKY='PROD|LIVE|STRIPE|BANK|MOLLIE|ADYEN|PAYPAL|ADMIN|ROOT|AWS|GCP|AZURE|DATABASE|POSTGRES|MYSQL|PRIVATE|KUBE|HCLOUD|CLOUDFLARE|TERRAFORM'
+
+scan_mcp() {
+  [ -s "$CLAUDE_JSON" ] || return 0
+  jq -r '
+    def safe: gsub("[^A-Za-z0-9._-]"; "?");
+    def looks_secret: test("(?=[A-Za-z_-]*[0-9])[A-Za-z0-9_-]{24,}");
+    def url_ok: test("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^[:space:]]*)?$");
+    def url_private: test("[?#]") or (ltrimstr("https://") | split("/")[1:] | any(looks_secret));
+    def manual($n; $why): "# manual: MCP server \($n | safe): \($why)";
+    def envref: "\\$\\{[A-Z_][A-Z0-9_]{0,63}\\}";
+    def envname: capture("\\$\\{(?<v>[A-Z_][A-Z0-9_]{0,63})\\}").v;
+    def http($n; $v):
+      ($v.headers // {}) as $h
+      | ($v.url // "") as $u
+      | if ($u | url_ok | not) or ($u | url_private) then manual($n; "its address is local or holds a secret")
+        elif $v.headersHelper then manual($n; "it makes its headers with a program")
+        elif ($h | length) == 0 then "connect \($n) \($u) oauth"
+        elif ($h | length) > 1 then manual($n; "it sends more than one header")
+        else ($h | to_entries[0]) as $e | ($e.value | tostring) as $val
+          | if ($e.key | test("^[A-Za-z][A-Za-z0-9-]{0,63}$") | not) then manual($n; "its header name is unusual")
+            elif ($val | test("^Bearer " + envref + "$")) then "connect \($n) \($u) key \($val | envname) \($e.key)"
+            elif ($val | test("^" + envref + "$")) then "connect \($n) \($u) key \($val | envname) \($e.key) %s"
+            elif ($val | test("^Bearer [^ $]+$")) then "connect \($n) \($u) claudekey \($e.key)"
+            elif ($val | test("^[^ $]+$")) then "connect \($n) \($u) claudekey \($e.key) %s"
+            else manual($n; "its header has an unusual form") end
+        end;
+    def stdio($n; $v):
+      ($v.command // "") as $c | ($v.args // []) as $a
+      | if ($c | IN("npx", "uvx", "bunx", "pnpx") | not) then manual($n; "it is a program on this computer")
+        elif ($a | any(tostring | (test("^[A-Za-z0-9@._:/=+-]+$") | not) or test("(?i)token|secret|password|api[-_]?key") or looks_secret or startswith("/")))
+          then manual($n; "its arguments hold a path or a secret")
+        else "stdio \($n) \($c) \($a | join(" "))",
+          (($v.env // {}) | to_entries[]
+            | if (.key | test("^[A-Z_][A-Z0-9_]{0,63}$") | not) then manual($n; "an environment name is unusual")
+              elif (.value | tostring | test("^" + envref + "$")) then "#ask: env \(.value | tostring | envname)"
+              else "#ask: mcpenv \($n) \(.key)" end)
+        end;
+    (.mcpServers // {}) | to_entries[] | .key as $n | .value as $v
+    | if ($n | test("^[a-z][a-z0-9-]{0,30}$") | not) then manual($n; "its name needs changing first")
+      elif ($n | IN("github", "github-api", "github-mcp", "browser", "my-chrome", "whatsapp", "google")) then manual($n; "fraim has its own connection with this name")
+      elif (($v.type // (if $v.url then "http" else "stdio" end)) | IN("http", "sse")) then http($n; $v)
+      else stdio($n; $v) end
+  ' "$CLAUDE_JSON"
+  jq -r '[.projects // {} | to_entries[] | .value.mcpServers // {} | keys[]] | unique | .[]
+    | "# manual: MCP server \(gsub("[^A-Za-z0-9._-]"; "?")): it belongs to one project on this computer"' "$CLAUDE_JSON"
+}
+
+scan_plugins() {
+  local installed="$CLAUDE_DIR/plugins/installed_plugins.json" known="$CLAUDE_DIR/plugins/known_marketplaces.json"
+  [ -s "$installed" ] && [ -s "$known" ] || return 0
+  jq -r --slurpfile m "$known" '
+    (.plugins // {}) | keys[] | . as $p | ($p | split("@")) as $s
+    | ($m[0][$s[1]].source // {}) as $src
+    | (if $src.source == "github" then "https://github.com/\($src.repo).git"
+       elif ($src.url // "" | startswith("https://")) then $src.url else "" end) as $url
+    | if $s[0] == "fraim" then empty
+      elif $url == "" then "# manual: plugin \($p): its marketplace is on this computer"
+      else "plugin \($url) \($p)" end
+  ' "$installed"
+}
+
+scan_claude_files() {
+  [ ! -s "$CLAUDE_DIR/CLAUDE.md" ] || echo "claude CLAUDE.md"
+  local path name
+  for path in "$CLAUDE_DIR"/skills/*/SKILL.md; do
+    [ -f "$path" ] || continue
+    name="$(basename "$(dirname "$path")")"
+    echo "claude skills/$name"
+  done
+  for path in "$CLAUDE_DIR"/commands/*.md "$CLAUDE_DIR"/agents/*.md; do
+    [ -f "$path" ] || continue
+    echo "claude $(basename "$(dirname "$path")")/$(basename "$path")"
+  done
+  [ ! -s "$CLAUDE_DIR/settings.json" ] || echo "# manual: settings.json and hooks are not copied: they can run programs, and the server has its own"
+  echo "# manual: claude.ai connectors follow the Claude account: they work after the full login"
+}
+
+scan_env() {
+  local name
+  compgen -e | LC_ALL=C sort | while IFS= read -r name; do
+    printf '%s' "$name" | grep -Eq '(_API_KEY|_APIKEY|_TOKEN|_SECRET|_ACCESS_KEY|_SECRET_KEY|_PAT)$' || continue
+    printf '%s' "$name" | grep -Eq '^(CLAUDE|ANTHROPIC|FRAIM|SSH|GPG|TERM|XPC|VSCODE|CURSOR|GITHUB|GH|ITERM|TMUX|CMUX|npm_)' && continue
+    echo "#ask: env $name"
+  done
+}
+
+scan_files() {
+  local path
+  for path in .npmrc .aws/credentials .config/gcloud/application_default_credentials.json .config/hcloud/cli.toml; do
+    [ ! -s "$HOME/$path" ] || echo "#ask: file $path"
+  done
+}
+
+scan_repos() {
+  local dir gitdir url slug count=0
+  for dir in projects code dev src Developer work repos Documents/GitHub; do
+    [ -d "$HOME/$dir" ] || continue
+    while IFS= read -r gitdir; do
+      url="$(git -C "$(dirname "$gitdir")" remote get-url origin 2>/dev/null || true)"
+      slug="$(printf '%s' "$url" | sed -nE 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$#\2#p')"
+      slug="${slug%.git}"
+      [ -n "$slug" ] || continue
+      echo "#ask: repo $slug"
+      count=$((count + 1))
+      [ "$count" -lt 50 ] || return 0
+    done < <(find "$HOME/$dir" -maxdepth 3 -name node_modules -prune -o -type d -name .git -print -prune 2>/dev/null)
+  done
+}
+
+scan_hosts() {
+  [ -s "$HOME/.ssh/config" ] || return 0
+  local alias name
+  awk 'tolower($1) == "host" { for (i = 2; i <= NF; i++) print $i }' "$HOME/.ssh/config" | LC_ALL=C sort -u | while IFS= read -r alias; do
+    case "$alias" in *'*'*|*'?'*|*'!'*|github.com|fraim*) continue ;; esac
+    name="$(printf '%s' "$alias" | tr 'A-Z.' 'a-z-')"
+    printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || continue
+    printf '%s' "$alias" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' || continue
+    echo "#ask: host $name $alias"
+  done
+}
+
+# Turns a line off when its key name looks risky.
+mark_risky() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      "connect "*" key "*|"connect "*" claudekey "*)
+        if printf '%s' "$line" | grep -Eiq "$RISKY"; then line="#ask: $line"; fi
+        ;;
+      "#ask: env "*|"#ask: mcpenv "*)
+        if printf '%s' "$line" | grep -Eiq "$RISKY"; then line="$line   # risky: read this one twice"; fi
+        ;;
+    esac
+    printf '%s\n' "$line"
+  done
+}
+
+write_all() {
+  echo "# Written by fraim mirror scan on $(date +%Y-%m-%d). This file holds no keys."
+  echo "# \"#ask:\" lines are off. Remove \"#ask: \" from a line to turn it on, after the owner said yes."
+  echo
+  echo "# --- Claude: plugins, skills, commands, agents, CLAUDE.md"
+  scan_plugins
+  scan_claude_files
+  echo
+  echo "# --- MCP servers"
+  scan_mcp | mark_risky
+  echo
+  echo "# --- Keys in this computer's environment"
+  scan_env | mark_risky
+  echo
+  echo "# --- Key files of command-line tools"
+  scan_files
+  echo
+  echo "# --- Repositories (fraim repo token comes first)"
+  scan_repos
+  echo
+  echo "# --- SSH hosts (each one gets a new key line for the server)"
+  scan_hosts
+}
+
+# An MCP server's key can also be in the environment: one line is enough.
+one_env_line() { awk '/^#ask: env / { if (seen[$3]++) next } { print }'; }
+
+if [ -n "$out" ]; then
+  mkdir -p "$(dirname "$out")"
+  umask 077
+  write_all | one_env_line > "$out"
+  echo "$out"
+else
+  write_all | one_env_line
+fi

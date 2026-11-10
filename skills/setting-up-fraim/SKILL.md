@@ -1,6 +1,6 @@
 ---
 name: setting-up-fraim
-description: Set up fraimwork end to end for the user - their own always-on Claude server, as a trial on this Mac or on a cloud server, with phone access over WhatsApp, a server browser, scheduled jobs and file sync. Also resumes a setup that stopped halfway. Use when the user says "set up fraim", "install fraimwork", "I want my own Claude server", "move fraim to a real server", "add WhatsApp to fraim", "continue the fraim setup", or has just installed the fraim plugin. Do NOT use for day-to-day running of an existing setup (use operating-fraim) or for adding skills and MCP servers (use managing-fraim-config).
+description: Set up fraimwork end to end for the user - their own always-on Claude server, as a trial on this Mac or on a cloud server, with phone access over WhatsApp, a server browser, scheduled jobs and file sync. Also resumes a setup that stopped halfway. Use when the user says "set up fraim", "install fraimwork", "I want my own Claude server", "move fraim to a real server", "add WhatsApp to fraim", "continue the fraim setup", or has just installed the fraim plugin. Do NOT use for day-to-day running of an existing setup (use operating-fraim), for adding skills and MCP servers (use managing-fraim-config), or when the user has an invite to a server someone else runs (use connecting-to-fraim).
 ---
 
 # Setting up fraim

@@ -60,6 +60,10 @@ The proxy refuses a call with a wrong token, no token, or an unknown service (40
 - An API that echoes request headers back in its answer would show the key to Claude. Do not add such services.
 - A key can only contain visible characters, without spaces, quotes, backslashes or braces.
 
+## Invited laptops
+
+A laptop that joined with `fraim invite` has no root on the server, so it stores keys through the secrets gate on port 8081 of the `secrets` network. The gate needs a token that only that laptop holds; the server keeps the token's hash. It can add a service and set a key, and it never returns a key. See docs/invite.md.
+
 ## Tests
 
 `tests/secrets.sh` starts the real proxy in Docker with a fake API and checks 15 things, including the attacks above. It needs Docker and removes everything afterwards.
