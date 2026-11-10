@@ -2096,7 +2096,15 @@ a { color:var(--accent); }
 .acts { display:flex; gap:6px; margin-top:9px; }
 .btn { height:30px; padding:0 14px; border-radius:6px; border:1px solid var(--line2); background:var(--hover); cursor:pointer; font-weight:500; font-size:13px; }
 .btn.p { background:var(--accent); border-color:var(--accent); color:#fff; }
-.typing { color:var(--green); font-size:13px; margin-left:39px; }
+.working { position:relative; overflow:hidden; flex:none; display:flex; align-items:center; gap:10px; padding:11px 16px; border-top:1px solid color-mix(in srgb, var(--green) 35%, var(--line)); background:color-mix(in srgb, var(--green) 14%, var(--deep)); color:var(--green); font-size:13px; font-weight:500; }
+.working::before { content:''; position:absolute; inset:0; background:linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--green) 30%, transparent) 50%, transparent 75%); transform:translateX(-100%); animation:sweep 2.2s ease-in-out infinite; }
+.working span { position:relative; }
+.working .bars { display:inline-flex; align-items:center; gap:2px; height:12px; flex:none; }
+.working .bars i { width:3px; height:100%; border-radius:2px; background:var(--green); transform-origin:center; animation:bar 1s ease-in-out infinite; }
+.working .bars i:nth-child(2) { animation-delay:.15s; } .working .bars i:nth-child(3) { animation-delay:.3s; }
+@keyframes sweep { to { transform:translateX(100%); } }
+@keyframes bar { 0%, 100% { transform:scaleY(.35); opacity:.6; } 50% { transform:scaleY(1); opacity:1; } }
+@media (prefers-reduced-motion: reduce) { .working::before { display:none; } .working .bars i { animation:none; } }
 .reply { border-top:1px solid var(--line); padding:10px 12px 12px; }
 .reply textarea { display:block; width:100%; background:none; border:1px solid var(--line2); border-radius:8px; padding:8px 11px; font-size:13px; resize:none; outline:none; }
 .reply textarea:focus { border-color:var(--accent); }
@@ -2278,8 +2286,8 @@ function drawAgents() {
   var waiting = t.chat.some(function (c) { return c.item && c.item.state === 'open' })
   var status = waiting ? 'Needs your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it. Nothing needed from you.' : t.chat.length ? 'Nothing needed from you.' : 'No agent has picked this up yet'
   var old = $('#chat'), atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 30
-  $('#agents').innerHTML = '<div class="ah"><b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') +
-    (t.working.length ? '<div class="typing">' + esc(t.working[0]) + ' is working on it</div>' : '') + '</div></div>'
+  $('#agents').innerHTML = '<div class="ah"><b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') + '</div></div>' +
+    (t.working.length ? '<div class="working" role="status"><span class="bars"><i></i><i></i><i></i></span><span>' + esc(t.working.join(', ')) + (t.working.length > 1 ? ' are' : ' is') + ' working on it</span></div>' : '')
   var box = $('#chat'); if (!same || atEnd) box.scrollTop = box.scrollHeight
   $('#reply').style.display = /^t/.test(t.id) ? '' : 'none'
 }
