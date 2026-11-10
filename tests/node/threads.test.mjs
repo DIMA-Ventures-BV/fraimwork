@@ -159,7 +159,8 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   assert.deepEqual([talk.exists, talk.typing, talk.messages.map((m) => [m.who, m.text, m.app])], [true, true, [['owner', 'How is Anna?', false], ['chief', 'She waits for your yes.', false]]])
   assert.deepEqual(talk.messages[1].refs, [{ id: 't1', title: 'Login' }], 'a mention opens its conversation')
   assert.equal((await post('/api/chief/say', { text: 'Thanks' })).status, 200)
-  for (let i = 0; i < 50 && !fs.existsSync(asked); i++) await new Promise((r) => setTimeout(r, 100))
+  // The shell creates the file before it writes to it.
+  for (let i = 0; i < 50 && !(fs.existsSync(asked) && fs.statSync(asked).size); i++) await new Promise((r) => setTimeout(r, 100))
   assert.equal(fs.readFileSync(asked, 'utf8').trim(), 'chat -- Thanks')
 
   const rules = path.join(home, 'fraim/inbox-rules.md')

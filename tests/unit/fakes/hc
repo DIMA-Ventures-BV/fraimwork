@@ -22,7 +22,13 @@ cmd="${1:-}"
 
 file() { printf '%s/t-%s.json' "$d" "$1"; }
 need() { [ -f "$(file "$1")" ] || { echo '{"error":{"kind":"not_found"}}' >&2; exit 3; }; }
-set_field() { local f; f="$(file "$1")"; jq "$2" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; }
+set_field() {
+  local f
+  f="$(file "$1")"
+  until mkdir "$f.lock" 2>/dev/null; do sleep 0.01; done
+  jq "if .state == \"finished\" then . else $2 end" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  rmdir "$f.lock"
+}
 
 case "$cmd" in
   server) echo '{"live":0}' ;;

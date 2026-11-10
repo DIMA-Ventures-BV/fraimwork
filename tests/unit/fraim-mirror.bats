@@ -295,5 +295,5 @@ esac'
   run "$FRAIM" mirror "$MIRROR" --yes
   [ "$status" -eq 0 ]
   [[ "$output" == *"skip    host prod-app (reachable)"* ]]
-  ! grep -q -- '-G' "$SSH_LOG"
+  ! grep -qE -- '(^| )-G( |$)' "$SSH_LOG"
 }
