@@ -43,6 +43,25 @@ setup() {
   [ ! -e "$HC_FAKE/t-main.json" ]
 }
 
+@test "up starts the services of the owner's services file, which wins over the default" {
+  mkdir -p "$HOME/fraim"
+  printf '# mine\nmine-sync sleep 30\n\nBad_Name true\n' > "$HOME/fraim/services"
+  run "$HERDR" up
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bad service name 'Bad_Name'"* ]]
+  [ "$(jq -r .labels.fraim "$HC_FAKE/t-mine-sync.json")" = service ]
+  grep -q 'sleep 30 2>>' "$HC_FAKE/mine-sync.argv"
+  [ ! -e "$HC_FAKE/t-queue-page.json" ]
+  [ -e "$HC_FAKE/t-main.json" ]
+}
+
+@test "the shipped services file starts the queue page and the watcher" {
+  run "$HERDR" up
+  [ "$status" -eq 0 ]
+  [ -e "$HC_FAKE/t-queue-page.json" ]
+  grep -q 'fraim-queue serve' "$HC_FAKE/queue-page.argv"
+}
+
 @test "ls leaves services out" {
   run "$HERDR" ls --json
   [ "$status" -eq 0 ]

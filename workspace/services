@@ -1,0 +1,6 @@
+# The background services fraim-herdr keeps running in the workspace: NAME COMMAND.
+# Each runs in a herdr terminal NAME, restarts when it stops, and logs to
+# ~/.local/state/fraim/NAME.log. Your copy in ~/fraim/services wins over this one.
+# The always-on Claude (main) is not listed: it is the engine itself.
+queue-page fraim-queue serve
+watch fraim-herdr watch
