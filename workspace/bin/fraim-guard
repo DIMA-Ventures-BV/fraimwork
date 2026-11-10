@@ -9,41 +9,88 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import fs from 'node:fs'
 
-// Words of each simple command. Quotes keep text together; ; & | and newlines end a command.
-export function commands(line) {
+// Words of each simple command, read the way a shell reads them: quotes keep text together,
+// ~ and $HOME are expanded only where a shell would, comments and heredoc bodies are not code,
+// a backslash at the end of a line joins the lines, and ; & | ( ) and newlines end a command.
+export function commands(line, home) {
   const out = []
   let words = []
   let word = null
   let quote = ''
+  let heredocs = []
   const end = () => { if (word !== null) { words.push(word); word = null } }
   const next = () => { end(); if (words.length) out.push(words); words = [] }
+  const homeAt = (i) => {
+    const m = /^(\$\{HOME\}|\$HOME)(?![A-Za-z0-9_])/.exec(line.slice(i))
+    return m ? m[0].length : 0
+  }
+  const skipHeredocs = (start) => {
+    let at = start
+    for (const { delim, tabs } of heredocs) {
+      while (at < line.length) {
+        const stop = line.indexOf('\n', at)
+        const text = line.slice(at, stop < 0 ? line.length : stop)
+        at = stop < 0 ? line.length : stop + 1
+        if ((tabs ? text.replace(/^\t+/, '') : text) === delim) break
+      }
+    }
+    heredocs = []
+    return at
+  }
   for (let i = 0; i < line.length; i++) {
     const c = line[i]
     if (quote) {
+      const n = quote === '"' ? homeAt(i) : 0
       if (c === quote) quote = ''
+      else if (n) { word += home; i += n - 1 }
+      else if (c === '\\' && quote === '"' && line[i + 1] === '\n') i++
       else if (c === '\\' && quote === '"' && i + 1 < line.length) word += line[++i]
       else word += c
-    } else if (c === '"' || c === "'") { quote = c; word = word ?? '' }
+      continue
+    }
+    const n = homeAt(i)
+    if (n) { word = (word ?? '') + home; i += n - 1 }
+    else if (c === '"' || c === "'") { quote = c; word = word ?? '' }
+    else if (c === '\\' && line[i + 1] === '\n') i++
     else if (c === '\\' && i + 1 < line.length) word = (word ?? '') + line[++i]
+    else if (c === '#' && word === null) { while (i + 1 < line.length && line[i + 1] !== '\n') i++ }
+    else if (c === '<' && line[i + 1] === '<' && line[i + 2] !== '<') {
+      end()
+      const m = /^<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/.exec(line.slice(i))
+      if (m) { heredocs.push({ tabs: m[1] === '-', delim: m[2] ?? m[3] ?? m[4] }); i += m[0].length - 1 }
+    } else if (c === '\n') { next(); if (heredocs.length) i = skipHeredocs(i + 1) - 1 }
     else if (c === ' ' || c === '\t') end()
-    else if (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')') next()
+    else if (c === ';' || c === '&' || c === '|' || c === '(' || c === ')') next()
+    else if (c === '~' && word === null && (i + 1 === line.length || /[/\s;&|)]/.test(line[i + 1]))) word = home
     else word = (word ?? '') + c
   }
   next()
   return out
 }
 
-const WRAPPERS = new Set(['command', 'exec', 'sudo', 'env', 'nice', 'nohup', 'time', 'builtin'])
+const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', '!', '{', 'time'])
+const WRAPPERS = new Set(['command', 'exec', 'sudo', 'env', 'nice', 'nohup', 'builtin', 'timeout', 'ionice', 'stdbuf'])
+const WRAPPER_VALUE_OPTIONS = {
+  env: new Set(['-u', '--unset', '-C', '--chdir']),
+  nice: new Set(['-n', '--adjustment']),
+  timeout: new Set(['-k', '--kill-after', '-s', '--signal']),
+  sudo: new Set(['-u', '-g', '-h', '-p', '-C']),
+  ionice: new Set(['-c', '-n']),
+  stdbuf: new Set(['-i', '-o', '-e']),
+}
 const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
 
 function program(words) {
   let i = 0
   while (i < words.length) {
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++
-    else if (WRAPPERS.has(path.basename(words[i]))) i++
-    else if (path.basename(words[i]) === 'timeout' && i + 1 < words.length) i += 2
-    else break
+    const name = path.basename(words[i])
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || KEYWORDS.has(words[i])) { i++; continue }
+    if (!WRAPPERS.has(name)) break
+    i++
+    const values = WRAPPER_VALUE_OPTIONS[name] ?? new Set()
+    while (i < words.length && words[i].startsWith('-')) i += values.has(words[i]) ? 2 : 1
+    if (name === 'timeout') i++
   }
   return words.slice(i)
 }
@@ -56,10 +103,6 @@ function forcePush(args) {
   if (rest.some((a) => a === '--force' || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(a))) return true
   const positional = rest.filter((a) => !a.startsWith('-'))
   return positional.slice(1).some((a) => a.startsWith('+'))
-}
-
-function expand(word, home) {
-  return word.replace(/^~(?=$|\/)/, home).replace(/\$\{HOME\}|\$HOME/g, home)
 }
 
 function deletesHome(args, cwd, home) {
@@ -75,31 +118,36 @@ function deletesHome(args, cwd, home) {
   if (!recursive) return false
   const keep = [path.join(home, 'fraim')]
   return targets.some((t) => {
-    const raw = expand(t, home).replace(/\/\*$/, '/').replace(/^\*$/, '.')
-    const full = path.resolve(cwd, raw)
+    const raw = t.replace(/\/+$/, '').replace(/\/\.?\*$/, '').replace(/^\.?\*$/, '.')
+    const full = path.resolve(cwd, raw || '/')
     return full === home || home.startsWith(full === '/' ? '/' : `${full}/`) || keep.includes(full)
   })
 }
 
 // Why this command must not run, or an empty string.
-export function refusal(line, cwd, home, depth = 0) {
-  for (const words of commands(String(line))) {
+export function refusal(line, startDir, home, depth = 0) {
+  let cwd = startDir
+  for (const words of commands(String(line), home)) {
     const [cmd, ...args] = program(words)
     if (!cmd) continue
     const name = path.basename(cmd)
+    if (name === 'cd') {
+      const to = args.find((a) => !a.startsWith('-')) ?? home
+      cwd = path.resolve(cwd, to)
+    }
     if (name === 'git' && forcePush(args)) {
       return 'A force push can destroy other people\'s work, so it is refused. Push normally, or use --force-with-lease on your own branch.'
     }
     if (name === 'rm' && deletesHome(args, cwd, home)) {
       return 'This would delete the home folder or everything in ~/fraim, so it is refused. Delete the specific folder you mean.'
     }
-    if (SHELLS.has(name) && depth < 3) {
+    let inner = ''
+    if (depth < 3 && name === 'eval') inner = refusal(args.join(' '), cwd, home, depth + 1)
+    if (depth < 3 && SHELLS.has(name)) {
       const c = args.findIndex((a) => /^-[a-z]*c$/.test(a))
-      if (c >= 0 && args[c + 1]) {
-        const inner = refusal(args[c + 1], cwd, home, depth + 1)
-        if (inner) return inner
-      }
+      if (c >= 0 && args[c + 1]) inner = refusal(args[c + 1], cwd, home, depth + 1)
     }
+    if (inner) return inner
   }
   return ''
 }

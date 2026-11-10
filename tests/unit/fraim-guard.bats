@@ -56,3 +56,36 @@ check() { jq -cn --arg c "$1" --arg d "${2:-/home/claude/fraim}" '{tool_name: "B
   run node "$GUARD" <<<'{"tool_name":"Read","tool_input":{"file_path":"x"}}'
   [ "$status" -eq 0 ]
 }
+
+@test "text that only looks like a command is not refused" {
+  run check "$(printf "cat > notes.md <<'EOF'\ngit push --force\nrm -rf ~\nEOF")"
+  [ "$status" -eq 0 ]
+  run check "$(printf 'cat <<-EOF > x\n\trm -rf ~\n\tEOF\necho done')"
+  [ "$status" -eq 0 ]
+  run check 'git push origin main # was -f'
+  [ "$status" -eq 0 ]
+  run check "rm -rf '\$HOME/build'"
+  [ "$status" -eq 0 ]
+  run check 'rm -rf "~/x"'
+  [ "$status" -eq 0 ]
+  run check 'cd ~/code/app && rm -rf .' /home/claude
+  [ "$status" -eq 0 ]
+}
+
+@test "a real command after text, on two lines, or behind a keyword or wrapper is refused" {
+  for c in "$(printf "cat <<'EOF'\ndon't\nEOF\ngit push -f")" "$(printf "# don't\ngit push -f")" "$(printf 'git push \\\n-f')" \
+    "$(printf 'git push\\\n -f')" "$(printf 'rm -rf \\\n$HOME')" 'env -i git push --force' 'nice -n 10 git push -f' 'timeout -k 5 10 git push -f' \
+    'if true; then git push -f; fi' 'for b in a; do git push -f; done' '! git push -f' '{ git push -f; }' 'eval "git push -f"'; do
+    run check "$c"
+    [ "$status" -eq 2 ] || { echo "not refused: $c"; false; }
+  done
+}
+
+@test "a cd in the same command counts, and every glob of home is refused" {
+  for c in 'cd ~ && rm -rf .' 'cd ~/fraim && rm -rf *' 'rm -rf ~/.*' 'rm -rf ~/fraim/*/' 'rm -rf /*'; do
+    run check "$c" /tmp
+    [ "$status" -eq 2 ] || { echo "not refused: $c"; false; }
+  done
+  run check 'rm -rf ~/code/app/*'
+  [ "$status" -eq 0 ]
+}
