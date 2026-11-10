@@ -263,6 +263,112 @@ EOF
   [ "$status" -eq 2 ]
 }
 
+@test "one job, one card: a follow-up result reopens the card with the new question and keeps the earlier step" {
+  "$Q" add --quiet --goal g1 --title "Package updates" --ask "Merge?" --on-approve "merge" --summary "first report" >/dev/null
+  "$Q" approve q1 --note "go" >/dev/null
+  run "$Q" add --quiet --result --continues q1 --goal g7 --title "Other words" --ask "Deploy?" --on-approve "deploy" --summary "second report"
+  [ "$status" -eq 0 ]
+  [ "$output" = q1 ]
+  [ ! -e "$FRAIM_QUEUE_DIR/q2" ]
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  [ "$(jq -r .state "$item")" = open ]
+  [ "$(jq -r .title "$item")" = "Package updates" ]
+  [ "$(jq -r .ask "$item")" = "Deploy?" ]
+  [ "$(jq -r .on_approve "$item")" = deploy ]
+  [ "$(jq -r .goal "$item")" = g7 ]
+  [ "$(jq -r .decided "$item")" = "" ]
+  [ "$(jq -r '.history | length' "$item")" = 1 ]
+  [ "$(jq -r '.history[0].ask' "$item")" = "Merge?" ]
+  [ "$(jq -r '.history[0].state' "$item")" = approved ]
+  [ "$(jq -r '.history[0].note' "$item")" = go ]
+  [ "$(jq -r '.history[0].summary' "$item")" = "first report" ]
+  run "$Q" show q1
+  [[ "$output" == *"Earlier steps"* ]]
+  [[ "$output" == *"Merge?"* ]]
+}
+
+@test "one job, one card: a follow-up with nothing to decide stays closed and prints no id" {
+  "$Q" add --quiet --goal g1 --title "Job" --ask "Merge?" --on-approve "merge" --summary "first" >/dev/null
+  "$Q" approve q1 >/dev/null
+  run "$Q" add --quiet --result --continues q1 --goal g7 --title "Job" --summary "merged, all fine"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  [ "$(jq -r .state "$item")" = approved ]
+  [ "$(jq -r .summary "$item")" = "merged, all fine" ]
+  [ "$(jq -r .goal "$item")" = g7 ]
+  [ "$(jq -r '.history | length' "$item")" = 1 ]
+  [ ! -e "$FRAIM_QUEUE_DIR/q2" ]
+}
+
+@test "one job, one card: rework after a send-back and a failure always wait for the owner" {
+  "$Q" add --quiet --goal g1 --title "Text" --ask "Good?" --summary "draft" >/dev/null
+  "$Q" reject q1 --note "shorter" >/dev/null
+  run "$Q" add --quiet --result --continues q1 --goal g7 --title "Text" --summary "shorter draft"
+  [ "$output" = q1 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = open ]
+  "$Q" add --quiet --goal g2 --title "Job" --ask "Go?" --on-approve "go" >/dev/null
+  "$Q" approve q2 >/dev/null
+  run "$Q" add --quiet --result --continues q2 --goal g8 --kind failed --priority 1 --title "Failed: Job" --ask "Try this task again?" --summary "broke"
+  [ "$output" = q2 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q2/item.json")" = open ]
+  [ "$(jq -r .kind "$FRAIM_QUEUE_DIR/q2/item.json")" = failed ]
+  [ "$(jq -r .title "$FRAIM_QUEUE_DIR/q2/item.json")" = Job ]
+}
+
+@test "a first result with nothing to decide is on record but waits for nobody; a lost origin makes a normal card" {
+  run "$Q" add --quiet --result --goal g1 --title "Check done" --summary "all fine"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q1/item.json")" = dismissed ]
+  [ "$(jq -r .via "$FRAIM_QUEUE_DIR/q1/item.json")" = system ]
+  run "$Q" add --quiet --result --continues q99 --goal g2 --title "Orphan" --ask "Go?" --on-approve "go"
+  [ "$output" = q2 ]
+  run "$Q" add --continues nonsense --title X
+  [ "$status" -eq 2 ]
+}
+
+@test "a goal's own session cannot add a second card; the server and brain proposals can" {
+  FRAIM_GOAL=g1 run "$Q" add --title "Twin" --ask "Merge?"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *queue.json* ]]
+  [ ! -e "$FRAIM_QUEUE_DIR/q1" ]
+  FRAIM_GOAL=g1 run "$Q" add --quiet --result --goal g1 --title "Result" --ask "Merge?" --on-approve "merge"
+  [ "$output" = q1 ]
+  FRAIM_GOAL=g1 run "$Q" add --quiet --skill s1 --title "New skill" --ask "Install?"
+  [ "$output" = q2 ]
+}
+
+@test "the owner's yes still counts after the card moved on to its next question" {
+  "$Q" add --quiet --goal g1 --title "Job" --ask "Go?" --on-approve "go" >/dev/null
+  "$Q" approve q1 >/dev/null
+  "$Q" add --quiet --result --continues q1 --goal g7 --title "Job" --ask "Next?" --on-approve "next" >/dev/null
+  run "$Q" add --quiet --title "Built for it" --approved-by q1
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q2/item.json")" = approved ]
+  "$Q" reject q1 --note "no" >/dev/null
+  "$Q" add --quiet --result --continues q1 --goal g8 --title "Job" --ask "Again?" --on-approve "again" >/dev/null
+  run "$Q" add --quiet --title "Borrowed" --approved-by q1
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q3/item.json")" = open ]
+}
+
+@test "the queue trigger reports new cards and cards that moved on, each once" {
+  export PATH="$T/bin:$(dirname "$Q"):$PATH" FRAIM_TRIGGER_STATE="$T/trigger" FRAIM_LEADS_DIR="$T/leads"
+  TRIGGER="$BATS_TEST_DIRNAME/../../workspace/automation-kit/triggers/queue"
+  mkdir -p "$T/trigger"
+  "$Q" add --quiet --goal g1 --title "Job" --ask "Go?" --on-approve "go" >/dev/null
+  run "$TRIGGER" events
+  [ -z "$output" ]
+  "$Q" approve q1 >/dev/null
+  run "$TRIGGER" events
+  [ -z "$output" ]
+  "$Q" add --quiet --result --continues q1 --goal g7 --title "Job" --ask "Next?" --on-approve "next" >/dev/null
+  run "$TRIGGER" events
+  [[ "$output" == q1* ]]
+  run "$TRIGGER" events
+  [ -z "$output" ]
+}
+
 @test "dismiss closes without a goal or a brain note" {
   "$Q" add --quiet --title x --goal g1
   "$Q" dismiss q1
