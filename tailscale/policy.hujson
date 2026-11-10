@@ -17,8 +17,8 @@
 //     prompts, so Claude can run admin commands unattended.
 {
   "groups": {
-    "group:fraim-users": ["michael@example.com"],
-    "group:fraim-admins": ["michael@example.com"],
+    "group:fraim-users": ["owner@example.com"],
+    "group:fraim-admins": ["owner@example.com"],
   },
 
   "tagOwners": {

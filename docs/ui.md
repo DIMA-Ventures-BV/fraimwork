@@ -27,6 +27,7 @@ The chief runs these.
 | `fraim-ui check [NAME]` | Name the mistakes in your pages |
 | `fraim-ui diff NAME` | Your page against the default |
 | `fraim-ui reset NAME` | Back to the default; the old page goes to `.history/` |
+| `fraim-ui restore NAME` | Put back the newest copy `reset` kept |
 
 ## A separate app
 

@@ -8,6 +8,10 @@
 //   fraim-prompt own NAME [--lead L]         copy the default to the owner's file and print its path
 //   fraim-prompt diff NAME [--lead L]        the owner's file against the default
 //   fraim-prompt reset NAME [--lead L]       back to the default (the owner's file goes to .history)
+//   fraim-prompt restore NAME [--lead L]     put back the newest copy reset kept in .history
+//   fraim-prompt default NAME                the text fraimwork ships
+//   fraim-prompt stale [--json] [--notify]   the owner's prompts, pages and styles whose default moved on;
+//                                            --notify adds one queue card, once per changed default
 //   fraim-prompt check [NAME] [--lead L]     name every mistake in the owner's files
 //   fraim-prompt render NAME [--lead L] [--set KEY=VALUE]...
 //
@@ -26,6 +30,8 @@
 //
 // A mistake in the owner's file must not stop an agent: render warns and uses the default.
 // Exit codes: 0 ok, 1 failure, 2 usage.
+import { execFileSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -35,6 +41,11 @@ const CHECKOUT = path.join(path.dirname(fs.realpathSync(process.argv[1])), '..',
 const DEFAULTS = process.env.FRAIM_PROMPT_DEFAULTS || (fs.existsSync(CHECKOUT) ? CHECKOUT : '/etc/fraim/prompts')
 const OWNER = process.env.FRAIM_PROMPTS_DIR || path.join(FILES, 'prompts')
 const LEADS = process.env.FRAIM_LEADS_DIR || path.join(FILES, 'leads')
+const UI_CHECKOUT = path.join(path.dirname(fs.realpathSync(process.argv[1])), '..', 'ui')
+const UI_DEFAULTS = process.env.FRAIM_UI_DEFAULTS || (fs.existsSync(UI_CHECKOUT) ? UI_CHECKOUT : '/etc/fraim/ui')
+const UI = process.env.FRAIM_UI_DIR || path.join(FILES, 'ui')
+const STYLES = process.env.FRAIM_STYLE_DIR || path.join(FILES, 'styles')
+const TOLD = path.join(os.homedir(), '.local/state/fraim/stale.notified')
 const NAME = /^[a-z0-9][a-z0-9-]*$/
 const MAX_DEPTH = 8
 
@@ -183,24 +194,24 @@ function nameArg(a) {
 
 // A file with a mistake is skipped, so the next one in line is used: a broken file for one
 // agent must not cost the owner's good file for every agent.
-function cmdRender(a) {
-  const name = nameArg(a)
+function renderPrompt(name, vars, lead) {
   let tried = false
-  for (const layer of layers(name, a.lead)) {
+  for (const layer of layers(name, lead)) {
     const text = read(layer.file)
     if (text === null || !text.trim()) continue
     tried = true
     try {
-      process.stdout.write(render(parse(text), a.set, a.lead, 0))
-      return
+      return render(parse(text), vars, lead, 0)
     } catch (err) {
       process.stderr.write(`fraim-prompt: ${layer.file}: ${err.message}; using the next version\n`)
     }
   }
   if (!tried) die(`no prompt "${name}"; fraim-prompt list shows them`)
   const shipped = read(defaultFile(name)) ?? die(`no default for "${name}"`)
-  try { process.stdout.write(renderDefault(shipped, a.set)) } catch (e) { die(`the default of "${name}" is broken: ${e.message}`) }
+  try { return renderDefault(shipped, vars) } catch (e) { die(`the default of "${name}" is broken: ${e.message}`) }
 }
+
+function cmdRender(a) { process.stdout.write(renderPrompt(nameArg(a), a.set, a.lead)) }
 
 // The fallback reads only shipped files, so a broken owner's include cannot break it again.
 function renderDefault(text, vars) {
@@ -248,16 +259,98 @@ function cmdOwn(a) {
   process.stdout.write(`${layer.file}\n`)
 }
 
+// The base goes along, so a copy brought back later still knows which default it came from.
+function archive(layer, name) {
+  const history = path.join(layer.dir, '.history')
+  fs.mkdirSync(path.join(history, '.base'), { recursive: true })
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+  fs.renameSync(layer.file, path.join(history, `${name}.${stamp}.md`))
+  if (fs.existsSync(baseFile(layer, name))) fs.renameSync(baseFile(layer, name), path.join(history, '.base', `${name}.${stamp}.md`))
+  return history
+}
+
 function cmdReset(a) {
   const name = nameArg(a)
   const layer = ownerLayer(name, a.lead)
   if (read(layer.file) === null) { process.stdout.write(`${name} already uses the default\n`); return }
-  const history = path.join(layer.dir, '.history')
-  fs.mkdirSync(history, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
-  fs.renameSync(layer.file, path.join(history, `${name}.${stamp}.md`))
-  fs.rmSync(baseFile(layer, name), { force: true })
+  const history = archive(layer, name)
   process.stdout.write(`${name} is back to ${resolve(name, a.lead)?.source ?? 'nothing'}; the old text is in ${history}\n`)
+}
+
+function cmdRestore(a) {
+  const name = nameArg(a)
+  const layer = ownerLayer(name, a.lead)
+  const history = path.join(layer.dir, '.history')
+  const stamped = new RegExp(`^${name}\\.\\d{8}T\\d{6}\\.md$`)
+  let entries = []
+  try { entries = fs.readdirSync(history) } catch {}
+  const newest = entries.filter((e) => stamped.test(e)).sort().pop() ?? die(`no earlier copy of "${name}" to put back`)
+  const text = read(path.join(history, newest))
+  const base = read(path.join(history, '.base', newest))
+  if (read(layer.file) === text) { process.stdout.write(`${name} already is that copy\n`); return }
+  if (read(layer.file) !== null) archive(layer, name)
+  fs.mkdirSync(path.join(layer.dir, '.base'), { recursive: true })
+  fs.writeFileSync(layer.file, text)
+  if (base !== null) fs.writeFileSync(baseFile(layer, name), base)
+  else fs.rmSync(baseFile(layer, name), { force: true })
+  process.stdout.write(`${name} is back to your copy from ${newest.slice(name.length + 1, -3)}\n`)
+}
+
+function ownerCopies() {
+  const scan = (kind, dir, ext, defaultOf, lead = '') => {
+    let entries = []
+    try { entries = fs.readdirSync(dir) } catch {}
+    return entries.filter((e) => e.endsWith(ext) && NAME.test(e.slice(0, -ext.length))).map((e) => {
+      const name = e.slice(0, -ext.length)
+      return { kind, name, lead, file: path.join(dir, e), text: read(path.join(dir, e)), base: read(path.join(dir, '.base', e)), shipped: read(defaultOf(name)) }
+    })
+  }
+  let leads = []
+  try { leads = fs.readdirSync(LEADS).filter((l) => NAME.test(l)) } catch {}
+  return [
+    ...scan('prompt', OWNER, '.md', defaultFile),
+    ...leads.flatMap((l) => scan('prompt', path.join(LEADS, l, 'prompts'), '.md', defaultFile, l)),
+    ...scan('page', UI, '.html', (n) => path.join(UI_DEFAULTS, `${n}.html`)),
+    ...scan('style', STYLES, '.md', (n) => defaultFile(`style-${n}`)),
+  ].filter((c) => c.shipped !== null && c.text !== null && c.text.trim() && c.text !== c.shipped)
+}
+
+const LABEL = { prompt: 'Instructions', page: 'Page', style: 'Writing style' }
+const cardLines = (copies) => copies.map((c) => `- ${LABEL[c.kind]}: ${c.name}${c.lead ? ` (for ${c.lead})` : ''}`).join('\n')
+const toldKey = (c) => `${c.kind}:${c.lead}:${c.name}:${crypto.createHash('sha256').update(c.shipped).digest('hex')}`
+
+function notifyStale(stale, unknown) {
+  const told = new Set((read(TOLD) ?? '').split('\n').filter(Boolean))
+  if (stale.every((c) => told.has(toldKey(c)))) return
+  const serverStale = stale.some((c) => c.kind === 'prompt' && c.name === 'server' && !c.lead)
+  const summary = renderPrompt('stale-card', {
+    stale: cardLines(stale), unknown: cardLines(unknown), server_stale: serverStale ? 'yes' : '',
+  }, '').trim()
+  const title = serverStale ? 'Safety rules changed: your copy is out of date' : 'Your own copies are out of date'
+  try {
+    execFileSync('fraim-queue', ['add', '--kind', 'info', '--priority', serverStale ? '1' : '2', '--source', 'fraim-prompt stale', '--title', title, '--summary', summary], { stdio: ['ignore', 'ignore', 'inherit'] })
+  } catch (err) {
+    die(`the queue card could not be added: ${err.message}`)
+  }
+  for (const c of stale) told.add(toldKey(c))
+  fs.mkdirSync(path.dirname(TOLD), { recursive: true })
+  fs.writeFileSync(TOLD, `${[...told].join('\n')}\n`)
+}
+
+function cmdStale(a) {
+  const bad = a.rest.find((o) => o !== '--json' && o !== '--notify')
+  if (bad) die(`stale does not take "${bad}"`, 2)
+  const copies = ownerCopies()
+  const stale = copies.filter((c) => c.base !== null && c.base !== c.shipped)
+  const unknown = copies.filter((c) => c.base === null)
+  if (a.rest.includes('--notify')) { if (stale.length) notifyStale(stale, unknown); return }
+  const row = ({ kind, name, lead, file }) => ({ kind, name, lead, file })
+  if (a.rest.includes('--json')) { process.stdout.write(`${JSON.stringify({ stale: stale.map(row), unknown: unknown.map(row) })}\n`); return }
+  const block = (head, list) => `${head}\n${list.map((c) => `  ${c.kind.padEnd(7)} ${c.name}${c.lead ? `  (lead ${c.lead})` : ''}`).join('\n')}\n`
+  const out = []
+  if (stale.length) out.push(block('Out of date (fraimwork changed the default since this copy was made):', stale))
+  if (unknown.length) out.push(block('Not known (no record of which default this copy came from):', unknown))
+  process.stdout.write(out.length ? out.join('\n') : 'Nothing is out of date.\n')
 }
 
 function diffLines(a, b) {
@@ -320,7 +413,14 @@ switch (cmd) {
   }
   case 'own': ownerOnly(); cmdOwn(parsed); break
   case 'reset': ownerOnly(); cmdReset(parsed); break
+  case 'restore': ownerOnly(); cmdRestore(parsed); break
+  case 'default': {
+    const name = nameArg(parsed)
+    process.stdout.write(read(defaultFile(name)) ?? die(`no default for "${name}"`))
+    break
+  }
+  case 'stale': cmdStale(parsed); break
   case 'diff': cmdDiff(parsed); break
   case 'check': cmdCheck(parsed); break
-  default: die('usage: fraim-prompt list|show|path|own|diff|reset|check|render NAME [--lead L] [--set KEY=VALUE]', 2)
+  default: die('usage: fraim-prompt list|show|path|own|diff|reset|restore|default|stale|check|render NAME [--lead L] [--set KEY=VALUE]', 2)
 }

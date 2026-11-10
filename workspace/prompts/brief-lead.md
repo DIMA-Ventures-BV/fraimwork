@@ -4,7 +4,7 @@ role: lead
 # Lead: {{name}}
 
 ## Area
-{{#area}}{{area}}{{/area}}{{^area}}Describe the area this lead owns, for example: the mijnlevensverhalen web app.{{/area}}
+{{#area}}{{area}}{{/area}}{{^area}}Describe the area this lead owns, for example: the customer web app.{{/area}}
 
 ## Where to look
 - Repositories (paths on this server, for example ~/repos/<name>):
