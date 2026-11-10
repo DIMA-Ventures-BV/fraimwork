@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/requ
 
 COPY entrypoint.sh /usr/local/bin/fraim-google-entrypoint
 COPY fraim-google /usr/local/bin/fraim-google
-RUN chmod 0755 /usr/local/bin/fraim-google-entrypoint /usr/local/bin/fraim-google
+COPY fraim-reply /usr/local/bin/fraim-reply
+RUN chmod 0755 /usr/local/bin/fraim-google-entrypoint /usr/local/bin/fraim-google /usr/local/bin/fraim-reply
 
 USER app
 # GOOGLE_CLIENT_SECRET_PATH is a file path in the private volume, not a secret.

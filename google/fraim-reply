@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""fraim-reply: the one way a mail leaves the server, and it can only answer a mail chain.
+
+Agents get drafts and no send tool from the MCP server. After the owner approves a reply card,
+the queue calls this service. It works out the recipient and subject from the chain itself, so
+no caller can choose an address.
+
+  GET  /health                          no auth
+  POST /who   {thread_id}               {name, to, subject}
+  POST /reply {thread_id, to, text}     sends; 409 when the chain now points at someone else
+"""
+import base64
+import hmac
+import json
+import os
+import re
+from email.message import EmailMessage
+from email.utils import getaddresses
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DIR = os.environ.get("FRAIM_GOOGLE_DIR", "/data/google")
+PORT = int(os.environ.get("FRAIM_REPLY_PORT", "8001"))
+TOKEN = os.environ.get("REPLY_TOKEN", "")
+HEADERS = ["From", "Reply-To", "Subject", "Message-ID", "References"]
+
+
+class Refused(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def header(message, name):
+    for item in message.get("payload", {}).get("headers", []):
+        if item.get("name", "").lower() == name.lower():
+            return " ".join(str(item.get("value", "")).split())
+    return ""
+
+
+def last_incoming(messages):
+    """The newest message someone else wrote; the owner's own mail and drafts do not count."""
+    for message in reversed(messages):
+        if not {"SENT", "DRAFT", "SPAM", "TRASH"} & set(message.get("labelIds", [])):
+            return message
+    raise Refused(422, "nobody else wrote in this mail chain, so there is nobody to answer")
+
+
+def recipient(message):
+    name, address = getaddresses([header(message, "Reply-To") or header(message, "From")])[0]
+    if not re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", address):
+        raise Refused(422, "this mail has no address to answer")
+    return name or address, address
+
+
+def subject_of(message):
+    subject = header(message, "Subject") or "(no subject)"
+    return subject if re.match(r"re\s*:", subject, re.I) else f"Re: {subject}"
+
+
+def build_reply(sender, to, message, text):
+    reply = EmailMessage()
+    reply["From"] = sender
+    reply["To"] = to
+    reply["Subject"] = subject_of(message)
+    message_id = header(message, "Message-ID")
+    if message_id:
+        reply["In-Reply-To"] = message_id
+        reply["References"] = " ".join(filter(None, [header(message, "References"), message_id]))
+    reply.set_content(text)
+    return base64.urlsafe_b64encode(reply.as_bytes()).decode()
+
+
+def owner_email():
+    with open(os.path.join(DIR, "email"), encoding="utf-8") as handle:
+        return handle.read().strip()
+
+
+def gmail():
+    # Imported here so the mail rules above can be tested without the Google packages.
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    with open(os.path.join(DIR, "credentials", f"{owner_email()}.json"), encoding="utf-8") as handle:
+        data = json.load(handle)
+    credentials = Credentials(
+        token=data.get("token"),
+        refresh_token=data.get("refresh_token"),
+        token_uri=data.get("token_uri"),
+        client_id=data.get("client_id"),
+        client_secret=data.get("client_secret"),
+        scopes=data.get("scopes"),
+    )
+    return build("gmail", "v1", credentials=credentials, cache_discovery=False)
+
+
+def read_chain(service, thread_id):
+    if not re.fullmatch(r"[\w-]{6,64}", str(thread_id or "")):
+        raise Refused(400, "thread_id is not a Gmail thread id")
+    chain = service.users().threads().get(userId="me", id=thread_id, format="metadata", metadataHeaders=HEADERS).execute()
+    return last_incoming(chain.get("messages", []))
+
+
+def who(body):
+    message = read_chain(gmail(), body.get("thread_id"))
+    name, address = recipient(message)
+    return {"name": name, "to": address, "subject": subject_of(message)}
+
+
+def reply(body):
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise Refused(400, "text is required")
+    service = gmail()
+    message = read_chain(service, body.get("thread_id"))
+    _, address = recipient(message)
+    if address.lower() != str(body.get("to") or "").lower():
+        raise Refused(409, f"a newer mail in this chain now answers to {address}; make a new draft")
+    raw = build_reply(owner_email(), address, message, text)
+    service.users().messages().send(userId="me", body={"raw": raw, "threadId": body["thread_id"]}).execute()
+    return {"ok": True, "to": address}
+
+
+class Handler(BaseHTTPRequestHandler):
+    ROUTES = {"/who": who, "/reply": reply}
+
+    def answer(self, status, body):
+        data = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self.answer(200 if self.path == "/health" else 404, {"ok": self.path == "/health"})
+
+    def do_POST(self):
+        given = self.headers.get("Authorization", "").encode()
+        if not TOKEN or not hmac.compare_digest(given, f"Bearer {TOKEN}".encode()):
+            return self.answer(401, {"error": "unauthorized"})
+        route = self.ROUTES.get(self.path)
+        if not route:
+            return self.answer(404, {"error": "not found"})
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 1_000_000:
+                raise Refused(413, "body too large")
+            self.answer(200, route(json.loads(self.rfile.read(length) or b"{}")))
+        except Refused as err:
+            self.answer(err.status, {"error": str(err)})
+        except Exception as err:  # pylint: disable=broad-except
+            self.log_error("reply failed: %s", type(err).__name__)
+            self.answer(500, {"error": f"Gmail did not accept this ({type(err).__name__})"})
+
+    def log_message(self, format, *args):  # pylint: disable=redefined-builtin
+        if args and str(args[0]).startswith("reply failed"):
+            super().log_message(format, *args)
+
+
+if __name__ == "__main__":
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

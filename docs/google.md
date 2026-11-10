@@ -45,7 +45,7 @@ It turns on the `google` module, starts the container, stores the client file in
 
 Set `GOOGLE_PERMISSIONS` in the space's env file, for example `GOOGLE_PERMISSIONS=gmail:send drive:readonly calendar:full`. Then restart the container (`fraim restart google`), run `fraim google signout` and sign in again, so Google grants the new scopes.
 
-Mail is untrusted input. A message can try to tell the agent what to do, so leave sending off unless you need it.
+Mail is untrusted input. A message can try to tell the agent what to do, so leave sending off. To answer a mail, the chief drafts a reply and you approve it in the inbox ([queue.md](queue.md), "Answering people outside"). That needs no extra permission: `google/fraim-reply` in the same container sends it, and it can only answer a mail chain. Do not set `gmail:send`: it gives every agent a send tool that skips your approval.
 
 ## What protects the token
 
