@@ -12,6 +12,7 @@
 #                                              add a line to the WhatsApp conversation with the owner
 #   fraim-relay context                        the conversation of the last day and the open decisions:
 #                                              what the chat, the chief and the brief read before they answer
+#   fraim-relay chat -- TEXT                   the owner writes in the app; the chief answers there
 #
 # The conversation (~/fraim/relay/conversation.jsonl) holds every WhatsApp message between the owner
 # and the server: what the owner wrote, the chat's answers and the chief's messages, each with the
@@ -314,6 +315,41 @@ cmd_context() {
   printf '\nDecisions that still wait for the owner (not answered yet):\n%s\n' "${decisions:-(none)}"
 }
 
+# chat TEXT: a message from the owner in the app, answered by the chief. Both land in the same
+# conversation as WhatsApp, so every voice knows what was said; the answer stays in the app.
+cmd_chat() {
+  [ "${1:-}" != -- ] || shift
+  local text="$*" chief lock="$relay/chat.lock" output code waited=0
+  [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage 'chat -- TEXT'
+  chief="$(the_chief)" || die "there is no chief of staff yet"
+  mkdir -p "$relay"
+  add_line owner app "" "$text"
+  until mkdir "$lock" 2>/dev/null; do
+    [ -z "$(find "$lock" -maxdepth 0 -mmin +7 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
+    sleep 2
+    waited=$((waited + 2))
+    [ "$waited" -lt 400 ] || die "the chief is still busy with an earlier message"
+  done
+  # shellcheck disable=SC2064
+  trap "rmdir $(printf '%q' "$lock") 2>/dev/null" EXIT
+  local limit=()
+  ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_CHAT_TIMEOUT:-300}")
+  output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$chief" \
+      --set "chief=$chief" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
+      --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")" \
+      --set "rules=$(fraim-brain show --for "$chief" --all 2>/dev/null)" \
+      --set "knows=$(fraim-lead brief 2>/dev/null | head -c 60000)" \
+      --set "recent=$(cmd_context 2>/dev/null)" \
+      --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
+      --set "text=$text")" \
+    --allowedTools "Read,Glob,Grep,Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style voice:*),Bash(fraim-relay said:*)" \
+    2>>"$relay/errors.log")"
+  code=$?
+  output="$(printf '%s' "$output" | sed -e 's/[[:space:]]*$//')"
+  [ "$code" -eq 0 ] && [ -n "$output" ] || output="I could not answer just now. Please try again in a minute."
+  add_line me app "" "$output"
+}
+
 cmd_said() {
   local n="${1:-5}"
   [ -s "$said" ] || { echo "Nothing sent yet."; return 0; }
@@ -329,5 +365,6 @@ case "$action" in
   on) cmd_on ;;
   log) cmd_log "$@" ;;
   context) cmd_context ;;
-  *) usage 'add [--chat CHAT_ID] -- TEXT | drain | said [N] | on | log owner|me -- TEXT | context' ;;
+  chat) cmd_chat "$@" ;;
+  *) usage 'add [--chat CHAT_ID] -- TEXT | drain | said [N] | on | log owner|me -- TEXT | context | chat -- TEXT' ;;
 esac

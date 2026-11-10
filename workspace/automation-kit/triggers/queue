@@ -35,4 +35,4 @@ printf '%s' "$items" | jq -r --argjson last "$last" --argjson seen "$seen" --arg
       else .priority == 1 or .kind == "failed" or .goal != "" or .lead == ""
       end))
   | sort_by(.id | ltrimstr("q") | tonumber)
-  | .[] | "\(.id) p\(.priority) \(.kind) from \(.source): \(.title)"'
+  | .[] | "\(.id) p\(.priority) \(.kind) from \(.source): \(.title)\(if (.thread // "") != "" then " [\(.thread)]" else "" end)"'

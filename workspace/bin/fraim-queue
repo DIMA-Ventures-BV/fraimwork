@@ -25,10 +25,14 @@
 //   fraim-queue recovered --source S     closes the failure cards of an automation that works again
 //   fraim-queue serve                      the web page (started by the workspace container)
 //   fraim-queue url                        the page address, with its access token
+//   fraim-queue thread mail GMAIL_THREAD_ID   save a mail chain as a conversation (--quiet: tell nobody)
+//   fraim-queue thread put [--kind K] [--key K] [--file F]   save anything else, JSON on stdin or in F
+//   fraim-queue thread say tN --from WHO [--to WHO] -- TEXT  add a line to the agents' chat
+//   fraim-queue thread show tN | list
 //
 // Items live in ~/fraim/queue/<id>/item.json, media next to it. Priority 1 is urgent.
 // Exit codes: 0 ok, 1 failure, 2 usage.
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -224,7 +228,14 @@ function continueCard(card, step, nothingToDecide) {
   }]
   const result = { summary: step.summary, goal: step.goal, source: step.source, lead: step.lead || card.lead, links: step.links, media: step.media, history }
   if (nothingToDecide && card.state === 'approved') return { ...card, ...result }
-  return { ...card, ...step, ...result, id: card.id, title: card.title, started: card.started || card.created, follow_up: '', outcome: '', via: '', approved_by: '', switch_on: '' }
+  return { ...card, ...step, ...result, thread: step.thread || card.thread || '', id: card.id, title: card.title, started: card.started || card.created, follow_up: '', outcome: '', via: '', approved_by: '', switch_on: '' }
+}
+
+// The conversation an item belongs to: said outright, set for this run, or that of its goal.
+function itemThread(opts) {
+  const fromGoal = opts.goal ? readText(path.join(GOALS, String(opts.goal), 'thread'), 40).trim() : ''
+  const id = String(opts.thread || process.env.FRAIM_THREAD || fromGoal)
+  return validThread(id) && fs.existsSync(path.join(THREADS, id, 'thread.json')) ? id : ''
 }
 
 export function addItem(opts) {
@@ -272,6 +283,7 @@ export function addItem(opts) {
     skill: opts.skill || '',
     // An automation or lead the engineer built switched off; approve switches it on.
     switch_on: opts.switchOn || '',
+    thread: itemThread(opts),
     state: 'open',
     note: '',
     created: now(),
@@ -292,7 +304,7 @@ export function addItem(opts) {
   if (!opts.quiet && item.state === 'open') notify(newText(item))
   // A lead hears at once when a goal it started ends; the chief hears through its queue events.
   if (item.goal && item.lead && !isChief(item.lead)) {
-    tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`)
+    tellLead(item.lead, `goal ${item.goal}`, `${kind === 'failed' ? 'A task you started failed' : 'A task you started is done'}: ${item.title} (queue item ${id}, fraim-queue show ${id}).`, item.thread)
   }
   return item
 }
@@ -432,7 +444,7 @@ function applyDecision(item, verdict, note, via, opts = {}) {
   if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead && via !== 'grant') {
     const covers = verdict === 'approved' ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''
-    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}${covers}`)
+    tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}${covers}`, item.thread)
   }
   return item
 }
@@ -522,9 +534,9 @@ function isChief(lead) {
 }
 
 // A note in the lead's inbox that wakes it now (fraim-lead tell).
-function tellLead(lead, from, text) {
+function tellLead(lead, from, text, thread = '') {
   if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(lead) || !fs.existsSync(path.join(LEADS, lead, 'lead.md'))) return
-  fire('fraim-lead', ['tell', lead, '--from', from, '--', text])
+  fire('fraim-lead', ['tell', lead, '--from', from, ...(thread ? ['--thread', thread] : []), '--', text])
 }
 
 function readText(file, max = 20000) {
@@ -554,16 +566,29 @@ function lastStatus(name) {
   return { status, last: m ? m[2] : '', detail: m && m[1] === 'failed' ? m[3] : '' }
 }
 
-function latestRun(dir) {
+function leadRuns(dir, count) {
   let files = []
-  try { files = fs.readdirSync(dir).filter((f) => /^\d{8}-\d{6}\.md$/.test(f)).sort() } catch {}
-  const f = files.at(-1)
-  if (!f) return null
-  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(f)
-  // The run log ends with the inbox notes the run read (for the lead's own history); the owner
-  // sees only the answer.
-  const text = readText(path.join(dir, f), 4000).split('\n--- inbox this run read ---')[0].trim()
-  return { text, time: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` }
+  try { files = fs.readdirSync(dir).filter((f) => /^\d{8}-\d{6}\.md$/.test(f)).sort().reverse().slice(0, count) } catch {}
+  return files.map((f) => {
+    const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/.exec(f)
+    // The run log ends with the inbox notes the run read (for the lead's own history); the owner
+    // sees only the answer.
+    const text = readText(path.join(dir, f), 4000).split('\n--- inbox this run read ---')[0].trim()
+    return { text, time: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` }
+  })
+}
+
+function latestRun(dir) {
+  return leadRuns(dir, 1)[0] || null
+}
+
+function automationRuns(dir, count) {
+  let names = []
+  try { names = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}T/.test(f)).sort().reverse().slice(0, count) } catch {}
+  return names.map((n) => {
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})\D?(\d{2})/.exec(n)
+    return { text: readText(path.join(dir, n, 'output.md'), 4000).trim(), time: m ? `${m[1]} ${m[2]}:${m[3]}` : n }
+  })
 }
 
 export function team() {
@@ -576,7 +601,7 @@ export function team() {
     const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
     if (!Object.keys(h).length && !fs.existsSync(path.join(AUTOS, name, 'automation.md'))) continue
     const when = h.schedule ? `schedule ${h.schedule}` : h.every ? `every ${h.every}` : h.trigger ? h.trigger : 'by hand'
-    const base = { name, when, description: (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''), off: /^(false|no|off|0)$/i.test(h.enabled || ''), ...lastStatus(name) }
+    const base = { name, title: displayName(h.lead || name), when, description: (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''), off: /^(false|no|off|0)$/i.test(h.enabled || ''), ...lastStatus(name) }
     if (!h.lead) { automations.push(base); continue }
     const role = /^role:\s*chief/m.test(readText(path.join(LEADS, h.lead, 'lead.md'), 2000)) ? 'chief' : 'lead'
     leads.push({ ...base, lead: h.lead, role })
@@ -639,6 +664,47 @@ function runLog(name) {
   const runs = path.join(AUTOS, name, 'runs')
   const f = newest(runs, /^\d{4}-\d{2}-\d{2}T/)
   return f && fs.existsSync(path.join(runs, f, 'log.jsonl')) ? path.join(runs, f, 'log.jsonl') : ''
+}
+
+// The steps of a run for the lead page: what Claude said and did, in the words a person uses.
+const TOOL_WORD = { Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Changed', Grep: 'Searched', Glob: 'Looked for', WebFetch: 'Opened', WebSearch: 'Searched the web', Task: 'Asked a helper', Agent: 'Asked a helper', Skill: 'Used skill' }
+export function runSteps(jsonl) {
+  const out = []
+  for (const raw of String(jsonl || '').split('\n')) {
+    let e
+    try { e = JSON.parse(raw) } catch { continue }
+    if (e?.type !== 'assistant') continue
+    for (const c of e.message?.content || []) {
+      if (c.type === 'text' && c.text?.trim()) out.push({ say: c.text.trim().slice(0, 600) })
+      if (c.type === 'tool_use') {
+        const i = c.input || {}
+        const k = ['description', ...TOOL_ARG].find((key) => typeof i[key] === 'string' && i[key])
+        out.push({ did: TOOL_WORD[c.name] || `Used ${String(c.name).split('__').at(-1)}`, what: k ? String(i[k]).replace(/\s+/g, ' ').slice(0, 160) : '' })
+      }
+    }
+  }
+  return out
+}
+
+// All the page shows for one lead or automation: what it is for, what it does now, what it found.
+export function member(name) {
+  if (!validAgent(name)) usage('not a lead or automation name')
+  const text = readText(path.join(AUTOS, name, 'automation.md'), 4000)
+  if (!text) return null
+  const h = header(text)
+  const lead = /^[a-z0-9][a-z0-9-]{0,39}$/.test(h.lead || '') ? h.lead : ''
+  const area = lead ? /^## Area\n+((?:[^\n#][^\n]*\n?)+)/m.exec(readText(path.join(LEADS, lead, 'lead.md'))) : null
+  const lock = path.join(AUTO_STATE, name, 'lock')
+  const running = fs.existsSync(lock)
+  const log = running ? runLog(name) : ''
+  let since = ''
+  try { since = fs.statSync(lock).mtime.toISOString() } catch {}
+  return {
+    name, running, since,
+    about: area ? area[1].trim() : (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''),
+    steps: log ? runSteps(readText(log, 4000000)).slice(-40).reverse() : [],
+    runs: lead ? leadRuns(path.join(LEADS, lead, 'runs'), 10) : automationRuns(path.join(AUTOS, name, 'runs'), 10),
+  }
 }
 
 export async function active() {
@@ -712,6 +778,400 @@ function describe(item) {
   return parts.join('\n')
 }
 
+// --- conversations: what came in, and the agents talking about it -------------------------
+// ~/fraim/threads/<tN>/thread.json holds the thing that came in, saved from its source and not
+// rewritten by an agent; chat.jsonl holds what the agents said about it.
+
+const THREADS = process.env.FRAIM_THREADS_DIR || path.join(HOME, 'fraim/threads')
+const validThread = (id) => /^t\d{1,6}$/.test(id)
+
+function readThread(id) {
+  if (!validThread(id)) usage(`'${id}' is not a conversation id (t1, t2, ...)`)
+  try {
+    return JSON.parse(fs.readFileSync(path.join(THREADS, id, 'thread.json'), 'utf8'))
+  } catch {
+    throw new Error(`no conversation ${id}`)
+  }
+}
+
+function writeThread(t) {
+  const file = path.join(THREADS, t.id, 'thread.json')
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(t, null, 2) + '\n')
+  fs.renameSync(`${file}.tmp`, file)
+}
+
+function allThreads() {
+  let names = []
+  try { names = fs.readdirSync(THREADS) } catch { return [] }
+  const out = []
+  for (const name of names) {
+    if (!validThread(name)) continue
+    try { out.push(JSON.parse(fs.readFileSync(path.join(THREADS, name, 'thread.json'), 'utf8'))) } catch {}
+  }
+  return out
+}
+
+function newThreadId() {
+  fs.mkdirSync(THREADS, { recursive: true })
+  const last = path.join(THREADS, '.last')
+  let n = 1
+  try { n = parseInt(fs.readFileSync(last, 'utf8'), 10) + 1 || 1 } catch {}
+  for (;;) {
+    try {
+      fs.mkdirSync(path.join(THREADS, `t${n}`))
+      break
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      n++
+    }
+  }
+  fs.writeFileSync(last, `${n}\n`)
+  return `t${n}`
+}
+
+// One thing, one conversation: the same key (a mail chain, a Linear issue, an error) lands in the
+// same conversation. news is true when there is something new to read; a repeat of an error
+// only raises its count.
+export function putThread(data) {
+  const key = String(data.key || '').slice(0, 200)
+  let t = key ? allThreads().find((x) => x.key === key) : null
+  const isNew = !t
+  if (isNew) {
+    t = { id: newThreadId(), kind: String(data.kind || 'other'), key, title: '', who: '', url: '', text: '', details: '', fields: {}, messages: [], comments: [], stats: null, created: now(), changed: now(), active: '', seen: '' }
+  }
+  const before = JSON.stringify([t.messages.length, t.comments.length, t.text])
+  for (const [k, max] of [['title', 200], ['who', 200], ['url', 500], ['text', 40000], ['details', 20000]]) {
+    if (data[k] != null) t[k] = String(data[k]).slice(0, max)
+  }
+  if (data.fields && typeof data.fields === 'object') t.fields = { ...t.fields, ...data.fields }
+  if (Array.isArray(data.messages)) t.messages = data.messages
+  if (Array.isArray(data.comments)) t.comments = data.comments.slice(0, 200)
+  if (data.hit) {
+    const n = Number(data.hit) || 1
+    t.stats = { count: (t.stats?.count || 0) + n, first: t.stats?.first || now(), last: now() }
+  }
+  const news = isNew || before !== JSON.stringify([t.messages.length, t.comments.length, t.text])
+  if (news) t.changed = now()
+  writeThread(t)
+  return { thread: t, isNew, news }
+}
+
+export function sayInThread(id, from, to, text) {
+  const t = readThread(id)
+  fs.appendFileSync(path.join(THREADS, id, 'chat.jsonl'), `${JSON.stringify({ time: now(), from: String(from), to: String(to || ''), text: String(text).slice(0, 4000) })}\n`)
+  t.active = now()
+  writeThread(t)
+}
+
+function readChat(id) {
+  return readText(path.join(THREADS, id, 'chat.jsonl'), 2000000).split('\n').flatMap((l) => {
+    try { return l ? [JSON.parse(l)] : [] } catch { return [] }
+  })
+}
+
+function theChief() {
+  try { return fs.readdirSync(LEADS).find((n) => isChief(n)) || '' } catch { return '' }
+}
+
+function tellChief(thread, from, text) {
+  const chief = theChief()
+  if (chief) fire('fraim-lead', ['tell', chief, '--from', from, '--thread', thread.id, '--', text])
+}
+
+// What an agent is told is a file the owner can change. A broken setup still passes the facts on.
+function promptText(name, values) {
+  try {
+    return execFileSync(tool('fraim-prompt'), ['render', name, ...Object.entries(values).flatMap(([k, v]) => ['--set', `${k}=${v}`])], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return Object.values(values).join(' ')
+  }
+}
+
+const SOURCE_WORD = { email: 'email', linear: 'Linear issue', error: 'website problem' }
+function announce({ thread, isNew }) {
+  tellChief(thread, thread.kind, promptText('thread-new', { is_new: isNew ? '1' : '', what: SOURCE_WORD[thread.kind] || thread.kind, who: thread.messages.at(-1)?.from || thread.who || 'someone', title: thread.title, id: thread.id }))
+}
+
+// The name people see is the display: line of the lead's brief; without one, its folder name.
+export function displayName(name) {
+  const n = String(name || '')
+  if (n === 'owner') return 'You'
+  if (n === 'manual') return 'Fraim'
+  if (/^goal /.test(n)) return 'A helper'
+  if (/^automation /.test(n)) return displayName(n.slice(11))
+  const own = header(readText(path.join(LEADS, n, 'lead.md'), 2000)).display
+  if (own) return own
+  if (isChief(n)) return 'Chief of staff'
+  const plain = n.replace(/-/g, ' ')
+  return plain ? plain.charAt(0).toUpperCase() + plain.slice(1) : 'Someone'
+}
+
+const leadArea = (name) => /^## Area\n+((?:[^\n#][^\n]*\n?)+)/m.exec(readText(path.join(LEADS, name, 'lead.md')))?.[1]?.trim() || ''
+
+// What a tool entry is called on the page: mcp__linear__list_issues is Linear. Shell commands are not listed.
+function toolNames(entries) {
+  const names = entries.map((t) => /^mcp__([^_]+(?:_[^_]+)*?)(?:__|$)/.exec(t.trim())?.[1]).filter(Boolean).map((t) => t.replace(/[-_]mcp$/, ''))
+  return [...new Set(names)].map((t) => t.charAt(0).toUpperCase() + t.slice(1)).sort()
+}
+
+// Everyone who works here, read from the files they are set up with.
+export function employees() {
+  const products = {}
+  let repos = []
+  try { repos = fs.readdirSync(path.join(HOME, 'fraim/projects')) } catch {}
+  for (const repo of repos) {
+    for (const l of readText(path.join(HOME, 'fraim/projects', repo, 'installed.tsv')).split('\n')) {
+      const [kind, name] = l.split('\t')
+      if (kind && name) products[`${kind}:${name}`] = repo
+    }
+  }
+  const { leads, automations } = team()
+  const people = leads.filter((m) => m.name === m.lead).map((m) => ({
+    name: m.name, title: displayName(m.name), does: leadArea(m.name) || m.description, product: products[`lead:${m.name}`] || '',
+    off: m.off || fs.existsSync(path.join(LEADS, m.name, 'paused')), status: m.status, last: m.last,
+    starts: leads.filter((x) => x.lead === m.lead).map((x) => x.when),
+    tools: toolNames(readText(path.join(LEADS, m.name, 'tools')).split('\n')),
+  }))
+  const watchers = automations.map((m) => ({
+    name: m.name, title: displayName(m.name), does: m.description, product: products[`auto:${m.name}`] || '', off: m.off, status: m.status, last: m.last,
+    starts: [m.when], tools: toolNames(String(header(readText(path.join(AUTOS, m.name, 'automation.md'), 4000)).tools || '').split(',')),
+  }))
+  return { people, watchers }
+}
+
+// Agent notes keep exact file names and logs after a line "Details:"; people read what is above it.
+const spoken = (text) => String(text || '').split(/^Details:\s*$/m)[0].trim()
+
+function workers() {
+  const out = {}
+  const add = (id, name) => { (out[id] ||= []).includes(name) || out[id].push(name) }
+  let leads = []
+  try { leads = fs.readdirSync(LEADS) } catch {}
+  for (const n of leads) {
+    for (const id of readText(path.join(LEADS, n, '.running/thread'), 200).split('\n')) if (validThread(id)) add(id, displayName(n))
+  }
+  let goals = []
+  try { goals = fs.readdirSync(GOALS) } catch {}
+  for (const g of goals) {
+    const id = readText(path.join(GOALS, g, 'thread'), 40).trim()
+    if (id && /^(running|starting|working)/.test(readText(path.join(GOALS, g, 'state'), 40))) add(id, 'A helper')
+  }
+  return out
+}
+
+const RECENT = 15 * 60 * 1000
+function threadState(t, open, working) {
+  if (open.length) return 'need'
+  if (working?.length) return 'work'
+  if (!t.active) return 'new'
+  return Date.now() - Math.max(Date.parse(t.changed) || 0, Date.parse(t.active) || 0) < RECENT ? 'work' : 'done'
+}
+
+function firstWords(text) {
+  return (String(text || '').split('\n').find((l) => l.trim()) || '').trim().slice(0, 160)
+}
+
+export function inboxRows() {
+  const items = allItems()
+  const working = workers()
+  const rows = allThreads().map((t) => {
+    const mine = items.filter((i) => i.thread === t.id)
+    const open = mine.filter((i) => i.state === 'open')
+    const chat = readChat(t.id).at(-1)
+    const last = t.messages.at(-1)
+    const asker = open[0] && displayName(itemOwner(open[0]))
+    return {
+      id: t.id, kind: t.kind, title: t.title || '(no subject)', who: t.who || 'Someone',
+      snippet: open[0] ? `${asker}: ${open[0].ask || open[0].title}` : chat ? `${displayName(chat.from)}: ${firstWords(spoken(chat.text))}` : firstWords(last?.text || t.text),
+      time: [t.changed, t.active, ...mine.map((i) => i.created)].sort().at(-1),
+      state: threadState(t, open, working[t.id]),
+      unread: t.changed > (t.seen || ''),
+    }
+  })
+  const loose = items.filter((i) => !i.thread)
+  const shown = [...loose.filter((i) => i.state === 'open'), ...loose.filter((i) => i.state !== 'open').sort((a, b) => b.decided.localeCompare(a.decided)).slice(0, 100)]
+  for (const i of shown) {
+    rows.push({ id: i.id, kind: 'item', title: i.title, who: displayName(itemOwner(i)), snippet: i.ask || i.need || firstWords(i.summary), time: i.state === 'open' ? i.created : i.decided, state: i.state === 'open' ? 'need' : 'done', unread: i.state === 'open' })
+  }
+  return rows.sort((a, b) => String(b.time).localeCompare(String(a.time)))
+}
+
+function itemOwner(i) {
+  return i.lead || (/^automation /.test(i.source) ? i.source.slice(11) : i.source)
+}
+
+const ANSWER = { approved: 'Yes, go ahead.', dismissed: 'No, leave it.', rejected: 'No.' }
+function itemChat(i) {
+  const ask = { time: i.created, from: displayName(itemOwner(i)), to: 'You', item: { id: i.id, title: i.title, ask: i.ask, need: i.need, if_yes: i.if_yes, advise: i.advise, state: i.state } }
+  if (i.state === 'open') return [ask]
+  return [ask, { time: i.decided, from: 'You', to: displayName(itemOwner(i)), text: `${ANSWER[i.state] || ''}${i.note ? ` ${i.note}` : ''}`.trim() }]
+}
+
+export function threadDetail(id) {
+  if (validId(id)) {
+    const i = readItem(id)
+    return { id: i.id, kind: 'item', title: i.title, who: displayName(itemOwner(i)), text: i.summary, created: i.created, links: i.links, media: i.media, fields: {}, messages: [], comments: [], chat: itemChat(i), working: [] }
+  }
+  const t = readThread(id)
+  const { seen: _seen, ...shown } = t
+  const said = readChat(id).map((c) => ({ time: c.time, from: displayName(c.from), to: c.to ? displayName(c.to) : '', text: spoken(c.text) }))
+  const items = allItems().filter((i) => i.thread === id)
+  const chat = [...said, ...items.flatMap(itemChat)].sort((a, b) => String(a.time).localeCompare(String(b.time)))
+  return { ...shown, links: [], media: [], chat, working: workers()[id] || [] }
+}
+
+export function describeThread(id) {
+  const t = readThread(id)
+  const parts = [`${t.id}: ${t.title}`, `From ${t.who}, ${t.kind}`]
+  for (const m of t.messages) parts.push('', `${m.from}${m.forwardedBy ? `, forwarded by ${m.forwardedBy}` : ''}, ${m.date}:`, m.text)
+  if (t.text) parts.push('', t.text)
+  for (const [k, v] of Object.entries(t.fields)) parts.push(`${k}: ${v}`)
+  for (const c of t.comments) parts.push('', `${c.who}: ${c.text}`)
+  if (t.details) parts.push('', t.details)
+  const chat = readChat(id)
+  if (chat.length) parts.push('', 'What the agents said so far:', ...chat.map((c) => `${c.from} to ${c.to || 'everyone'}: ${c.text}`))
+  return parts.join('\n')
+}
+
+// --- the chat with the chief of staff: the same conversation as WhatsApp ---------------------
+
+const RELAY = process.env.FRAIM_RELAY_DIR || path.join(HOME, 'fraim/relay')
+
+export function chiefChat() {
+  const items = allItems()
+  const titles = Object.fromEntries(allThreads().map((t) => [t.id, t.title]))
+  const lines = readText(path.join(RELAY, 'conversation.jsonl'), 4000000).split('\n').flatMap((l) => {
+    try { return l ? [JSON.parse(l)] : [] } catch { return [] }
+  })
+  const messages = lines.slice(-200).map((m) => {
+    const refs = new Map()
+    for (const q of String(m.about || '').split(/\s+/).filter(validId)) {
+      const item = items.find((i) => i.id === q)
+      if (item) refs.set(item.thread || item.id, titles[item.thread] || item.title)
+    }
+    return { who: m.who === 'owner' ? 'owner' : 'chief', text: String(m.text || ''), time: String(m.time || ''), app: m.chat === 'app', refs: [...refs].slice(0, 3).map(([id, title]) => ({ id, title })) }
+  })
+  return { exists: Boolean(theChief()), typing: fs.existsSync(path.join(RELAY, 'chat.lock')), messages }
+}
+
+// A chief's answer takes longer than fire() allows, and the page does not wait for it.
+function askChief(text) {
+  const child = spawn(tool('fraim-relay'), ['chat', '--', text], { env: runtimeEnv(), stdio: 'ignore', detached: true })
+  child.on('error', () => {})
+  child.unref()
+}
+
+// --- reading a mail chain -------------------------------------------------------------------
+
+function person(from) {
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>/.exec(from || '')
+  return m ? { name: m[1].trim() || m[2], address: m[2] } : { name: String(from || 'Someone').trim(), address: '' }
+}
+
+// What was written now and what is only quoted from earlier mails. When no quote is found, or the
+// cut would leave nothing, the whole text stays.
+export function splitQuote(body) {
+  const lines = String(body).split('\n')
+  const start = lines.findIndex((l, i) => {
+    const two = `${l} ${lines[i + 1] || ''}`
+    return /^>/.test(l)
+      || /^(On|Op)\s.+(wrote|schreef[^:]*):\s*$/i.test(l)
+      || /^(On|Op)\s.+(wrote|schreef[^:]*):\s*$/i.test(two)
+      || /^-{2,}\s*(Original Message|Oorspronkelijk bericht)/i.test(l)
+      || (/^(From|Van):\s.+/.test(l) && lines.slice(i + 1, i + 4).some((x) => /^(Sent|Date|Verzonden|Datum):\s/.test(x)))
+  })
+  if (start < 0) return { text: String(body).trim(), quoted: '' }
+  const text = lines.slice(0, start).join('\n').trim()
+  return text ? { text, quoted: lines.slice(start).join('\n').trim() } : { text: String(body).trim(), quoted: '' }
+}
+
+function unforward(body) {
+  const m = /^[-\s]*(?:Forwarded message|Doorgestuurd bericht|Begin forwarded message)[-\s:]*$/mi.exec(body)
+  if (!m) return null
+  const note = body.slice(0, m.index).trim()
+  const rest = body.slice(m.index + m[0].length).replace(/^\n+/, '')
+  const end = rest.indexOf('\n\n')
+  const head = end < 0 ? rest : rest.slice(0, end)
+  const get = (re) => re.exec(head)?.[1]?.trim() || ''
+  const from = get(/^(?:From|Van):[ \t]*(.*)$/mi)
+  if (!from) return null
+  return { note, from, date: get(/^(?:Date|Datum|Sent|Verzonden):[ \t]*(.*)$/mi), to: get(/^(?:To|Aan):[ \t]*(.*)$/mi), body: end < 0 ? '' : rest.slice(end + 2) }
+}
+
+// Walled off in the page; this takes out what could still reach outside the frame.
+function cleanHtml(html) {
+  const out = String(html).replace(/<(script|style\s+type="text\/javascript")[\s\S]*?<\/\1>/gi, '').replace(/<(meta|base|link)\b[^>]*>/gi, '').trim()
+  return out.length > 400000 ? '' : out
+}
+
+const isDesigned = (html) => (html.match(/<img\b/gi) || []).length >= 3 || (html.match(/<table\b/gi) || []).length >= 4
+
+export function parseGmailThread(text, html = '') {
+  const parts = (s) => {
+    const p = String(s).replace(/\r\n/g, '\n').split(/^=== Message \d+ ===$/m)
+    return { head: p[0], bodies: p.slice(1).map((b) => {
+      const raw = b.replace(/^\n+/, '')
+      const end = raw.indexOf('\n\n')
+      return { head: end < 0 ? raw : raw.slice(0, end), body: end < 0 ? '' : raw.slice(end + 2) }
+    }) }
+  }
+  const t = parts(text)
+  const h = parts(html)
+  const subject = /^Subject:[ \t]*(.*)$/m.exec(t.head)?.[1]?.trim() || ''
+  const messages = t.bodies.map((m, i) => {
+    const get = (name) => {
+      const v = new RegExp(`^${name}:[ \\t]*(.*)$`, 'm').exec(m.head)?.[1]?.trim() || ''
+      return /^\[not present/.test(v) ? '' : v
+    }
+    const [body, attached = ''] = m.body.split(/^--- ATTACHMENTS ---$/m)
+    const attachments = [...attached.matchAll(/^\d+\.\s+(.+?)\s+\(([^,)]+),\s*([^)]+)\)$/gm)].map((a) => ({ name: a[1], type: a[2], size: a[3] }))
+    const fwd = unforward(body.trim())
+    const sender = person(fwd ? fwd.from : get('From'))
+    const { text: said, quoted } = splitQuote(fwd ? fwd.body : body)
+    const page = cleanHtml((h.bodies[i]?.body || '').split(/^--- ATTACHMENTS ---$/m)[0])
+    return {
+      from: sender.name, address: sender.address, to: fwd ? fwd.to : get('To'), date: fwd?.date || get('Date'),
+      forwardedBy: fwd ? person(get('From')).name : '', forwardNote: fwd?.note || '',
+      text: said.slice(0, 40000), quoted: quoted.slice(0, 40000), html: page, designed: Boolean(page) && !fwd && !quoted && isDesigned(page), attachments,
+    }
+  })
+  return { title: subject.replace(/^((re|fwd?|antw|aw)\s*:\s*)+/i, '').trim() || '(no subject)', who: messages[0]?.from || 'Someone', messages }
+}
+
+async function mcpCaller(url) {
+  let session = ''
+  let n = 0
+  const rpc = async (method, params, note) => {
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(session ? { 'mcp-session-id': session } : {}) }
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', method, params, ...(note ? {} : { id: ++n }) }), signal: AbortSignal.timeout(60000) })
+    session = r.headers.get('mcp-session-id') || session
+    if (note) return null
+    const raw = await r.text()
+    const data = raw.split('\n').filter((l) => l.startsWith('data:')).pop()
+    return JSON.parse(data ? data.slice(5) : raw)
+  }
+  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'fraim-queue', version: '1' } })
+  await rpc('notifications/initialized', {}, true)
+  return async (name, args) => {
+    const out = await rpc('tools/call', { name, arguments: args })
+    const text = out.result?.content?.[0]?.text
+    if (out.error || out.result?.isError || typeof text !== 'string') throw new Error(`Gmail did not answer: ${out.error?.message || text || 'empty answer'}`)
+    return text
+  }
+}
+
+export async function captureMail(gmailThread, quiet = false) {
+  if (!/^[\w-]{6,64}$/.test(gmailThread || '')) usage('thread mail needs the Thread ID of the mail')
+  const call = await mcpCaller(process.env.FRAIM_GOOGLE_MCP || 'http://google:8000/mcp')
+  const text = await call('get_gmail_thread_content', { thread_id: gmailThread })
+  const html = await call('get_gmail_thread_content', { thread_id: gmailThread, body_format: 'html' })
+  const parsed = parseGmailThread(text, html)
+  if (!parsed.messages.length) throw new Error('that mail chain has no messages')
+  const r = putThread({ kind: 'email', key: `gmail:${gmailThread}`, url: `https://mail.google.com/mail/u/0/#all/${gmailThread}`, ...parsed })
+  if (r.news && !quiet) announce(r)
+  return r
+}
+
 // --- the web page ------------------------------------------------------------------------
 
 function token() {
@@ -770,13 +1230,45 @@ export function createServer(secret = token()) {
       if (!sameToken(cookieToken(req), secret)) {
         return send(res, 401, 'Open the queue with the link that includes ?t=. Ask Claude: "give me my queue link".', 'text/plain')
       }
-      if (req.method === 'GET' && url.pathname === '/') return send(res, 200, PAGE, 'text/html; charset=utf-8')
+      if (req.method === 'GET' && url.pathname === '/') return send(res, 200, INBOX_PAGE, 'text/html; charset=utf-8')
+      if (req.method === 'GET' && url.pathname === '/team') return send(res, 200, PAGE, 'text/html; charset=utf-8')
+      if (req.method === 'GET' && url.pathname === '/api/chief') return send(res, 200, chiefChat())
+      if (req.method === 'POST' && url.pathname === '/api/chief/say') {
+        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
+        const text = String((await readBody(req)).text || '').trim()
+        if (!text) usage('write a message first')
+        askChief(text)
+        return send(res, 200, { ok: true })
+      }
+      if (req.method === 'GET' && url.pathname === '/api/employees') return send(res, 200, employees())
+      if (req.method === 'GET' && url.pathname === '/api/threads') return send(res, 200, inboxRows())
+      const conv = /^\/api\/threads\/([tq]\d{1,6})(?:\/(seen|say))?$/.exec(url.pathname)
+      if (conv && req.method === 'GET' && !conv[2]) return send(res, 200, threadDetail(conv[1]))
+      if (conv && req.method === 'POST' && conv[2]) {
+        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
+        const t = readThread(conv[1])
+        if (conv[2] === 'seen') {
+          t.seen = now()
+          writeThread(t)
+          return send(res, 200, { ok: true })
+        }
+        const text = String((await readBody(req)).text || '').trim()
+        if (!text) usage('write a message first')
+        sayInThread(t.id, 'owner', '', text)
+        tellChief(t, 'owner', promptText('thread-owner', { text }))
+        return send(res, 200, { ok: true })
+      }
       if (req.method === 'GET' && url.pathname === '/api/items') {
         const all = url.searchParams.get('all') === '1'
         return send(res, 200, rank(allItems().filter((i) => all || i.state === 'open')))
       }
       if (req.method === 'GET' && url.pathname === '/api/team') return send(res, 200, team())
       if (req.method === 'GET' && url.pathname === '/api/active') return send(res, 200, await active())
+      const who = /^\/api\/member\/([a-z0-9][a-z0-9_-]{0,47})$/.exec(url.pathname)
+      if (who && req.method === 'GET') {
+        const m = member(who[1])
+        return m ? send(res, 200, m) : send(res, 404, { error: 'no such lead or automation' })
+      }
       const agent = /^\/api\/active\/([a-z0-9][a-z0-9_-]{0,47})\/(screen|send)$/.exec(url.pathname)
       if (agent && req.method === 'GET' && agent[2] === 'screen') return send(res, 200, await agentScreen(agent[1]))
       if (agent && req.method === 'POST' && agent[2] === 'send') {
@@ -844,7 +1336,8 @@ svg { display: block; flex: none; }
 .ws .logo { width: 20px; height: 20px; border-radius: 5px; background: var(--accent); display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 600; }
 .nav { display: flex; flex-direction: column; gap: 1px; }
 .nav button { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: none; text-align: left; padding: 5px 8px; border-radius: 6px; cursor: pointer; color: var(--soft); font-weight: 500; }
-.nav button:hover { background: var(--hover); }
+.nav button:hover, .nav a.back:hover { background: var(--hover); }
+.nav a.back { display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 6px; color: var(--soft); font-weight: 500; text-decoration: none; }
 .nav button[aria-current="true"] { background: var(--active); color: var(--ink); }
 .nav .c { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .nav .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -957,6 +1450,42 @@ details.more .desc { margin-top: 10px; }
 .empty svg { margin: 0 auto 12px; color: var(--faint); }
 .empty b { display: block; color: var(--ink); font-weight: 500; font-size: 14px; margin-bottom: 4px; }
 
+.app.solo { grid-template-columns: 228px minmax(0, 1fr); }
+.app.solo .list { display: none; }
+.about { font-size: 14px; line-height: 1.6; color: var(--soft); margin: 0 0 18px; white-space: pre-wrap; }
+.desc b { color: var(--ink); font-weight: 600; }
+.boxed { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.boxed .row:last-child { border-bottom: 0; }
+.steps { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; }
+.steps li { display: grid; grid-template-columns: 14px 104px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.steps li:last-child { border-bottom: 0; }
+.steps .v { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.steps .w { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps .say { grid-column: 2 / -1; color: var(--ink); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.steps .live { align-self: center; }
+details.run { border-bottom: 1px solid var(--line); }
+details.run:last-child { border-bottom: 0; }
+details.run summary { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; height: 34px; align-items: center; padding: 0 12px; cursor: pointer; list-style: none; }
+details.run summary::-webkit-details-marker { display: none; }
+details.run summary:hover { background: var(--hover); }
+details.run .when { color: var(--muted); }
+details.run .pv { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.run .desc { padding: 4px 12px 12px; margin: 0; }
+.p-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 190px 170px 104px; gap: 12px; align-items: center; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; cursor: pointer; }
+.p-row:last-child { border-bottom: 0; }
+.p-row:hover { background: var(--hover); }
+.p-a { width: 32px; height: 32px; border-radius: 50%; background: var(--active); display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--soft); }
+.p-m { min-width: 0; }
+.p-m b { font-weight: 600; color: var(--ink); } .p-m small { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.p-d { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-s { color: var(--soft); font-size: 12.5px; }
+.p-t { display: flex; flex-wrap: wrap; gap: 4px; }
+.p-t i { font-style: normal; font-size: 11.5px; color: var(--soft); border: 1px solid var(--line2); border-radius: 999px; padding: 0 7px; }
+.p-w { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+.p-w.st-running { color: var(--green); } .p-w.st-failed { color: var(--red); } .p-w.st-paused { color: var(--yellow); }
+@media (max-width: 1000px) { .p-row { grid-template-columns: 32px minmax(0, 1fr) 104px; } .p-s, .p-t { display: none; } }
+.quiet { color: var(--muted); }
+
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--panel); color: var(--ink); border: 1px solid var(--line2); box-shadow: 0 8px 24px rgb(0 0 0 / .12); padding: 10px 12px; border-radius: 8px; display: none; z-index: 6; max-width: 360px; }
 .flash { animation: flash .5s ease; }
 @keyframes flash { from { background: var(--accent-bg); } to { background: transparent; } }
@@ -964,7 +1493,7 @@ details.more .desc { margin-top: 10px; }
 
 @media (max-width: 1100px) { .app { grid-template-columns: 200px 360px minmax(0, 1fr); } .row .r .label { display: none; } }
 @media (max-width: 820px) {
-  .app { grid-template-columns: 1fr; height: auto; }
+  .app, .app.solo { grid-template-columns: 1fr; height: auto; }
   .side { display: none; }
   .list { border-right: 0; max-height: 50vh; }
   .doc-in { padding: 20px 16px; }
@@ -977,17 +1506,17 @@ details.more .desc { margin-top: 10px; }
 <div class="app">
   <aside class="side" id="side"></aside>
   <section class="list">
-    <div class="bar"><h1 id="view-title">Inbox</h1><span class="c" id="view-count"></span><span class="grow"></span><button class="btn" id="toggle" aria-pressed="false">Show decided</button></div>
+    <div class="bar"><button class="icon" id="back" title="Back to the lead page (Esc)" aria-label="Back to the lead page" style="display:none"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></button><h1 id="view-title">Inbox</h1><span class="c" id="view-count"></span><span class="grow"></span><button class="btn" id="toggle" aria-pressed="false">Show decided</button></div>
     <div class="scroll" id="list"></div>
   </section>
   <main class="detail" id="detail"></main>
 </div>
 <div class="toast" id="toast" role="status"></div>
 <script>
-var agents = [], screenTimer = null
+var agents = [], screenTimer = null, whoItem = null, memberTimer = null, memberData = null, memberKey = ''
 var AGENT_STATUS = { working: 'Working', blocked: 'Waiting for you', idle: 'Idle', done: 'Done', error: 'Error', none: 'No Claude running in it' }
 var AGENT_COLOR = { working: 'var(--green)', blocked: 'var(--yellow)', idle: 'var(--gray)', done: 'var(--accent)', error: 'var(--red)', none: 'var(--faint)' }
-var all = [], items = [], teamData = { leads: [], automations: [], chief: null }, sel = 0, view = 'inbox', showDone = false, rec = null, briefOpen = false
+var all = [], items = [], teamData = { leads: [], automations: [], chief: null }, sel = 0, view = 'people', showDone = false, rec = null, briefOpen = false
 var KIND = { review: 'Review', decision: 'Decision', idea: 'Idea', info: 'Info', failed: 'Failed' }
 var KIND_COLOR = { review: 'var(--green)', decision: 'var(--blue)', idea: 'var(--yellow)', info: 'var(--gray)', failed: 'var(--red)' }
 var WHEN = { 1: 'Today', 2: 'This week', 3: 'Later' }
@@ -1049,6 +1578,9 @@ async function load(keepId) {
   try { if (got[1] && got[1].ok) teamData = await got[1].json() } catch (e) {}
   try { if (got[2] && got[2].ok) agents = await got[2].json() } catch (e) {}
   tellApp()
+  if (!/^who:/.test(view) || whoItem) { clearInterval(memberTimer); memberTimer = null; memberKey = '' }
+  $('.app').classList.remove('solo')
+  $('#back').style.display = 'none'
   if (view === 'active') {
     var keep = keepId || (items[sel] && items[sel].name)
     items = agents
@@ -1073,7 +1605,119 @@ async function load(keepId) {
   sel = idx >= 0 ? idx : Math.min(sel, Math.max(items.length - 1, 0))
   $('#toggle').setAttribute('aria-pressed', showDone)
   $('#toggle').style.display = view === 'done' ? 'none' : ''
+  if (view === 'people') {
+    items = []; sel = -1
+    $('.app').classList.add('solo')
+    renderSide(open, done); renderPeople()
+    return
+  }
+  if (whoItem && !items.length) whoItem = null
+  var page = /^who:/.test(view) && !whoItem && memberOf(view.slice(4))
+  if (page) {
+    sel = -1
+    $('.app').classList.add('solo')
+    renderSide(open, done); renderMember(page)
+    return
+  }
+  if (whoItem) $('#back').style.display = ''
   renderSide(open, done); renderList(); renderDetail()
+}
+
+var peopleKey = ''
+function personRow(p) {
+  var st = agents.some(function (a) { return a.name === p.name && a.status === 'working' }) ? 'running' : p.off ? 'off' : p.status
+  var word = st === 'running' ? 'Working now' : st === 'off' ? 'Switched off' : st === 'paused' ? 'Paused' : st === 'failed' ? 'Last run failed' : st === 'never' ? 'Not started yet' : 'On'
+  var starts = p.starts.map(whenWords).join(', ')
+  return '<button class="p-row" data-who="' + esc(p.name) + '"><span class="p-a">' + esc((p.title || '?').slice(0, 2).toUpperCase()) + '</span><span class="p-m"><b>' + esc(p.title) + '</b>' + (p.product ? ' <small>' + esc(p.product) + '</small>' : '') + '<span class="p-d">' + esc(p.does) + '</span></span><span class="p-s">' + esc(starts) + '</span><span class="p-t">' + (p.tools.length ? p.tools.map(function (t) { return '<i>' + esc(t) + '</i>' }).join('') : '') + '</span><span class="p-w st-' + st + '">' + word + '</span></button>'
+}
+async function renderPeople() {
+  var r = await fetch('/api/employees').catch(function () {})
+  if (!r || !r.ok || view !== 'people') return
+  var d = await r.json(), key = JSON.stringify([d, agents.map(function (a) { return a.name + a.status })])
+  if (key === peopleKey && $('#people')) return
+  peopleKey = key
+  $('#detail').innerHTML = '<div id="people" style="display:contents"><div class="bar"><div class="crumb"><b>Employees</b></div></div><div class="doc"><div class="doc-in" style="max-width:1040px"><h2>Employees</h2><p class="about">Everyone who works for you. To hire someone or change how someone works, tell the chief of staff.</p>' +
+    '<div class="boxed">' + d.people.map(personRow).join('') + '</div>' +
+    (d.watchers.length ? '<div class="h3">Automations</div><div class="boxed">' + d.watchers.map(personRow).join('') + '</div>' : '') +
+    '<p class="quiet" style="margin-top:14px">The tools listed are not locked yet: every employee can use everything connected to this server.</p></div></div></div>'
+}
+
+// A schedule as a person says it: no cron fields on the page.
+function whenWords(w) {
+  var m = /^schedule (\\S+) (\\S+) (\\S+) (\\S+) (\\S+)$/.exec(w || '')
+  if (m) {
+    var at = /^\\d+$/.test(m[1]) && /^\\d+$/.test(m[2]) ? ('0' + m[2]).slice(-2) + ':' + ('0' + m[1]).slice(-2) : ''
+    var days = { '*': 'Every day', '1-5': 'Every weekday', '0': 'Every Sunday', '1': 'Every Monday', '2': 'Every Tuesday', '3': 'Every Wednesday', '4': 'Every Thursday', '5': 'Every Friday', '6': 'Every Saturday' }
+    if (at && m[3] === '*' && m[4] === '*' && days[m[5]]) return days[m[5]] + ' at ' + at
+    if (at && m[3] === '*' && m[4] === '*' && /^[0-6](,[0-6])+$/.test(m[5])) return 'Every ' + m[5].split(',').map(function (x) { return days[x].slice(6) }).join(' and ') + ' at ' + at
+    var n = /^\\*\\/(\\d+)$/.exec(m[1])
+    if (n && m[2] === '*') return 'Every ' + n[1] + ' minutes'
+    var h = /^\\*\\/(\\d+)$/.exec(m[2])
+    if (h && /^\\d+$/.test(m[1])) return 'Every ' + h[1] + ' hours'
+    return 'On a schedule (' + w.slice(9) + ')'
+  }
+  var e = /^every (\\d+)\\s*([mhd])/.exec(w || '')
+  if (e) return 'Every ' + e[1] + ' ' + { m: 'minutes', h: 'hours', d: 'days' }[e[2]]
+  if (w === 'by hand') return 'Only when someone starts it'
+  if (/^queue:/.test(w || '')) return 'When something new lands in the queue'
+  var t = /^(\\w+):\\s*(.*)$/.exec(w || '')
+  if (t && t[1] === 'files') return 'When a new file lands in ' + t[2]
+  if (t && t[1] === 'after') return 'After ' + t[2] + ' finishes'
+  return w || ''
+}
+function isQuiet(t) { return !t || /(^|\\s)SILENT\\s*$/.test(t) }
+function readable(t) { return esc(t).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>').replace(/^#+\\s*(.+)$/gm, '<b>$1</b>') }
+var MEMBER_STATUS = { failed: 'Last run failed', paused: 'Paused: it skips its runs until someone resumes it', never: 'Has not run yet', off: 'Switched off: it does not run', ok: 'Last run went fine' }
+function renderMember(m) {
+  var same = $('#member') && $('#member').dataset.name === m.name
+  if (!same) {
+    memberData = null; memberKey = ''
+    $('#detail').innerHTML = '<div id="member" data-name="' + esc(m.name) + '" style="display:contents"></div>'
+    clearInterval(memberTimer)
+    memberTimer = setInterval(function () { fetchMember(m) }, 4000)
+    fetchMember(m)
+  }
+  paintMember(m)
+}
+async function fetchMember(m) {
+  var r = await fetch('/api/member/' + encodeURIComponent(m.name)).catch(function () {})
+  if (!r || !r.ok || view !== 'who:' + m.name || whoItem) return
+  var d = await r.json(), flipped = memberData && memberData.running !== d.running
+  memberData = d
+  if (flipped) load(); else paintMember(m)
+}
+function paintMember(m) {
+  var box = $('#member'), d = memberData; if (!box) return
+  var key = JSON.stringify([d, m, agents.map(function (a) { return a.name + a.status }), items.map(function (i) { return i.id })])
+  if (key === memberKey) return
+  memberKey = key
+  var keep = {}; box.querySelectorAll('details[open]').forEach(function (e) { keep[e.dataset.run] = true })
+  var doc = box.querySelector('.doc'), top = doc ? doc.scrollTop : 0
+  var st = d && d.running ? 'running' : memberState(m) === 'running' ? (d ? (m.off ? 'off' : m.status) : 'running') : memberState(m)
+  var runs = d ? d.runs : [], last = runs[0]
+  var status = st === 'running' ? '<span class="live" style="margin:0 3px"></span>Running now' + (d && d.since ? ', started ' + (ago(d.since) === 'now' ? 'just now' : ago(d.since) + ' ago') : '') : '<span class="dot d-' + st + '"></span>' + esc(MEMBER_STATUS[st] || st)
+  var openItems = items.filter(function (i) { return i.state === 'open' })
+  var waiting = openItems.length ? openItems.length + (openItems.length === 1 ? ' item' : ' items') : 'Nothing'
+  var html = '<div class="bar"><div class="crumb">' + (m.lead ? 'Leads' : 'Automations') + '<span>/</span><b>' + esc(m.title || m.name) + '</b></div></div><div class="doc"><div class="doc-in"><h2>' + esc(m.title || m.name) + '</h2>' +
+    ((d && d.about) || m.description ? '<p class="about">' + esc((d && d.about) || m.description) + '</p>' : '') +
+    '<dl class="props"><dt>Status</dt><dd>' + status + '</dd><dt>Starts when</dt><dd>' + esc(whenWords(m.when)) + (m.lead ? ', or when someone leaves it a note' : '') + '</dd>' +
+    '<dt>Last run</dt><dd>' + esc(last ? since(last.time) : since(m.last)) + '</dd><dt>Waiting for you</dt><dd>' + waiting + '</dd></dl>' +
+    (st === 'failed' && m.detail ? '<div class="ask">' + esc(m.detail) + '</div>' : '')
+  if (openItems.length) html += '<div class="h3" style="margin-top:0">Waiting for you</div><div class="boxed">' + openItems.map(rowHtml).join('') + '</div>'
+  if (st === 'running') {
+    html += '<div class="h3">What it does now</div>'
+    html += d && d.steps.length ? '<ol class="steps">' + d.steps.map(function (s, i) {
+      var mark = '<span>' + (i === 0 ? '<span class="live" style="display:block"></span>' : '') + '</span>'
+      return '<li>' + mark + (s.say ? '<span class="say">' + esc(s.say) + '</span>' : '<span class="v">' + esc(s.did) + '</span><span class="w" title="' + esc(s.what) + '">' + esc(s.what) + '</span>') + '</li>'
+    }).join('') + '</ol>' : '<div class="quiet">Starting up.</div>'
+  }
+  if (last) html += '<div class="h3">' + (st === 'running' ? 'Previous run' : 'Last run') + ', ' + esc(since(last.time)) + '</div><div class="desc' + (isQuiet(last.text) ? ' quiet' : '') + '">' + (isQuiet(last.text) ? 'It found nothing to report.' : readable(last.text)) + '</div>'
+  if (runs.length > 1) html += '<div class="h3">Earlier runs</div><div class="boxed">' + runs.slice(1).map(function (r) {
+    var q = isQuiet(r.text), first = q ? 'Nothing to report' : r.text.split('\\n').filter(Boolean)[0].replace(/[#*]/g, '').trim()
+    return '<details class="run" data-run="' + esc(r.time) + '"' + (keep[r.time] ? ' open' : '') + '><summary><span class="when">' + esc(since(r.time)) + '</span><span class="pv' + (q ? ' quiet' : '') + '">' + esc(first) + '</span></summary>' + (q ? '' : '<div class="desc">' + readable(r.text) + '</div>') + '</details>'
+  }).join('') + '</div>'
+  box.innerHTML = html + '</div></div>'
+  var nd = box.querySelector('.doc'); if (nd) nd.scrollTop = top
 }
 
 function navBtn(id, icon, label, count) {
@@ -1089,14 +1733,15 @@ function memberTitle(m) {
   var st = memberState(m)
   return st === 'running' ? 'Running now. Click to see what it does.' : st === 'off' ? 'Switched off: it does not run until it is switched on.'
     : st === 'failed' ? 'Failed ' + since(m.last) + (m.detail ? ': ' + m.detail : '') : st === 'paused' ? 'Paused: it skips its runs until resumed.'
-    : st === 'never' ? 'Not run yet (' + m.when + ')' : 'Last run ' + since(m.last) + ' went fine (' + m.when + ')'
+    : st === 'never' ? 'Not run yet. ' + whenWords(m.when) + '.' : 'Last run ' + since(m.last) + ' went fine. ' + whenWords(m.when) + '.'
 }
 function memberBtn(m, open) {
   var n = open.filter(function (i) { return owner(i) === m.name }).length
   var st = memberState(m)
   var dot = st === 'running' ? '<span class="live" style="margin:0 3px"></span>' : '<span class="dot d-' + st + '"></span>'
-  var word = MEMBER_WORD[st] ? '<span class="st st-' + st + '">' + MEMBER_WORD[st] + '</span>' : ''
-  return '<button data-view="who:' + esc(m.name) + '" aria-current="' + (view === 'who:' + m.name) + '" title="' + esc(memberTitle(m)) + '">' + dot + '<span class="nm">' + esc(m.name) + '</span>' + word + '<span class="c">' + (n || '') + '</span></button>'
+  var text = MEMBER_WORD[st] || (m.last ? since(m.last).replace('today ', '') : '')
+  var word = text ? '<span class="st st-' + st + '">' + esc(text) + '</span>' : ''
+  return '<button data-view="who:' + esc(m.name) + '" aria-current="' + (view === 'who:' + m.name) + '" title="' + esc(memberTitle(m)) + '">' + dot + '<span class="nm">' + esc(m.title || m.name) + '</span>' + word + '<span class="c">' + (n || '') + '</span></button>'
 }
 function memberOf(name) {
   return teamData.leads.concat(teamData.automations).filter(function (m) { return m.name === name })[0]
@@ -1115,12 +1760,9 @@ function tellApp() {
 function renderSide(open, done) {
   var leads = teamData.leads.filter(function (m) { return m.role !== 'chief' })
   var html = '<div class="ws"><span class="logo">f</span>fraim</div><div class="nav">' +
-    navBtn('inbox', ICON.inbox, 'Inbox', open.length) +
-    navBtn('active', agents.some(function (a) { return a.status === 'working' }) ? '<span class="live" style="margin:0 3px"></span>' : ICON.done, 'Active', agents.filter(function (a) { return a.status === 'working' || a.status === 'blocked' }).length) +
-    navBtn('p1', prioIcon(1), 'Today', open.filter(function (i) { return i.priority === 1 }).length) +
-    navBtn('p2', prioIcon(2), 'This week', open.filter(function (i) { return i.priority === 2 }).length) +
-    navBtn('p3', prioIcon(3), 'Later', open.filter(function (i) { return i.priority === 3 }).length) +
-    navBtn('done', ICON.done, 'Decided', '') + '</div>'
+    '<a class="back" href="/">' + ICON.inbox + '<span class="nm">Inbox</span><span class="c">' + (open.length || '') + '</span></a>' +
+    navBtn('people', ICON.done, 'Employees', '') +
+    navBtn('active', agents.some(function (a) { return a.status === 'working' }) ? '<span class="live" style="margin:0 3px"></span>' : ICON.done, 'Active', agents.filter(function (a) { return a.status === 'working' || a.status === 'blocked' }).length) + '</div>'
   if (leads.length) html += '<div class="sec">Leads</div><div class="nav">' + leads.map(function (m) { return memberBtn(m, open) }).join('') + '</div>'
   if (teamData.automations.length) html += '<div class="sec">Automations</div><div class="nav">' + teamData.automations.map(function (m) { return memberBtn(m, open) }).join('') + '</div>'
   $('#side').innerHTML = html
@@ -1152,14 +1794,7 @@ function rowHtml(it, i) {
 function renderList() {
   var html = briefHtml()
   if (!items.length) {
-    var m = /^who:/.test(view) && memberOf(view.slice(4))
-    var none = view === 'done' ? 'Nothing decided yet.' : 'Nothing here.'
-    if (m) {
-      none = '<b>' + esc(m.name) + '</b>' + (m.description ? '<br>' + esc(m.description) : '') + '<br><br>' + esc(memberTitle(m)) + '<br>Nothing from ' + esc(m.name) + ' waits for you.'
-      if (memberState(m) === 'running') none += '<br><br><button class="btn" id="watch">See what it does now</button>'
-    }
-    $('#list').innerHTML = html + '<div class="none">' + none + '</div>'
-    var w = $('#watch'); if (w) w.onclick = function () { view = 'active'; load(m.name) }
+    $('#list').innerHTML = html + '<div class="none">' + (view === 'done' ? 'Nothing decided yet.' : 'Nothing here.') + '</div>'
     return
   }
   var last = null
@@ -1290,7 +1925,7 @@ async function sendToAgent() {
   ta.value = ''; toast('Sent to ' + a.name + '.'); loadScreen(a.name)
 }
 function select(i) {
-  if (i < 0 || i >= items.length || i === sel) return
+  if (sel < 0 || i < 0 || i >= items.length || i === sel) return
   if (view === 'active') { sel = i; renderAgents(); renderAgent(); return }
   sel = i; renderList(); renderDetail()
   var el = document.querySelector('.row[aria-current="true"]'); if (el) el.scrollIntoView({ block: 'nearest' })
@@ -1323,7 +1958,8 @@ function dictate() {
   rec.onend = function () { rec = null; if (mic) mic.classList.remove('on') }
   if (mic) mic.classList.add('on'); rec.start()
 }
-function setView(v) { view = v; sel = 0; load() }
+function setView(v) { view = v; sel = 0; whoItem = null; load() }
+function backToMember() { whoItem = null; sel = 0; load() }
 $('#side').addEventListener('click', function (e) { var b = e.target.closest('button[data-view]'); if (b) setView(b.dataset.view) })
 $('#list').addEventListener('click', function (e) {
   if (e.target.id === 'more') { briefOpen = !briefOpen; renderList(); return }
@@ -1331,12 +1967,15 @@ $('#list').addEventListener('click', function (e) {
 })
 $('#detail').addEventListener('click', function (e) {
   var b = e.target.closest('button'); if (!b) return
+  if (b.classList.contains('row') && sel < 0) { whoItem = items[+b.dataset.i].id; load(whoItem); return }
+  if (b.dataset.who) { setView('who:' + b.dataset.who); return }
   if (b.dataset.v) decide(b.dataset.v); else if (b.dataset.p) setPrio(+b.dataset.p)
   else if (b.id === 'send') sendToAgent()
   else if (b.id === 'copy') { var c = b.previousElementSibling; if (navigator.clipboard && c) navigator.clipboard.writeText(c.textContent).then(function () { toast('Copied. Paste it in a terminal.') }) }
   else if (b.id === 'mic') dictate(); else if (b.id === 'prev') select(sel - 1); else if (b.id === 'next') select(sel + 1)
 })
 $('#toggle').onclick = function () { showDone = !showDone; load() }
+$('#back').onclick = backToMember
 document.addEventListener('keydown', function (e) {
   if (e.target.tagName === 'TEXTAREA') {
     if (e.key === 'Escape') e.target.blur()
@@ -1352,12 +1991,370 @@ document.addEventListener('keydown', function (e) {
   else if (k === 'd') decide('dismissed')
   else if (k === 'v') { e.preventDefault(); dictate() }
   else if (k === 'c' || k === 'n') { e.preventDefault(); var t = $('#note'); if (t) t.focus() }
-  else if (k === 'g') setView('inbox')
-  else if (k === 'Escape' && view !== 'inbox') setView('inbox')
+  else if (k === 'g') location.href = '/'
+  else if (k === 'Escape' && whoItem) backToMember()
+  else if (k === 'Escape' && view !== 'people') setView('people')
   else if (k === '1' || k === '2' || k === '3') setPrio(+k)
 })
 setInterval(function () { if (!document.activeElement || document.activeElement.tagName !== 'TEXTAREA') { if (!rec) { var it = items[sel]; load(it && it.id) } } }, 30000)
 load()
+</script>
+</body>
+</html>
+`
+
+// The inbox: what came in on the left, the thing itself in the middle (shown, never edited), the
+// agents talking about it on the right. Code draws the middle from saved fields, one layout per
+// kind; anything unknown gets the plain card, so that pane is never blank.
+const INBOX_PAGE = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fraim queue</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235e6ad2'/%3E%3Crect x='8' y='9' width='16' height='3' rx='1.5' fill='%23fff'/%3E%3Crect x='8' y='15' width='12' height='3' rx='1.5' fill='%23fff' opacity='.8'/%3E%3Crect x='8' y='21' width='8' height='3' rx='1.5' fill='%23fff' opacity='.55'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { color-scheme: dark; --bg:#141517; --deep:#101113; --hover:#1d1e22; --sel:#24262c; --ink:#ececee; --soft:#c4c6cb; --muted:#8b8f98; --line:#26272b; --line2:#33353b; --accent:#6f7bf0; --green:#4cc38a; --yellow:#e2b33c; --red:#f2555a; }
+* { box-sizing:border-box; }
+html, body { height:100%; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 Inter, system-ui, -apple-system, sans-serif; -webkit-font-smoothing:antialiased; }
+button, textarea { font:inherit; color:inherit; }
+a { color:var(--accent); }
+.app { display:grid; grid-template-columns:330px minmax(0,1fr) 390px; height:100vh; }
+.pane { display:flex; flex-direction:column; min-height:0; min-width:0; }
+.scroll { flex:1; overflow-y:auto; min-height:0; }
+.list { border-right:1px solid var(--line); background:var(--deep); }
+.lh { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 8px; }
+.lh h1 { font-size:16px; font-weight:600; margin:0; }
+.lh a { color:var(--muted); font-size:13px; text-decoration:none; font-weight:500; }
+.lh a:hover { color:var(--ink); }
+.tabs { display:flex; gap:2px; padding:0 10px 10px; border-bottom:1px solid var(--line); }
+.tabs button { border:0; background:none; color:var(--muted); padding:3px 8px; border-radius:6px; font-size:13px; font-weight:500; cursor:pointer; white-space:nowrap; }
+.tabs button.on { background:var(--sel); color:var(--ink); }
+.msg { display:grid; grid-template-columns:32px minmax(0,1fr); gap:10px; width:100%; text-align:left; background:none; border:0; border-bottom:1px solid var(--line); padding:10px 14px; cursor:pointer; }
+.msg:hover { background:var(--hover); } .msg.on { background:var(--sel); }
+.av { width:32px; height:32px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:600; color:#fff; background:var(--c,#555); flex:none; }
+.top { display:flex; justify-content:space-between; gap:8px; }
+.from, .subj, .snip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.from, .subj { color:var(--soft); } .snip { display:block; color:var(--muted); font-size:13px; }
+.time { color:var(--muted); font-size:12px; flex:none; }
+.unread .from, .unread .subj { color:var(--ink); font-weight:600; }
+.tag { font-size:11px; font-weight:500; flex:none; } .need { color:var(--yellow); } .work { color:var(--green); } .new { color:var(--accent); }
+.none { padding:40px 20px; text-align:center; color:var(--muted); }
+.body { padding:24px 32px 40px; max-width:820px; }
+.body h2 { margin:0 0 16px; font-size:21px; line-height:1.3; font-weight:600; overflow-wrap:anywhere; }
+.who { display:grid; grid-template-columns:40px minmax(0,1fr) auto; gap:12px; align-items:center; margin-bottom:16px; }
+.who .av { width:40px; height:40px; }
+.who b { font-weight:600; } .who small { color:var(--muted); font-size:13px; }
+.who .d { color:var(--muted); font-size:13px; white-space:nowrap; }
+.text { white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; line-height:1.6; }
+.fwd { color:var(--muted); font-size:13px; border-left:2px solid var(--line2); padding:2px 0 2px 10px; margin-bottom:14px; white-space:pre-wrap; }
+.mail { border-bottom:1px solid var(--line); padding:14px 0; }
+.mail:last-child { border-bottom:0; }
+.fold { display:grid; grid-template-columns:32px 150px minmax(0,1fr) auto; gap:10px; align-items:center; width:100%; text-align:left; background:none; border:0; border-bottom:1px solid var(--line); padding:9px 0; cursor:pointer; color:var(--soft); }
+.fold:hover { background:var(--hover); }
+.fold .sn { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fold b { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fold small { color:var(--muted); font-size:12px; white-space:nowrap; }
+.more { display:block; width:100%; text-align:center; background:none; border:0; border-bottom:1px solid var(--line); color:var(--accent); padding:8px; cursor:pointer; font-size:13px; font-weight:500; }
+.link { background:none; border:0; padding:0; color:var(--muted); font-size:13px; cursor:pointer; margin:12px 12px 0 0; text-decoration:underline; text-underline-offset:2px; }
+.quoted { white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); font-size:13.5px; border-left:2px solid var(--line2); padding-left:12px; margin-top:12px; }
+.sheet { display:block; width:100%; height:300px; border:0; border-radius:8px; background:#fff; }
+.files { display:flex; flex-wrap:wrap; gap:6px; margin-top:14px; }
+.file { border:1px solid var(--line2); border-radius:8px; padding:6px 12px; color:var(--soft); font-size:13px; overflow-wrap:anywhere; }
+.file small { color:var(--muted); margin-left:6px; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 18px; }
+.chip { border:1px solid var(--line2); border-radius:999px; padding:2px 10px; font-size:12px; color:var(--soft); }
+.chip b { font-weight:500; color:var(--muted); margin-right:4px; }
+.cm { border-top:1px solid var(--line); padding-top:12px; margin-top:14px; color:var(--soft); white-space:pre-wrap; overflow-wrap:anywhere; }
+.cm b { color:var(--ink); font-weight:600; } .cm small { color:var(--muted); margin-left:6px; }
+.stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:20px; }
+.stat { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+.stat b { display:block; font-size:20px; font-weight:600; } .stat span { color:var(--muted); font-size:12px; }
+.tech { margin-top:18px; color:var(--muted); font-size:13px; }
+.tech summary { cursor:pointer; }
+.tech pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 ui-monospace, Menlo, monospace; }
+.shot { display:block; max-width:100%; border-radius:8px; border:1px solid var(--line); margin-top:14px; }
+.agents { border-left:1px solid var(--line); background:var(--deep); }
+.ah { padding:14px 16px; border-bottom:1px solid var(--line); }
+.ah b { font-weight:600; } .ah div { color:var(--muted); font-size:13px; }
+.chat { padding:14px 16px; }
+.c { display:grid; grid-template-columns:30px minmax(0,1fr); gap:9px; margin-bottom:14px; }
+.c .av { width:30px; height:30px; font-size:11px; }
+.c .n { font-weight:600; font-size:13px; } .c .n small { font-weight:400; color:var(--muted); font-size:12px; margin-left:5px; }
+.c .b { color:var(--soft); font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.ask { border:1px solid color-mix(in srgb, var(--yellow) 50%, var(--line)); border-radius:8px; padding:9px 11px; margin-top:5px; font-size:13.5px; }
+.ask.closed { border-color:var(--line); color:var(--soft); }
+.ask p { margin:6px 0 0; color:var(--muted); font-size:12.5px; }
+.acts { display:flex; gap:6px; margin-top:9px; }
+.btn { height:30px; padding:0 14px; border-radius:6px; border:1px solid var(--line2); background:var(--hover); cursor:pointer; font-weight:500; font-size:13px; }
+.btn.p { background:var(--accent); border-color:var(--accent); color:#fff; }
+.typing { color:var(--green); font-size:13px; margin-left:39px; }
+.reply { border-top:1px solid var(--line); padding:10px 12px 12px; }
+.reply textarea { display:block; width:100%; background:none; border:1px solid var(--line2); border-radius:8px; padding:8px 11px; font-size:13px; resize:none; outline:none; }
+.reply textarea:focus { border-color:var(--accent); }
+.empty { margin:auto; color:var(--muted); padding:40px; text-align:center; }
+.app.solo { grid-template-columns:330px minmax(0,1fr); grid-template-rows:none; } .app.solo .agents { display:none; }
+.pin { border-bottom:1px solid var(--line2); padding:12px 14px; }
+.talk { display:flex; flex-direction:column; height:100%; }
+.th { display:flex; gap:10px; align-items:center; padding:12px 24px; border-bottom:1px solid var(--line); flex:none; }
+.th b { font-weight:600; display:block; } .th small { color:var(--muted); font-size:13px; }
+.lines { flex:1; overflow-y:auto; min-height:0; padding:20px 24px; }
+.row { display:flex; margin-bottom:10px; } .row.me { justify-content:flex-end; }
+.bub { max-width:600px; background:var(--sel); border-radius:12px 12px 12px 3px; padding:9px 13px; font-size:14.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.me .bub { background:#3b4394; border-radius:12px 12px 3px 12px; }
+.bub b { font-weight:600; }
+.bub small { display:block; text-align:right; color:var(--muted); font-size:11px; margin-top:3px; } .me .bub small { color:#c3c8f5; }
+.ref { display:block; width:100%; text-align:left; margin-top:7px; background:var(--bg); border:1px solid var(--line2); border-radius:8px; padding:7px 10px; cursor:pointer; white-space:normal; }
+.ref:hover { background:var(--hover); }
+.dots { color:var(--green); font-size:13px; padding:2px 2px 10px; }
+.box { padding:12px 24px 16px; border-top:1px solid var(--line); flex:none; }
+.box textarea { display:block; width:100%; background:none; border:1px solid var(--line2); border-radius:8px; padding:10px 12px; font-size:14px; resize:none; outline:none; }
+.box textarea:focus { border-color:var(--accent); }
+@media (max-width:700px) { .talk { height:70vh; } }
+.toast { position:fixed; right:16px; bottom:16px; background:var(--sel); border:1px solid var(--line2); padding:9px 12px; border-radius:8px; display:none; z-index:5; }
+@media (max-width:1050px) { .app { grid-template-columns:280px minmax(0,1fr); grid-template-rows:minmax(0,1fr) minmax(0,1fr); } .list { grid-row:1 / 3; } .agents { border-left:0; border-top:1px solid var(--line); grid-column:2; } }
+@media (max-width:700px) { .app { display:block; height:auto; } .scroll { overflow:visible; } .list .scroll { max-height:40vh; overflow-y:auto; } .body { padding:18px 16px 24px; } .who { grid-template-columns:40px minmax(0,1fr); } .who .d { grid-column:2; } .fold { grid-template-columns:32px minmax(0,1fr) auto; } .fold .sn { display:none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <section class="pane list"><div class="lh"><h1>Inbox</h1><a href="/team">Team</a></div><div class="tabs" id="tabs"></div><div class="scroll" id="list"></div></section>
+  <main class="pane"><div class="scroll" id="message"></div></main>
+  <aside class="pane agents"><div id="agents" class="pane" style="flex:1"></div><div class="reply" id="reply"><textarea id="say" rows="1" placeholder="Write to the agents"></textarea></div></aside>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+var rows = [], cur = null, tab = 'all', data = null, midKey = '', sideKey = '', listKey = '', seen = null, chief = null, chatKey = '', chiefTimer = null
+var quote = {}, orig = {}, imgs = {}, opened = {}, allOlder = {}
+var TABS = [['all', 'All'], ['need', 'Needs you'], ['work', 'Working'], ['done', 'Done']]
+var TAG = { need: ['Needs you', 'need'], work: ['Working', 'work'], new: ['New', 'new'] }
+var COLORS = ['#6f7bf0', '#a27ce8', '#2f8fb0', '#c9772e', '#3aa577', '#b0568f', '#7a8a3a', '#d9484d', '#5b8def']
+function $(s) { return document.querySelector(s) }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] }) }
+function links(s) { return esc(s).replace(/https?:\/\/[^\s<]+/g, function (u) { return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>' }) }
+function hue(n) { var h = 0; String(n).split('').forEach(function (c) { h = (h * 31 + c.charCodeAt(0)) >>> 0 }); return COLORS[h % COLORS.length] }
+function initials(n) { var p = String(n).trim().split(/\s+/); return esc(((p[0] || '?').charAt(0) + (p.length > 1 ? p[p.length - 1].charAt(0) : (p[0] || '').charAt(1))).toUpperCase()) }
+function av(n) { return '<span class="av" style="--c:' + hue(n) + '">' + initials(n) + '</span>' }
+function when(d, short) {
+  var t = new Date(String(d || '').replace(' at ', ' '))
+  if (isNaN(t)) return esc(d || '')
+  var hm = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  if (t.toDateString() === new Date().toDateString()) return short ? hm : 'Today ' + hm
+  var day = t.toLocaleDateString([], { day: 'numeric', month: 'short' })
+  return short ? day : day + ', ' + hm
+}
+function toast(t) { var e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.style.display = 'none' }, 3000) }
+function shown() { return rows.filter(function (r) { return tab === 'all' || r.state === tab || (tab === 'work' && r.state === 'new') }) }
+function drawList() {
+  var key = JSON.stringify([rows, cur, tab, chief && chief.typing, chief && chief.messages.length]); if (key === listKey) return; listKey = key
+  $('#tabs').innerHTML = TABS.map(function (x) { return '<button data-t="' + x[0] + '" class="' + (tab === x[0] ? 'on' : '') + '">' + x[1] + '</button>' }).join('')
+  var l = shown()
+  $('#list').innerHTML = pinHtml() + (l.length ? l.map(function (r) {
+    var g = TAG[r.state]
+    return '<button class="msg' + (r.unread ? ' unread' : '') + (r.id === cur ? ' on' : '') + '" data-id="' + esc(r.id) + '">' + av(r.who) + '<span style="min-width:0"><span class="top"><span class="from">' + esc(r.who) + '</span><span class="time">' + when(r.time, true) + '</span></span><span class="top"><span class="subj">' + esc(r.title) + '</span>' + (g ? '<span class="tag ' + g[1] + '">' + g[0] + '</span>' : '') + '</span><span class="snip">' + esc(r.snippet) + '</span></span></button>'
+  }).join('') : '<div class="none">Nothing here.</div>')
+}
+function pinHtml() {
+  if (!chief || !chief.exists) return ''
+  var last = chief.messages[chief.messages.length - 1]
+  var snip = chief.typing ? 'Typing' : last ? (last.who === 'owner' ? 'You: ' : '') + last.text.replace(/\s+/g, ' ') : 'Ask me anything.'
+  return '<button class="msg pin' + (cur === 'chief' ? ' on' : '') + '" data-id="chief">' + av('Chief of staff') + '<span style="min-width:0"><span class="top"><span class="from" style="color:var(--ink);font-weight:600">Chief of staff</span>' + (last ? '<span class="time">' + when(last.time.replace(' ', 'T'), true) + '</span>' : '') + '</span><span class="snip">' + esc(snip) + '</span></span></button>'
+}
+function spoken(t) { return links(t).replace(/(^|\s)\*(\S[^*\n]*)\*/g, '$1<b>$2</b>') }
+function bubble(m) {
+  var me = m.who === 'owner'
+  return '<div class="row' + (me ? ' me' : '') + '"><div class="bub">' + spoken(m.text) + (m.refs || []).map(function (r) { return '<button class="ref" data-go="' + esc(r.id) + '">' + esc(r.title) + '</button>' }).join('') + '<small>' + when(m.time.replace(' ', 'T'), true) + (me && !m.app ? ', on WhatsApp' : '') + '</small></div></div>'
+}
+function drawChief() {
+  if (!chief) return
+  if (!$('#clines')) {
+    chatKey = ''
+    $('#message').innerHTML = '<div class="talk"><div class="th">' + av('Chief of staff') + '<div><b>Chief of staff</b><small>Same conversation as on WhatsApp</small></div></div><div class="lines" id="clines"></div><div class="box"><textarea id="csay" rows="1" placeholder="Message your chief of staff"></textarea></div></div>'
+  }
+  var key = JSON.stringify([chief.messages, chief.typing]); if (key === chatKey) return
+  chatKey = key
+  var box = $('#clines'), end = !box.innerHTML || box.scrollTop + box.clientHeight >= box.scrollHeight - 40
+  box.innerHTML = (chief.messages.length ? chief.messages.map(bubble).join('') : '<div class="none">Ask me anything.</div>') + (chief.typing ? '<div class="dots">Chief of staff is typing</div>' : '')
+  if (end) box.scrollTop = box.scrollHeight
+}
+async function loadChief() {
+  var r = await fetch('/api/chief').catch(function () {})
+  if (!r || !r.ok) return
+  chief = await r.json()
+  if (cur === 'chief') drawChief()
+  if (chief.typing && !chiefTimer) chiefTimer = setTimeout(function () { chiefTimer = null; loadChief().then(drawList) }, 1500)
+}
+
+function page(m, i) {
+  var csp = "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data: cid:" + (imgs[i] ? ' https: http:' : '')
+  var doc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><base target="_blank"><style>html,body{margin:0;background:#fff;color:#111;font:14px/1.5 sans-serif}body{padding:12px}img{max-width:100%;height:auto}</style>' + m.html
+  return '<iframe class="sheet" title="The original mail" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcdoc="' + esc(doc) + '"></iframe>'
+}
+function mailBody(m, i) {
+  var sheet = m.html && (orig[i] === undefined ? m.designed : orig[i])
+  var out = sheet ? page(m, i) : '<div class="text">' + (m.text ? links(m.text) : '<span style="color:var(--muted)">There is no text in this mail.</span>') + '</div>'
+  if (!sheet && m.quoted) out += quote[i] ? '<div class="quoted">' + links(m.quoted) + '</div><button class="link" data-quote="' + i + '">Hide earlier text</button>' : '<button class="link" data-quote="' + i + '">Show earlier text</button>'
+  if (m.html) out += '<button class="link" data-orig="' + i + '">' + (sheet ? 'Show as plain text' : 'Show the original') + '</button>'
+  if (sheet) out += '<button class="link" data-img="' + i + '">' + (imgs[i] ? 'Hide pictures' : 'Show pictures') + '</button>'
+  if (m.attachments && m.attachments.length) out += '<div class="files">' + m.attachments.map(function (a) { return '<span class="file">' + esc(a.name) + '<small>' + esc(a.size) + '</small></span>' }).join('') + '</div>'
+  return out
+}
+function mailOpen(m, i) {
+  return '<div class="mail">' + (m.forwardedBy ? '<div class="fwd">Forwarded by ' + esc(m.forwardedBy) + (m.forwardNote ? ': ' + esc(m.forwardNote) : '') + '</div>' : '') +
+    '<div class="who">' + av(m.from) + '<div style="min-width:0"><b>' + esc(m.from) + '</b> <small>' + esc(m.address) + '</small>' + (m.to ? '<br><small>to ' + esc(m.to.replace(/<[^>]*>/g, '').trim()) + '</small>' : '') + '</div><span class="d">' + when(m.date) + '</span></div>' + mailBody(m, i) + '</div>'
+}
+function drawMail(t) {
+  var ms = t.messages, last = ms.length - 1, html = '<h2>' + esc(t.title) + '</h2>'
+  var hide = last > 3 && !allOlder[t.id]
+  ms.forEach(function (m, i) {
+    if (hide && i > 0 && i < last - 1) { if (i === 1) html += '<button class="more" data-older="1">' + (last - 2) + ' earlier messages</button>'; return }
+    if (i === last || opened[t.id + i]) html += (i === last ? '' : '<button class="link" data-fold="' + i + '" style="margin:10px 0 0">Fold</button>') + mailOpen(m, i)
+    else html += '<button class="fold" data-fold="' + i + '">' + av(m.from) + '<b>' + esc(m.from) + '</b><span class="sn">' + esc(m.text.replace(/\s+/g, ' ')) + '</span><small>' + when(m.date) + '</small></button>'
+  })
+  return html
+}
+function chips(t) {
+  var f = t.fields || {}, keys = Object.keys(f).filter(function (k) { return f[k] })
+  return keys.length ? '<div class="chips">' + keys.map(function (k) { return '<span class="chip"><b>' + esc(k) + '</b>' + esc(f[k]) + '</span>' }).join('') + '</div>' : ''
+}
+function drawLinear(t) {
+  return '<h2>' + esc(t.title) + '</h2>' + chips(t) + '<div class="who">' + av(t.who) + '<div><b>' + esc(t.who) + '</b><br><small>opened this issue</small></div><span class="d">' + when(t.created) + '</span></div><div class="text">' + links(t.text) + '</div>' +
+    (t.comments || []).map(function (c) { return '<div class="cm"><b>' + esc(c.who) + '</b><small>' + when(c.time) + '</small><br>' + links(c.text) + '</div>' }).join('')
+}
+function drawError(t) {
+  var s = t.stats || {}
+  return '<h2>' + esc(t.title) + '</h2><div class="stats"><div class="stat"><b>' + esc(s.count || 1) + '</b><span>times so far</span></div><div class="stat"><b>' + when(s.first || t.created, true) + '</b><span>first time</span></div><div class="stat"><b>' + when(s.last || t.created, true) + '</b><span>last time</span></div></div>' + chips(t) + '<div class="text">' + links(t.text) + '</div>' +
+    (t.details ? '<details class="tech"><summary>Technical details</summary><pre>' + esc(t.details) + '</pre></details>' : '')
+}
+function drawCard(t) {
+  return '<h2>' + esc(t.title || '(no subject)') + '</h2>' + chips(t) + '<div class="who">' + av(t.who || '?') + '<div><b>' + esc(t.who || 'Someone') + '</b></div><span class="d">' + when(t.created) + '</span></div><div class="text">' + (t.text ? links(t.text) : '<span style="color:var(--muted)">There is no text with this.</span>') + '</div>' +
+    (t.media || []).map(function (m) { var src = '/media/' + t.id + '/' + encodeURIComponent(m); return /\.(webm|mp4|mov)$/i.test(m) ? '<video class="shot" controls preload="metadata" src="' + src + '"></video>' : '<img class="shot" alt="" src="' + src + '">' }).join('') +
+    ((t.links || []).length ? '<div class="files">' + t.links.map(function (u) { return '<a class="file" target="_blank" rel="noopener" href="' + esc(/^https?:/i.test(u) ? u : '#') + '">' + esc(u) + '</a>' }).join('') + '</div>' : '')
+}
+var LAYOUT = { email: drawMail, linear: drawLinear, error: drawError }
+function sizeSheets() {
+  document.querySelectorAll('iframe.sheet').forEach(function (f) {
+    var fit = function () { try { f.style.height = Math.max(120, f.contentDocument.documentElement.scrollHeight) + 'px' } catch (e) {} }
+    f.addEventListener('load', function () { fit(); setTimeout(fit, 400) })
+  })
+}
+function drawMiddle(force) {
+  var t = data; if (!t) { $('#message').innerHTML = '<div class="none">Choose a message on the left.</div>'; return }
+  var key = JSON.stringify([t.id, t.title, t.who, t.text, t.fields, t.messages, t.comments, t.stats, t.details, t.media, t.links])
+  if (key === midKey && !force) return
+  midKey = key
+  var box = $('#message'), top = box.scrollTop, html
+  try {
+    var draw = t.kind === 'email' && !t.messages.length ? drawCard : (LAYOUT[t.kind] || drawCard)
+    html = draw(t)
+  } catch (e) { html = drawCard({ id: t.id, title: t.title, who: t.who, created: t.created, text: t.text }) }
+  box.innerHTML = '<div class="body">' + html + '</div>'
+  sizeSheets()
+  if (force) box.scrollTop = top; else box.scrollTop = 0
+}
+function chatHtml(c) {
+  var head = '<div class="n">' + esc(c.from) + (c.to ? '<small>to ' + esc(c.to) + '</small>' : '') + '<small>' + when(c.time, true) + '</small></div>'
+  if (!c.item) return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="b">' + esc(c.text) + '</div></div></div>'
+  var i = c.item, open = i.state === 'open'
+  return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask' + (open ? '' : ' closed') + '">' + esc(i.ask || i.title) + (i.need ? '<p>' + esc(i.need) + '</p>' : '') + (i.if_yes ? '<p>If yes: ' + esc(i.if_yes) + '</p>' : '') +
+    (open ? '<div class="acts"><button class="btn p" data-v="approved" data-item="' + esc(i.id) + '">Yes</button><button class="btn" data-v="dismissed" data-item="' + esc(i.id) + '">No</button></div>' : '') + '</div></div></div>'
+}
+function drawAgents() {
+  var t = data; if (!t) { $('#agents').innerHTML = ''; return }
+  var key = JSON.stringify([t.id, t.chat, t.working]); if (key === sideKey) return
+  var same = sideKey && JSON.parse(sideKey)[0] === t.id
+  sideKey = key
+  var waiting = t.chat.some(function (c) { return c.item && c.item.state === 'open' })
+  var status = waiting ? 'Waiting for your answer' : t.working.length ? t.working.join(', ') + (t.working.length > 1 ? ' are' : ' is') + ' working on it' : t.chat.length ? 'Nobody is working on it now' : 'No agent has picked this up yet'
+  var old = $('#chat'), atEnd = !old || old.scrollTop + old.clientHeight >= old.scrollHeight - 30
+  $('#agents').innerHTML = '<div class="ah"><b>Agents on this</b><div>' + esc(status) + '</div></div><div class="scroll" id="chat"><div class="chat">' + t.chat.map(chatHtml).join('') +
+    (t.working.length ? '<div class="typing">' + esc(t.working[0]) + ' is working on it</div>' : '') + '</div></div>'
+  var box = $('#chat'); if (!same || atEnd) box.scrollTop = box.scrollHeight
+  $('#reply').style.display = /^t/.test(t.id) ? '' : 'none'
+}
+function tellApp() {
+  var h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.fraim
+  if (!h) return
+  var open = rows.filter(function (r) { return r.state === 'need' })
+  var fresh = seen ? open.filter(function (r) { return !seen[r.id] }) : []
+  seen = {}; open.forEach(function (r) { seen[r.id] = true })
+  try { h.postMessage({ count: open.length, fresh: fresh.slice(0, 5).map(function (r) { return { id: r.id, title: r.title, body: r.snippet } }) }) } catch (e) {}
+}
+async function loadRows() {
+  var r = await fetch('/api/threads').catch(function () {})
+  if (!r) return
+  if (!r.ok) { $('#message').innerHTML = '<div class="none">No access. Ask Claude for your queue link.</div>'; return }
+  rows = await r.json(); tellApp()
+  await loadChief()
+  if (!cur && chief && chief.exists) await pick('chief', true)
+  else if (cur !== 'chief' && (!cur || !rows.some(function (x) { return x.id === cur }))) { var f = shown()[0]; if (f) await pick(f.id, true) }
+  drawList()
+}
+async function loadDetail() {
+  if (!cur || cur === 'chief') return
+  var id = cur, r = await fetch('/api/threads/' + id).catch(function () {})
+  if (!r || !r.ok || id !== cur) return
+  data = await r.json(); drawMiddle(); drawAgents()
+}
+async function pick(id, keepUnread) {
+  cur = id; midKey = ''; sideKey = ''; quote = {}; orig = {}; imgs = {}
+  $('.app').classList.toggle('solo', id === 'chief')
+  if (id === 'chief') { drawChief(); drawList(); return }
+  await loadDetail()
+  if (!keepUnread && /^t/.test(id)) {
+    fetch('/api/threads/' + id + '/seen', { method: 'POST', headers: { 'X-Fraim-Queue': '1' } }).catch(function () {})
+    rows.forEach(function (r) { if (r.id === id) r.unread = false })
+  }
+  drawList()
+}
+async function post(url, body) {
+  var r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Fraim-Queue': '1' }, body: JSON.stringify(body) }).catch(function () {})
+  if (!r || !r.ok) { toast('That did not work. Try again.'); return false }
+  return true
+}
+function move(step) { var l = shown(), i = l.findIndex(function (r) { return r.id === cur }), n = l[i + step]; if (n) pick(n.id) }
+$('#list').addEventListener('click', function (e) { var b = e.target.closest('.msg'); if (b) pick(b.dataset.id) })
+$('#tabs').addEventListener('click', function (e) { var b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; var f = shown()[0]; if (f && !shown().some(function (r) { return r.id === cur })) pick(f.id); else drawList() })
+$('#message').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return
+  var d = b.dataset
+  if (d.go) { pick(d.go); return }
+  if (d.quote) quote[d.quote] = !quote[d.quote]
+  else if (d.orig) { var m = data.messages[+d.orig]; orig[d.orig] = !(orig[d.orig] === undefined ? m.designed : orig[d.orig]) }
+  else if (d.img) imgs[d.img] = !imgs[d.img]
+  else if (d.older) allOlder[data.id] = true
+  else if (d.fold) opened[data.id + d.fold] = !opened[data.id + d.fold]
+  else return
+  drawMiddle(true)
+})
+$('#agents').addEventListener('click', async function (e) {
+  var b = e.target.closest('button[data-v]'); if (!b) return
+  if (await post('/api/items/' + b.dataset.item + '/decide', { verdict: b.dataset.v, note: '' })) { sideKey = ''; loadRows(); loadDetail() }
+})
+$('#message').addEventListener('keydown', async function (e) {
+  if (e.target.id !== 'csay' || e.key !== 'Enter' || e.shiftKey) return
+  e.preventDefault()
+  var ta = e.target, text = ta.value.trim(); if (!text) return
+  ta.value = ''
+  chief.messages.push({ who: 'owner', text: text, time: new Date().toISOString(), app: true, refs: [] }); chief.typing = true; drawChief(); drawList()
+  if (!await post('/api/chief/say', { text: text })) { ta.value = text; return }
+  setTimeout(loadChief, 800)
+})
+$('#say').addEventListener('keydown', async function (e) {
+  if (e.key !== 'Enter' || e.shiftKey) return
+  e.preventDefault()
+  var ta = e.target, text = ta.value.trim(); if (!text || !cur) return
+  if (await post('/api/threads/' + cur + '/say', { text: text })) { ta.value = ''; loadDetail(); loadRows() }
+})
+document.addEventListener('keydown', function (e) {
+  if (e.target.tagName === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return
+  if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); move(1) }
+  if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); move(-1) }
+})
+setInterval(function () { loadRows(); loadDetail() }, 5000)
+loadRows()
 </script>
 </body>
 </html>
@@ -1379,6 +2376,32 @@ function parseArgs(argv, multi = []) {
     else out[key] = value
   }
   return out
+}
+
+function threadCommand(args) {
+  const [what, id, ...words] = args._
+  switch (what) {
+    case 'mail':
+      return captureMail(id, args.quiet).then((r) => console.log(r.thread.id))
+    case 'put': {
+      const data = JSON.parse(fs.readFileSync(args.file || 0, 'utf8'))
+      if (args.kind) data.kind = args.kind
+      if (args.key) data.key = args.key
+      const r = putThread(data)
+      if (r.news && !args.quiet) announce(r)
+      return console.log(r.thread.id)
+    }
+    case 'say':
+      if (!id) usage('thread say tN --from WHO [--to WHO] -- TEXT')
+      return sayInThread(id, args.from || 'owner', args.to || '', words.join(' '))
+    case 'show':
+      if (!id) usage('thread show tN')
+      return console.log(describeThread(id))
+    case 'list':
+      return console.log(inboxRows().map((r) => `${r.id}  ${r.state}  ${r.who}  ${r.title}`).join('\n'))
+    default:
+      usage('thread mail GMAIL_THREAD_ID | put [--kind K] [--key K] [--file F] | say tN --from WHO -- TEXT | show tN | list')
+  }
 }
 
 function main(argv) {
@@ -1439,6 +2462,8 @@ function main(argv) {
     case 'url':
       token()
       return console.log(queueUrl())
+    case 'thread':
+      return threadCommand(args)
     case 'token':
       return console.log(token())
     case 'serve': {
@@ -1458,10 +2483,13 @@ function main(argv) {
 
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)
 if (isMain) {
-  try {
-    main(process.argv.slice(2))
-  } catch (err) {
+  const fail = (err) => {
     process.stderr.write(`fraim-queue: ${err.message}\n`)
     process.exit(err instanceof UsageError ? 2 : 1)
+  }
+  try {
+    Promise.resolve(main(process.argv.slice(2))).catch(fail)
+  } catch (err) {
+    fail(err)
   }
 }

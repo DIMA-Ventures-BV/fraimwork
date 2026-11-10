@@ -87,6 +87,31 @@ test('the page needs the token, shows items, serves media and records decisions'
   assert.deepEqual(team.leads.map((l) => [l.name, l.role, l.status]), [['chief', 'chief', 'never'], ['web', 'lead', 'failed']])
   assert.equal(team.leads[1].description, 'the shop')
   assert.deepEqual(team.automations.map((a) => [a.name, a.when, a.status]), [['digest', 'every 1h', 'paused']])
+
+  const area = `The shop: checkout, product pages and the payment flow, ${'and everything around them '.repeat(6)}end.`
+  await writeFile(path.join(home, 'fraim/leads/web/lead.md'), `---\nrole: lead\n---\n## Area\n${area}\n\n## Limits\nNone.\n`)
+  await mkdir(path.join(home, 'fraim/leads/web/runs'))
+  await writeFile(path.join(home, 'fraim/leads/web/runs/20261108-060000.md'), 'SILENT\n')
+  await writeFile(path.join(home, 'fraim/leads/web/runs/20261109-060000.md'), 'Checkout is slow.\n\n--- inbox this run read ---\n[m1] note\n')
+  await mkdir(path.join(home, 'fraim/leads/web/.running'))
+  await writeFile(path.join(state, 'web/lock'), '')
+  await writeFile(path.join(home, 'fraim/leads/web/.running/live.jsonl'), [
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Checking the shop.' }] } }),
+    'not json',
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'curl -s shop', description: 'Fetch the shop page' } }] } }),
+  ].join('\n'))
+  const web = await (await get('/api/member/web')).json()
+  assert.equal(web.about, area, 'the whole area, not the cut description')
+  assert.equal(web.running, true)
+  assert.deepEqual(web.steps, [{ did: 'Ran', what: 'Fetch the shop page' }, { say: 'Checking the shop.' }], 'newest step first')
+  assert.deepEqual(web.runs.map((r) => [r.time, r.text]), [['2026-11-09 06:00', 'Checkout is slow.'], ['2026-11-08 06:00', 'SILENT']])
+  fs.rmSync(path.join(state, 'web/lock'))
+  const digest = await (await get('/api/member/digest')).json()
+  assert.deepEqual([digest.about, digest.running, digest.steps], ['Mail digest', false, []])
+  await mkdir(path.join(autos, 'digest/runs/2026-11-09T07-30-00'), { recursive: true })
+  await writeFile(path.join(autos, 'digest/runs/2026-11-09T07-30-00/output.md'), 'Three mails.\n')
+  assert.deepEqual((await (await get('/api/member/digest')).json()).runs, [{ text: 'Three mails.', time: '2026-11-09 07:30' }])
+  assert.equal((await get('/api/member/nobody')).status, 404)
   assert.equal((await fetch(`${base}/api/team`)).status, 401)
   await mkdir(path.join(state, 'web/lock'))
   const act = await (await get('/api/active')).json()

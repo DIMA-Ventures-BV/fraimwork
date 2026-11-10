@@ -299,6 +299,24 @@ FAKE
   [ "$status" -eq 1 ]
 }
 
+@test "a note about a conversation reaches the chat, and the run and what it adds belong to it" {
+  fraim-lead new web
+  fraim-lead new chief --chief
+  t="$(printf '{"key":"k1","kind":"other","title":"x"}' | fraim-queue thread put --quiet)"
+  [ "$t" = t1 ]
+  run fraim-lead tell web --from chief --thread t1 -- "Can you check this?"
+  [ "$status" -eq 0 ]
+  grep -q 'from chief: \[t1\] Can you check this?' "$FRAIM_LEADS_DIR/web/inbox.md"
+  [ "$(jq -r .text "$HOME/fraim/threads/t1/chat.jsonl")" = "Can you check this?" ]
+  fraim-lead tell web --from owner --thread t1 -- "The owner approved it"
+  [ "$(wc -l < "$HOME/fraim/threads/t1/chat.jsonl" | tr -d ' ')" = 1 ]
+  FAKE_ACTION='printf "%s %s" "$FRAIM_THREAD" "$(cat "$FRAIM_LEADS_DIR/web/.running/thread")" > "$HOME/seen"; fraim-queue add --title Q --lead web --quiet' run fraim-lead run web
+  [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/seen")" = "t1 t1" ]
+  grep -q 'How you talk to each other' "$CLAUDE_ARGS"
+  [ "$(fraim-queue list --json | jq -r '.[0].thread')" = t1 ]
+}
+
 @test "ask runs the chief now with the owner's message, and it always answers" {
   fraim-lead new chief --chief
   FAKE_OUTPUT="Started g1 for the export." run fraim-lead ask -- "customers want a PDF export"

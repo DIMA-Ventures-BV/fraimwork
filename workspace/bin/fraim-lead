@@ -478,7 +478,7 @@ tools_for() {
   local name="$1" dir="$2" chief="$3" repo verb
   local t=(Read Glob Grep WebSearch
     "Edit(~/fraim/leads/$name/**)" "Write(~/fraim/leads/$name/**)"
-    "Bash(fraim-queue list:*)" "Bash(fraim-queue show:*)" "Bash(fraim-queue add:*)"
+    "Bash(fraim-queue list:*)" "Bash(fraim-queue show:*)" "Bash(fraim-queue add:*)" "Bash(fraim-queue thread show:*)"
     "Bash(fraim-goal list:*)" "Bash(fraim-goal show:*)"
     "Bash(fraim-lead list:*)" "Bash(fraim-lead show:*)"
     "Bash(fraim-auto list:*)" "Bash(fraim-auto show:*)" "Bash(fraim-auto runs:*)"
@@ -550,6 +550,13 @@ cmd_run() {
   trap "rm -rf $(printf '%q' "$dir/.running")" EXIT
   # The run reads its own copy of the inbox; notes that arrive during the run wait for the next.
   [ ! -f "$dir/inbox.md" ] || mv "$dir/inbox.md" "$dir/.running/inbox.md"
+  # The conversations this run is about show as "working on it" on the page. With exactly one,
+  # everything this run says or starts belongs to it without the agent having to name it.
+  local threads
+  threads="$( { cat "$dir/.running/inbox.md" 2>/dev/null; printf '%s\n' "${FRAIM_LEAD_INPUT:-}"; } | grep -oE '\[t[0-9]{1,6}\]' | tr -d '[]' | sort -u)"
+  unset FRAIM_THREAD
+  [ -z "$threads" ] || printf '%s\n' "$threads" > "$dir/.running/thread"
+  [ -z "$threads" ] || [ "$(printf '%s\n' "$threads" | wc -l | tr -d ' ')" != 1 ] || export FRAIM_THREAD="$threads"
 
   before="$(fraim-queue list --all --json --lead "$name" 2>/dev/null | jq -r '.[].id' | sort)"
   local goals_before
@@ -566,7 +573,7 @@ cmd_run() {
   # stream-json writes each step as it happens, so the queue page shows what the run does now
   # (.running/live.jsonl). The answer is the last "result" line; plain text is kept as it is.
   local live="$dir/.running/live.jsonl"
-  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir" "$chief"; fraim-prompt render talk-rules --lead "$name")" --allowedTools "$(tools_for "$name" "$dir" "$chief")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
     --output-format stream-json --verbose > "$live" 2>"$log.err"
   code=$?
   if grep -q '"type":"result"' "$live" 2>/dev/null; then
@@ -660,13 +667,14 @@ wake_lead() {
 
 # tell NAME [--from WHO] [--later] -- TEXT: a note the lead reads first; it wakes the lead now.
 cmd_tell() {
-  local name="${1:-}" from=owner later=0 dir text
-  [ -n "$name" ] || usage "tell NAME [--from WHO] [--later] -- TEXT"
+  local name="${1:-}" from=owner later=0 dir text thread="${FRAIM_THREAD:-}"
+  [ -n "$name" ] || usage "tell NAME [--from WHO] [--later] [--thread tN] -- TEXT"
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) from="${2:-}"; shift 2 || usage "--from needs a name" ;;
       --later) later=1; shift ;;
+      --thread) thread="${2:-}"; shift 2 || usage "--thread needs a conversation id" ;;
       --) shift; break ;;
       *) break ;;
     esac
@@ -674,6 +682,11 @@ cmd_tell() {
   text="$*"
   [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || usage "tell $name needs a text"
   dir="$(lead_dir "$name")" || exit $?
+  # A note about a conversation lands in the chat the owner reads and carries its id to the receiver.
+  if printf '%s' "$thread" | grep -Eq '^t[0-9]{1,6}$'; then
+    [ ! -d "$leads/$from" ] || fraim-queue thread say "$thread" --from "$from" --to "$name" -- "$text" 2>/dev/null || true
+    text="[$thread] $text"
+  fi
   printf -- '- %s, from %s: %s\n' "$(date '+%Y-%m-%d %H:%M')" "$from" "${text:0:4000}" >> "$dir/inbox.md"
   if [ "$later" = 0 ] && [ -z "${FRAIM_LEAD_NO_WAKE:-}" ] && wake_lead "$name" "A note from $from in your inbox: ${text:0:1000}"; then
     echo "Lead $name has it in its inbox and is woken now."

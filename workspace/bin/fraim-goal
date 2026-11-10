@@ -90,9 +90,10 @@ lead_goals_today() {
 }
 
 cmd_start() {
-  local chat="" lead="" queue=""
+  local chat="" lead="" queue="" thread="${FRAIM_THREAD:-}"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --thread) thread="${2:-}"; shift 2 || usage "--thread needs a conversation id" ;;
       --chat) chat="${2:-}"; shift 2 || usage "--chat needs a chat id" ;;
       --lead) lead="${2:-}"; shift 2 || usage "--lead needs a name" ;;
       --queue) queue="${2:-}"; shift 2 || usage "--queue needs a queue id" ;;
@@ -124,6 +125,7 @@ cmd_start() {
   printf '%s\n' "$chat" > "$goals/$id/chat"
   [ -z "$lead" ] || printf '%s\n' "$lead" > "$goals/$id/lead"
   [ -z "$queue" ] || printf '%s\n' "$queue" > "$goals/$id/queue"
+  ! printf '%s' "$thread" | grep -Eq '^t[0-9]{1,6}$' || printf '%s\n' "$thread" > "$goals/$id/thread"
   [ "$by_owner" = 0 ] || : > "$goals/$id/by-owner"
   printf 'running %s\n' "$(date '+%Y-%m-%d %H:%M')" > "$goals/$id/state"
   new_uuid > "$goals/$id/session-id"
