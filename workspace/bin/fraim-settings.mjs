@@ -11,7 +11,6 @@ const HOME = process.env.HOME || '/home/claude'
 const FILES = process.env.FRAIM_FILES_DIR || path.join(HOME, 'fraim')
 const LEADS = process.env.FRAIM_LEADS_DIR || path.join(FILES, 'leads')
 const AUTOS = process.env.FRAIM_AUTOMATIONS_DIR || path.join(FILES, 'automations')
-const BRAIN = process.env.FRAIM_BRAIN_DIR || path.join(FILES, 'brain')
 const SKILLS = process.env.FRAIM_SKILLS_DIR || path.join(HOME, '.claude/skills')
 const HISTORY = path.join(FILES, '.settings-history')
 const KEEP_COPIES = 20
@@ -168,7 +167,7 @@ export function createSettings({ employees, team, tool, runtimeEnv, send, readBo
     return r.out
   }
 
-  const allRules = () => parseRules(read(path.join(BRAIN, 'rules.md')))
+  const allRules = () => parseRules(run('fraim-brain', ['show']).out)
 
   function prompts(lead) {
     const out = run('fraim-prompt', ['list', ...(lead ? ['--lead', lead] : [])]).out
