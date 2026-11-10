@@ -63,7 +63,10 @@ x-workspace-volumes: &workspace-volumes
 services:
   workspace:
     <<: *defaults
-    build: ./workspace
+    build:
+      context: ./workspace
+      args:
+        VOICE: ${VOICE:-on}
     image: fraimwork/workspace:${FRAIM_IMAGE_TAG:-local}
     hostname: fraim
     environment: *workspace-env

@@ -390,7 +390,7 @@ space_up() {
 }
 
 # KEY=VALUE lines of the main space that a new space copies or builds on.
-MAIN_KEYS='SSH_PORT|MOSH_PORTS|VNC_PORT|SYNC_GUI_PORT|SYNC_PORT|PREVIEW_PORTS|ACCESS_MODE|BIND_IP|PRIVATE_BIND_IP|TZ|FRAIM_HOSTNAME|FRAIM_IMAGE_TAG|FRAIM_VERSION|FRAIM_COMMIT|FRAIM_RELEASES_REPO|AUTO_CONFIRM_CHANNEL|WHATSAPP_OWNER|PORT_OFFSET'
+MAIN_KEYS='SSH_PORT|MOSH_PORTS|VNC_PORT|SYNC_GUI_PORT|SYNC_PORT|PREVIEW_PORTS|ACCESS_MODE|BIND_IP|PRIVATE_BIND_IP|TZ|FRAIM_HOSTNAME|FRAIM_IMAGE_TAG|FRAIM_VERSION|FRAIM_COMMIT|FRAIM_RELEASES_REPO|AUTO_CONFIRM_CHANNEL|WHATSAPP_OWNER|PORT_OFFSET|VOICE'
 
 # space_env_text NAME INDEX MODULES OWNER, with the main space's values on stdin.
 space_env_text() {
@@ -445,7 +445,7 @@ VNC_PASSWORD=$(openssl rand -hex 4)
 SYNCTHING_GUI_PASSWORD=$(openssl rand -hex 12)
 SECRETS_TOKEN=$(openssl rand -hex 32)
 EOF
-  for k in FRAIM_IMAGE_TAG FRAIM_VERSION FRAIM_COMMIT FRAIM_RELEASES_REPO; do
+  for k in FRAIM_IMAGE_TAG FRAIM_VERSION FRAIM_COMMIT FRAIM_RELEASES_REPO VOICE; do
     [ -z "$(m "$k" "")" ] || printf '%s=%s\n' "$k" "$(m "$k" "")"
   done
 }
@@ -732,6 +732,9 @@ cmd_local() {
       [ -z "$new_allow" ] || env_set WHATSAPP_ALLOW "$new_allow"
       [ -z "$(flag modules)" ] || env_set COMPOSE_PROFILES "$(flag modules)"
       if has_module whatsapp && [ -z "$(env_get WHATSAPP_OWNER)" ]; then usage "the whatsapp module needs --whatsapp-owner"; fi
+      if [ -z "$(env_get VOICE)" ]; then
+        if has_module whatsapp; then env_set VOICE on; else env_set VOICE off; fi
+      fi
 
       FRAIM_SSH_KEY="$(find_ssh_key)"
       [ -n "$FRAIM_SSH_KEY" ] || human "Create an SSH key on this computer: run ssh-keygen -t ed25519 and press Enter at every question."
