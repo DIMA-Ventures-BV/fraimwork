@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# fraim-ui: the inbox and every other page are files the owner's chief can change.
+# fraimwork ships the defaults; the owner's file wins and an update never overwrites it.
+#
+#   fraim-ui list                 every page and whose version is used
+#   fraim-ui path NAME            the file that is used now
+#   fraim-ui own NAME             copy the default to the owner's file and print its path
+#   fraim-ui new NAME             a new page of the owner's, served at /p/NAME
+#   fraim-ui check [NAME]         name the mistakes in the owner's pages
+#   fraim-ui diff NAME            the owner's page against the default
+#   fraim-ui reset NAME           back to the default (the owner's file goes to .history)
+#
+# Pages: inbox (/), team (/team), settings (/settings), and the owner's own at /p/NAME.
+# Adding ?builtin=1 to the first three always shows the default. Only the owner changes pages: a run nobody watches may not.
+# Exit codes: 0 ok, 1 failure, 2 usage.
+set -euo pipefail
+
+owner="${FRAIM_UI_DIR:-${FRAIM_FILES_DIR:-$HOME/fraim}/ui}"
+checkout="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)/ui"
+defaults="${FRAIM_UI_DEFAULTS:-}"
+if [ -z "$defaults" ]; then
+  if [ -d "$checkout" ]; then defaults="$checkout"; else defaults=/etc/fraim/ui; fi
+fi
+
+usage() { echo "fraim-ui: $*" >&2; exit 2; }
+die() { echo "fraim-ui: $*" >&2; exit 1; }
+valid() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,39}$'; }
+need_name() { valid "${1:-}" || usage "this command needs a page name; fraim-ui list shows them"; }
+# The chat with the owner may change pages (it is not headless); a goal, lead or automation may not.
+owner_only() {
+  [ "${FRAIM_HEADLESS:-}" != 1 ] || die "only the owner changes pages; this run has no owner watching"
+}
+problems() {
+  local f="$1"
+  [ -s "$f" ] || { echo "$f: the file is empty, so the default is used"; return; }
+  grep -qi '<html' "$f" || echo "$f: there is no <html> in it, so the page will not load as a page"
+  grep -qi '</html>' "$f" || echo "$f: it stops before </html>, so part of the page is missing"
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+name="${1:-}"
+case "$cmd" in
+  list)
+    {
+      for f in "$defaults"/*.html "$owner"/*.html; do
+        [ -f "$f" ] && basename "$f" .html
+      done
+    } | LC_ALL=C sort -u | while IFS= read -r n; do
+      if [ -f "$owner/$n.html" ]; then
+        note="yours"
+        if [ -f "$owner/.base/$n.html" ] && [ -f "$defaults/$n.html" ] && ! cmp -s "$owner/.base/$n.html" "$defaults/$n.html"; then
+          note="yours  (fraimwork changed its default since you copied it)"
+        fi
+      else
+        note="default"
+      fi
+      printf '%-24s %s\n' "$n" "$note"
+    done
+    ;;
+  path)
+    need_name "$name"
+    if [ -f "$owner/$name.html" ]; then echo "$owner/$name.html"
+    elif [ -f "$defaults/$name.html" ]; then echo "$defaults/$name.html"
+    else die "no page $name; fraim-ui list shows them"; fi
+    ;;
+  own)
+    need_name "$name"
+    owner_only
+    if [ -f "$owner/$name.html" ]; then echo "$owner/$name.html"; exit 0; fi
+    [ -f "$defaults/$name.html" ] || die "no page $name; a new one: fraim-ui new $name"
+    mkdir -p "$owner/.base"
+    cp "$defaults/$name.html" "$owner/$name.html"
+    cp "$defaults/$name.html" "$owner/.base/$name.html"
+    echo "$owner/$name.html"
+    ;;
+  new)
+    need_name "$name"
+    owner_only
+    case "$name" in inbox|team|settings) usage "$name is a page that exists; change it with: fraim-ui own $name" ;; esac
+    [ ! -e "$owner/$name.html" ] || usage "$name exists; its file is $owner/$name.html"
+    mkdir -p "$owner"
+    printf '<!doctype html>\n<html lang="en">\n<head><meta charset="utf-8"><title>%s</title></head>\n<body>\n</body>\n</html>\n' "$name" > "$owner/$name.html"
+    echo "$owner/$name.html"
+    ;;
+  check)
+    found=""
+    if [ -n "$name" ]; then
+      need_name "$name"
+      [ ! -f "$owner/$name.html" ] || found="$(problems "$owner/$name.html")"
+    else
+      for f in "$owner"/*.html; do
+        [ -f "$f" ] || continue
+        found="$found$(problems "$f")"
+      done
+    fi
+    [ -z "$found" ] || die "$found"
+    echo "No mistakes found."
+    ;;
+  diff)
+    need_name "$name"
+    [ -f "$owner/$name.html" ] || { echo "$name uses the default"; exit 0; }
+    [ -f "$defaults/$name.html" ] || { echo "$name is your own page; it has no default"; exit 0; }
+    diff -u "$defaults/$name.html" "$owner/$name.html" || true
+    ;;
+  reset)
+    need_name "$name"
+    owner_only
+    [ -f "$owner/$name.html" ] || { echo "$name already uses the default"; exit 0; }
+    mkdir -p "$owner/.history"
+    mv "$owner/$name.html" "$owner/.history/$name.$(date +%Y%m%dT%H%M%S).html"
+    rm -f "$owner/.base/$name.html"
+    echo "$name is back to the default; the old page is in $owner/.history"
+    ;;
+  *) usage "list | path NAME | own NAME | new NAME | check [NAME] | diff NAME | reset NAME" ;;
+esac

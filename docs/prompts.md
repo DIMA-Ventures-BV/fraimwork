@@ -22,6 +22,7 @@ The first file that exists is used:
 |---|---|
 | `chief-run` | The chief of staff: how it routes work, its morning digest, when it stays quiet |
 | `relay` | How the chief writes every WhatsApp message to you |
+| `whatsapp` | What the WhatsApp chat on the server is told |
 | `lead-run`, `lead-header` | What a lead does each run |
 | `engineer-run` | How the engineer builds, tests and asks to switch things on |
 | `goal` | What a background task is told, and what its result looks like |
@@ -32,6 +33,10 @@ The first file that exists is used:
 | `server` | What every Claude on the server is told, including the WhatsApp chat |
 
 `fraim-prompt list` shows them all and whose version is used.
+
+An agent's name: say "call yourself Winston". It is the `display:` line of `lead.md`, set with `fraim-lead display`, and the inbox, chat and WhatsApp use it.
+
+The inbox and every page are yours too. Say "put my mail on the left" or "remove that tab" to the chief: it changes your own copy of the page in `~/fraim/ui`, and an update never overwrites it. See `docs/ui.md`.
 
 Other settings that were already yours: the job of an agent (`~/fraim/leads/NAME/lead.md`), its goal budget (`budget`), extra tools (`tools`), its schedule (`~/fraim/automations/NAME/automation.md`), your rules (`fraim-brain`), and how the chief talks to you (`fraim-style voice`).
 

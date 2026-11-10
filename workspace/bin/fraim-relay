@@ -148,7 +148,7 @@ background() {
 prompt_for() {
   local chief="$1" notices="$2"
   FRAIM_LEADS_DIR="$leads" fraim-prompt render relay --lead "$chief" \
-    --set "chief=$chief" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
+    --set "chief=$chief" --set "display=$(fraim-lead display "$chief" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
     --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")" \
     --set "rules=$(fraim-brain show --for "$chief" --all 2>/dev/null)" \
     --set "recent=$(cmd_context 2>/dev/null)" \
@@ -286,14 +286,14 @@ cmd_chat() {
   local limit=()
   ! command -v timeout >/dev/null || limit=(timeout "${FRAIM_CHAT_TIMEOUT:-300}")
   output="$(cd "$files" 2>/dev/null || cd "$HOME" || exit 1; export FRAIM_NO_CAPACITY_WAIT=1 FRAIM_OWNER_CHAT=1; "${limit[@]}" fraim-claude -p "$(fraim-prompt render chief-chat --lead "$chief" \
-      --set "chief=$chief" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
+      --set "chief=$chief" --set "display=$(fraim-lead display "$chief" 2>/dev/null)" --set "today=$(date '+%A %Y-%m-%d %H:%M')" \
       --set "brief=$(awk 'NR == 1 && /^---$/ { front = 1; next } front && /^---$/ { front = 0; next } !front' "$leads/$chief/lead.md")" \
       --set "rules=$(fraim-brain show --for "$chief" --all 2>/dev/null)" \
       --set "knows=$(fraim-lead brief 2>/dev/null | head -c 60000)" \
       --set "recent=$(cmd_context 2>/dev/null)" \
       --set "style=$(fraim-style prompt whatsapp 2>/dev/null)" \
       --set "text=$text")" \
-    --allowedTools "Read,Glob,Grep,Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style:*),Bash(fraim-relay said:*),Bash(fraim-prompt:*),Bash(fraim-auto check:*),Bash(fraim-auto sync:*),Bash(fraim-auto pause:*),Bash(fraim-auto resume:*),Bash(fraim-auto on:*),Bash(fraim-lead pause:*),Bash(fraim-lead resume:*),Edit(~/fraim/leads/**),Write(~/fraim/leads/**),Edit(~/fraim/automations/**),Write(~/fraim/automations/**),Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/claude/**),Write(~/fraim/claude/**),Edit(~/fraim/styles/**),Edit(~/fraim/inbox-rules.md),Edit(~/.claude/skills/**)" \
+    --allowedTools "Read,Glob,Grep,Edit(~/fraim/ui/**),Write(~/fraim/ui/**),Bash(fraim-ui:*),Bash(fraim-lead display:*),Bash(fraim-lead brief:*),Bash(fraim-lead list:*),Bash(fraim-lead ask:*),Bash(fraim-lead tell:*),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue thread show:*),Bash(fraim-queue approve:*),Bash(fraim-queue reject:*),Bash(fraim-queue dismiss:*),Bash(fraim-queue grant:*),Bash(fraim-queue thread ignore:*),Bash(fraim-queue thread close:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-goal send:*),Bash(fraim-sessions list:*),Bash(fraim-sessions read:*),Bash(fraim-sessions send:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-brain:*),Bash(fraim-style:*),Bash(fraim-relay said:*),Bash(fraim-prompt:*),Bash(fraim-auto check:*),Bash(fraim-auto sync:*),Bash(fraim-auto pause:*),Bash(fraim-auto resume:*),Bash(fraim-auto on:*),Bash(fraim-lead pause:*),Bash(fraim-lead resume:*),Edit(~/fraim/leads/**),Write(~/fraim/leads/**),Edit(~/fraim/automations/**),Write(~/fraim/automations/**),Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/claude/**),Write(~/fraim/claude/**),Edit(~/fraim/styles/**),Edit(~/fraim/inbox-rules.md),Edit(~/.claude/skills/**)" \
     2>>"$relay/errors.log")"
   code=$?
   output="$(printf '%s' "$output" | sed -e 's/[[:space:]]*$//')"

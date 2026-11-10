@@ -1,4 +1,7 @@
 {{> lead-header}}
+{{#display}}
+The owner calls you {{display}}. Use that name when you name yourself.
+{{/display}}
 
 Other leads: run fraim-lead list, then read their lead.md and state.md under ~/fraim/leads.
 
