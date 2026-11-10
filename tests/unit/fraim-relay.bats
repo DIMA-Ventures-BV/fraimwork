@@ -177,6 +177,7 @@ EOF
   grep -q 'Owner: Your messaging is quite unclear to me' "$CLAUDE_ARGS"
   grep -q "language of the owner's latest message" "$CLAUDE_ARGS"
   grep -q 'Never ask again what' "$CLAUDE_ARGS"
+  grep -q 'Never add a next step, a promise' "$CLAUDE_ARGS"
   [ "$(jq -r 'select(.who == "me") | .about' "$FRAIM_RELAY_DIR/conversation.jsonl" | tail -1)" = g3 ]
 }
 
