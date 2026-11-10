@@ -163,6 +163,60 @@ push_work() {
   grep -q '^enabled: false' "$FRAIM_AUTOMATIONS_DIR/job/automation.md"
 }
 
+@test "a lead's tools arrive with it, show in the plan, and an update shows the change" {
+  sed -i.bak 's/^budget: 4/budget: 4\ntools: mcp__linear, Bash(git fetch:*)/' "$T/work/.fraim/leads/web.md"; rm "$T/work/.fraim/leads/web.md.bak"
+  push_work
+  run "$P" plan app "$COMMIT"
+  [[ "$output" == *"may use: mcp__linear, Bash(git fetch:*)"* ]]
+  "$P" apply app "$COMMIT"
+  grep -qxF 'mcp__linear' "$FRAIM_LEADS_DIR/web/tools"
+  grep -qxF 'Bash(git fetch:*)' "$FRAIM_LEADS_DIR/web/tools"
+  ! grep -q '^tools' "$FRAIM_LEADS_DIR/web/lead.md"
+  sed -i.bak 's/^tools: .*/tools: mcp__linear, mcp__posthog/' "$T/work/.fraim/leads/web.md"; rm "$T/work/.fraim/leads/web.md.bak"
+  push_work
+  run "$P" plan app "$COMMIT"
+  [[ "$output" == *"update   lead web"* ]]
+  [[ "$output" == *"+mcp__posthog"* ]]
+  [[ "$output" == *"-Bash(git fetch:*)"* ]]
+  "$P" apply app "$COMMIT"
+  grep -qxF 'mcp__posthog' "$FRAIM_LEADS_DIR/web/tools"
+  ! grep -qF 'git fetch' "$FRAIM_LEADS_DIR/web/tools"
+}
+
+@test "export carries a live lead's tools, so it is still adopted" {
+  fraim-lead new live --area "Live area" >/dev/null
+  printf 'mcp__linear\n# a note\nWebFetch\n' > "$FRAIM_LEADS_DIR/live/tools"
+  mkdir -p "$T/x"
+  "$P" export live | tar -xf - -C "$T/x"
+  grep -q '^tools: mcp__linear,WebFetch' "$T/x/leads/live.md"
+  cp "$T/x/leads/live.md" "$T/work/.fraim/leads/"
+  push_work
+  run "$P" plan app "$COMMIT"
+  [[ "$output" == *"adopt    lead live"* ]]
+}
+
+@test "the plan names an MCP server that is neither connected nor in needs.mirror" {
+  printf '#!/usr/bin/env bash\necho %s\n' "'[{\"name\":\"linear\"}]'" > "$STUBS/fraim-connect"
+  chmod +x "$STUBS/fraim-connect"
+  export PATH="$STUBS:$PATH"
+  sed -i.bak 's/^budget: 4/budget: 4\ntools: mcp__linear, mcp__posthog, mcp__sentry__list, mcp__plugin_x_y/' "$T/work/.fraim/leads/web.md"; rm "$T/work/.fraim/leads/web.md.bak"
+  printf 'connect posthog https://mcp.example.com oauth\n' > "$T/work/.fraim/needs.mirror"
+  push_work
+  run "$P" plan app "$COMMIT"
+  [[ "$output" == *"missing  lead web needs sentry"* ]]
+  [[ "$output" != *"needs linear"* ]]
+  [[ "$output" != *"needs posthog"* ]]
+  [[ "$output" != *"needs plugin"* ]]
+}
+
+@test "a tool name with a shell character is refused" {
+  sed -i.bak 's/^budget: 4/budget: 4\ntools: $(reboot)/' "$T/work/.fraim/leads/web.md"; rm "$T/work/.fraim/leads/web.md.bak"
+  push_work
+  run "$P" plan app "$COMMIT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tools holds a character"* ]]
+}
+
 @test "export refuses the chief and a lead's own automation" {
   fraim-lead new boss --chief >/dev/null
   run "$P" export boss

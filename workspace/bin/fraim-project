@@ -53,9 +53,18 @@ header_without() {
   awk -v re="^[ \t]*($2)[ \t]*:" 'NR == 1 && $0 == "---" { h = 1; print; next } h && $0 == "---" { h = 0 } h && $0 ~ re { next } { print }' "$1"
 }
 
-# What a lead.md on the server holds: schedule and budget are defaults for the first install.
-lead_brief() { header_without "$1" 'schedule|budget'; }
-lead_hash() { lead_brief "$1" | sha; }
+# What a lead.md on the server holds: schedule and budget are defaults for the first install,
+# and tools go to the lead's tools file. A lead's hash covers its brief and its tools.
+lead_brief() { header_without "$1" 'schedule|budget|tools'; }
+repo_tools() { header_get "$1" tools | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'; }
+here_tools() { grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -v '^[[:space:]]*$'; }
+lead_hash() { { lead_brief "$1"; echo '--tools--'; repo_tools "$1" | LC_ALL=C sort; } | sha; }
+here_lead_hash() { { lead_brief "$leads/$1/lead.md"; echo '--tools--'; here_tools "$leads/$1/tools" | LC_ALL=C sort; } | sha; }
+write_tools() {  # NAME FILE
+  local t
+  t="$(repo_tools "$2")"
+  if [ -n "$t" ]; then printf '%s\n' "$t" > "$leads/$1/tools"; else rm -f "$leads/$1/tools"; fi
+}
 auto_hash() {
   local f
   for f in "$1/automation.md" "$1"/*.sh; do
@@ -67,7 +76,7 @@ auto_hash() {
 
 here_hash() {
   case "$1" in
-    lead) [ ! -f "$leads/$2/lead.md" ] || lead_hash "$leads/$2/lead.md" ;;
+    lead) [ ! -f "$leads/$2/lead.md" ] || here_lead_hash "$2" ;;
     auto) [ ! -f "$autos/$2/automation.md" ] || auto_hash "$autos/$2" ;;
   esac
 }
@@ -114,6 +123,8 @@ validate() {
     v="$(header_get "$f" budget)"
     [ -z "$v" ] || printf '%s' "$v" | grep -Eq '^[0-9]{1,2}$' || bad="$bad
   leads/$n.md: budget must be a number from 0 to 99"
+    if repo_tools "$f" | grep -Evq '^[A-Za-z0-9_:()*. /-]+$'; then bad="$bad
+  leads/$n.md: tools holds a character that is not allowed"; fi
     [ ! -d "$root/automations/$n" ] || bad="$bad
   $n: a lead and an automation cannot share a name"
   done
@@ -181,6 +192,9 @@ describe() {  # STATE KIND NAME TREE
         for f in "$root/automations/$name"/*.sh; do [ -f "$f" ] && extra="$extra (runs the script $(basename "$f"))"; done
       fi
       echo "new      $what, arrives switched off${extra:+: $extra}"
+      if [ "$kind" = lead ] && [ -n "$(repo_tools "$root/leads/$name.md")" ]; then
+        echo "         may use: $(repo_tools "$root/leads/$name.md" | paste -sd, - | sed 's/,/, /g')"
+      fi
       ;;
     adopt) echo "adopt    $what is already here and the same; it becomes part of this project" ;;
     keep) echo "keep     $what was edited on this server; the repo's new version is not installed" ;;
@@ -189,7 +203,11 @@ describe() {  # STATE KIND NAME TREE
       echo "update   $what (it stays on or off as it is)"
       if [ "$kind" = lead ]; then
         tmp="$(mktemp)"; lead_brief "$root/leads/$name.md" > "$tmp"
-        show_diff "$leads/$name/lead.md" "$tmp"; rm -f "$tmp"
+        cmp -s "$leads/$name/lead.md" "$tmp" || show_diff "$leads/$name/lead.md" "$tmp"
+        repo_tools "$root/leads/$name.md" | LC_ALL=C sort > "$tmp"
+        local was; was="$(mktemp)"; here_tools "$leads/$name/tools" | LC_ALL=C sort > "$was"
+        cmp -s "$was" "$tmp" || { echo "    what it may use:"; show_diff "$was" "$tmp"; }
+        rm -f "$tmp" "$was"
       else
         for f in "$root/automations/$name"/automation.md "$root/automations/$name"/*.sh; do
           [ -f "$f" ] || continue
@@ -207,6 +225,25 @@ gone_items() {  # NAME TREE
     case "$kind" in lead) p="$2/.fraim/leads/$n.md" ;; *) p="$2/.fraim/automations/$n/automation.md" ;; esac
     [ -f "$p" ] || echo "gone     $kind $n is no longer in the repo; it stays here until the owner removes it"
   done < <(cat "$(manifest "$1")" 2>/dev/null)
+}
+
+# MCP servers an item names that this server lacks and needs.mirror does not add.
+missing_tools() {  # TREE
+  local connected f n srv needs="$1/.fraim/needs.mirror"
+  connected="$(fraim-connect list --json 2>/dev/null | jq -r '.[].name' 2>/dev/null)"
+  [ -n "$connected" ] || return 0
+  for f in "$1"/.fraim/leads/*.md "$1"/.fraim/automations/*/automation.md; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      */automation.md) n="automation $(basename "$(dirname "$f")")" ;;
+      *) n="lead $(basename "$f" .md)" ;;
+    esac
+    while read -r srv; do
+      grep -qxF "$srv" <<<"$connected" && continue
+      awk -v s="$srv" '$1 == "connect" && $2 == s { f = 1 } END { exit !f }' "$needs" 2>/dev/null && continue
+      echo "missing  $n needs $srv: it is not connected on this server and not in needs.mirror"
+    done < <(repo_tools "$f" | grep '^mcp__' | sed 's/^mcp__//; s/__.*//' | grep -v '^plugin_' | sort -u)
+  done
 }
 
 tree_for() {  # DIR COMMIT: prints a temp folder holding .fraim
@@ -237,6 +274,7 @@ cmd_plan() {
   done < <(scan "$1" "$tree")
   gone_items "$1" "$tree"
   [ "$changes" = 1 ] || echo "Leads and automations: nothing new."
+  missing_tools "$tree"
   rm -rf "$tree"
 }
 
@@ -254,6 +292,7 @@ install_lead() {  # NAME FILE
   v="$(header_get "$2" budget)"; [ -z "$v" ] || args+=(--budget "$v")
   fraim-lead "${args[@]}" >/dev/null || die "could not create lead $1"
   lead_brief "$2" > "$leads/$1/lead.md"
+  write_tools "$1" "$2"
 }
 
 off_header() { { echo ---; echo 'enabled: false'; tail -n +2 "$1"; } > "$1.new" && mv "$1.new" "$1"; }
@@ -277,7 +316,10 @@ cmd_apply() {
     case "$state:$kind" in
       new:lead) install_lead "$n" "$tree/.fraim/leads/$n.md" ;;
       new:auto) copy_auto "$n" "$tree/.fraim/automations/$n" 1 ;;
-      update:lead) lead_brief "$tree/.fraim/leads/$n.md" > "$leads/$n/lead.md" ;;
+      update:lead)
+        lead_brief "$tree/.fraim/leads/$n.md" > "$leads/$n/lead.md"
+        write_tools "$n" "$tree/.fraim/leads/$n.md"
+        ;;
       update:auto)
         local off=0
         [ "$(header_get "$autos/$n/automation.md" enabled)" != false ] || off=1
@@ -338,7 +380,7 @@ cmd_list() {
 }
 
 cmd_export() {
-  local tree item f s b
+  local tree item f s b t
   tree="$(mktemp -d)"
   for item in "$@"; do
     valid_item "$item" || usage "'$item' is not a name"
@@ -347,8 +389,9 @@ cmd_export() {
       [ "$(header_get "$f" role)" = lead ] || die "$item is a chief or an engineer; those stay personal"
       s="$(header_get "$autos/$item/automation.md" schedule 2>/dev/null)"
       b="$(cat "$leads/$item/budget" 2>/dev/null)"
+      t="$(here_tools "$leads/$item/tools" | paste -sd, -)"
       mkdir -p "$tree/leads"
-      { head -1 "$f"; [ -z "$s" ] || printf 'schedule: "%s"\n' "$s"; [ -z "$b" ] || printf 'budget: %s\n' "$b"; tail -n +2 "$f"; } > "$tree/leads/$item.md"
+      { head -1 "$f"; [ -z "$s" ] || printf 'schedule: "%s"\n' "$s"; [ -z "$b" ] || printf 'budget: %s\n' "$b"; [ -z "$t" ] || printf 'tools: %s\n' "$t"; tail -n +2 "$f"; } > "$tree/leads/$item.md"
     elif [ -f "$autos/$item/automation.md" ]; then
       [ -z "$(header_get "$autos/$item/automation.md" lead)" ] || die "$item belongs to a lead; export the lead"
       mkdir -p "$tree/automations/$item"

@@ -21,19 +21,31 @@ You install fraim once per person: one server, one WhatsApp number, one chief, o
   automations/nightly/check.sh    optional scripts; only automation.md and *.sh belong here
 ```
 
-A lead file is a normal lead brief with two extra header lines. `schedule` and `budget` are defaults for the first install. After that, each server keeps its own.
+A lead file is a normal lead brief with three extra header lines. `schedule` and `budget` are defaults for the first install. After that, each server keeps its own. `tools` is what this lead may use.
 
 ```
 ---
 role: lead
 schedule: "20 5 * * *"
 budget: 3
+tools: mcp__linear, mcp__posthog, WebFetch, Bash(npm audit:*)
 ---
 # Lead: web-app
 
 ## Area
 The web app.
 ```
+
+## Access
+
+Two places in `.fraim` work together:
+
+- `needs.mirror` says what the server must have: MCP servers, command-line tools, and the names of keys. The values never sit in the repo. They come from the laptop of the person who installs the project, and that person sees where each key goes.
+- `tools:` in a lead says which of those this lead uses.
+
+The plan warns when a lead names an MCP server that the server lacks and `needs.mirror` does not add.
+
+Under the default `PERMISSIONS=all`, a `tools:` list is not a wall: every Claude in a space can use everything connected to that space. The wall is the space. A product whose keys must stay apart from another product goes in its own space (`docs/spaces.md`).
 
 ## Use it
 
