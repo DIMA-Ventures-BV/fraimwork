@@ -14,9 +14,7 @@ leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
 command -v fraim-queue >/dev/null || { echo "this server has no review queue"; exit 1; }
 items="$(fraim-queue list --all --json 2>/dev/null)" || { echo "cannot read the review queue"; exit 1; }
 
-chiefs="$(for f in "$leads"/*/lead.md; do
-  grep -q '^role: chief' "$f" 2>/dev/null && basename "$(dirname "$f")"
-done | jq -R . | jq -sc .)"
+chiefs="$(FRAIM_LEADS_DIR="$leads" fraim-authority role chief 2>/dev/null | jq -R . | jq -sc .)"
 newest="$(printf '%s' "$items" | jq '[.[].id | ltrimstr("q") | tonumber] | max // 0')"
 last="$(cat "$state/last" 2>/dev/null)"
 printf '%s\n' "$newest" > "$state/last"

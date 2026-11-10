@@ -24,6 +24,7 @@ write_runtime_env() {
     printf 'FRAIM_TOOL_LISTS=%q\n' "${FRAIM_TOOL_LISTS:-enforce}"
     printf 'FRAIM_VERSION=%q\n' "${FRAIM_VERSION:-dev}"
     printf 'FRAIM_RELEASES_REPO=%q\n' "${FRAIM_RELEASES_REPO:-}"
+    printf 'FRAIM_AUTO_UPDATE=%q\n' "${FRAIM_AUTO_UPDATE:-on}"
     printf 'FRAIM_SPACE=%q\n' "${FRAIM_SPACE:-main}"
     printf 'FRAIM_ACCESS_MODE=%q\n' "${FRAIM_ACCESS_MODE:-}"
     printf 'FRAIM_SECRETS_URL=%q\n' "${FRAIM_SECRETS_URL:-}"

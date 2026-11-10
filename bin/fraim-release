@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Publishes a signed fraimwork release from a maintainer's laptop. Servers install it by
+# themselves (bin/fraim-updater).
+#
+#   fraim-release vX.Y.Z [--dry-run]    --dry-run builds and verifies, and publishes nothing
+#
+# The commit must be main, pushed, clean, and green in CI.
+# FRAIM_RELEASE_KEY: the private signing key (default ~/.config/fraim/release-key). It must
+# match config/release-signers, the public key every server trusts.
+# Exit codes: 0 ok, 1 refused or failed, 2 usage.
+set -uo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+KEY="${FRAIM_RELEASE_KEY:-$HOME/.config/fraim/release-key}"
+SIGNER=fraim-release
+
+die() { echo "fraim-release: $*" >&2; exit 1; }
+usage() { echo "fraim-release: $*" >&2; exit 2; }
+
+version="${1:-}"
+dry=""
+[ "${2:-}" != --dry-run ] || dry=1
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage "usage: fraim-release vX.Y.Z [--dry-run]"
+cd "$REPO" || exit 1
+
+[ -z "$(git status --porcelain)" ] || die "the checkout has uncommitted changes"
+[ "$(git rev-parse --abbrev-ref HEAD)" = main ] || die "a release is made from main"
+git fetch --quiet --tags origin main || die "could not fetch from origin"
+commit="$(git rev-parse HEAD)"
+[ "$commit" = "$(git rev-parse origin/main)" ] || die "this checkout is not the same as origin/main"
+! git rev-parse -q --verify "refs/tags/$version" >/dev/null || die "$version already exists"
+highest="$(git tag --list 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+if [ -n "$highest" ] && [ "$(printf '%s\n%s\n' "$highest" "$version" | sort -V | tail -1)" != "$version" ]; then
+  die "$version is not above the newest release $highest"
+fi
+[ -f "$KEY" ] || die "no signing key at $KEY"
+if [ -z "$dry" ]; then
+  ci="$(gh run list --branch main --commit "$commit" --json conclusion --jq 'map(.conclusion) | unique | join(",")')" || die "could not read CI"
+  [ "$ci" = success ] || die "CI on this commit is '${ci:-not finished}', not success"
+fi
+
+work="$(mktemp -d)" || die "no temp folder"
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/tree"
+git archive HEAD | tar -xf - -C "$work/tree" || die "could not export the commit"
+printf 'version=%s\ncommit=%s\n' "$version" "$commit" > "$work/tree/RELEASE"
+tar_file="$work/fraimwork-$version.tar.gz"
+tar -czf "$tar_file" -C "$work/tree" . || die "could not pack the release"
+ssh-keygen -q -Y sign -f "$KEY" -n "$SIGNER" "$tar_file" >/dev/null 2>&1 || die "could not sign with $KEY"
+ssh-keygen -q -Y verify -f config/release-signers -I "$SIGNER" -n "$SIGNER" -s "$tar_file.sig" < "$tar_file" >/dev/null 2>&1 \
+  || die "$KEY does not match config/release-signers; servers would refuse this release"
+
+if [ -n "$dry" ]; then
+  echo "$version is ready: signed and verified, nothing published."
+  exit 0
+fi
+git tag -a "$version" -m "$version" || die "could not create the tag"
+git push --quiet origin "refs/tags/$version" || die "could not push the tag $version"
+gh release create "$version" "$tar_file" "$tar_file.sig" --verify-tag --title "$version" --generate-notes \
+  || die "the tag $version is pushed but the release was not created; run: gh release create $version"
+echo "$version is published. Canary servers install it in their next night window, stable servers after 24 hours."

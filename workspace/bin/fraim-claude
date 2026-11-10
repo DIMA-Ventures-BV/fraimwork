@@ -73,6 +73,11 @@ fi
 if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
   set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**),Edit(~/fraim/leads/*/tools),Write(~/fraim/leads/*/tools)"
   set -- "$@" --disallowedTools "Edit(~/fraim/ui/**),Write(~/fraim/ui/**)"
+  set -- "$@" --disallowedTools "Edit(~/fraim/leads/*/budget),Write(~/fraim/leads/*/budget)"
+  # The chief's brief goes into the owner's own chat, so no unattended run may write it.
+  if chief="$(fraim-authority role chief 2>/dev/null)" && [ -n "$chief" ]; then
+    set -- "$@" --disallowedTools "Edit(~/fraim/leads/$chief/lead.md),Write(~/fraim/leads/$chief/lead.md)"
+  fi
 fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.
 if command -v fraim-config >/dev/null; then

@@ -99,7 +99,7 @@ Then edit `~/fraim/leads/web/lead.md`: where to look (repositories, issues, erro
 Each run, a lead reads its brief, its own notes (`state.md`), the brain rules and your past decisions on its items. Then it:
 
 1. acts first on its inbox (`~/fraim/leads/<name>/inbox.md`: notes from the owner, the chief, other leads and its goals, written with `fraim-lead tell web -- "..."`);
-2. starts goals for clear work (`fraim-goal start --lead web`), at most `budget` per day (default 3);
+2. asks your yes for clear work (`fraim-queue add --on-approve "<the task>"`). A goal has a full shell, so no run nobody watches starts one on its own;
 3. adds ideas and decisions to the queue, at most 3 per run;
 4. rewrites its notes.
 

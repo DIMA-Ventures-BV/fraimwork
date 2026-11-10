@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Who holds a power is recorded here, outside the agents' own folders. A line an agent writes
+# in its lead.md changes nothing.
+#
+#   fraim-authority role chief|engineer       the name of the holder; exit 1 when there is none
+#   fraim-authority role-of NAME              chief, engineer or lead
+#   fraim-authority set-role chief|engineer NAME    the owner only
+#
+# The first read on a server that has no roles file yet takes the holders from the header of
+# each lead.md (the "key: value" lines between the first two --- lines), once.
+# Exit codes: 0 ok, 1 none or refused, 2 usage.
+set -uo pipefail
+
+dir="${FRAIM_AUTHORITY_DIR:-$HOME/.config/fraim/authority}"
+roles="$dir/roles"
+leads="${FRAIM_LEADS_DIR:-$HOME/fraim/leads}"
+
+usage() { echo "fraim-authority: $*" >&2; exit 2; }
+valid_role() { [ "$1" = chief ] || [ "$1" = engineer ]; }
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]]; }
+
+header_role() {
+  awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit }
+    index($0, "role:") == 1 { v = substr($0, 6); gsub(/^[ \t"]+|[ \t"]+$/, "", v); print v; exit }' "$1" 2>/dev/null
+}
+
+# Nothing is written while no role is found, so a server gets its roles with its first chief.
+migrate() {
+  [ ! -f "$roles" ] || return 0
+  local f role name found=""
+  for f in "$leads"/*/lead.md; do
+    [ -f "$f" ] || continue
+    role="$(header_role "$f")"
+    valid_role "$role" || continue
+    name="$(basename "$(dirname "$f")")"
+    if grep -q "^$role " <<<"$found"; then
+      echo "fraim-authority: more than one $role; keeping the first, ignoring $name" >&2
+      continue
+    fi
+    found="$found$role $name"$'\n'
+  done
+  [ -n "$found" ] || return 0
+  write_roles "$found"
+}
+
+write_roles() {
+  local tmp
+  mkdir -p "$dir" && chmod 700 "$dir"
+  tmp="$(mktemp "$dir/.roles.XXXXXX")" || exit 1
+  printf '%s' "$1" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$roles"
+}
+
+holder() { awk -v r="$1" '$1 == r { print $2; exit }' "$roles" 2>/dev/null; }
+
+cmd_role() {
+  valid_role "${1:-}" || usage "role chief|engineer"
+  migrate
+  local name
+  name="$(holder "$1")"
+  [ -n "$name" ] && [ -f "$leads/$name/lead.md" ] || return 1
+  printf '%s\n' "$name"
+}
+
+cmd_role_of() {
+  valid_name "${1:-}" || usage "role-of NAME"
+  migrate
+  if [ "$(holder chief)" = "$1" ]; then echo chief
+  elif [ "$(holder engineer)" = "$1" ]; then echo engineer
+  else echo lead; fi
+}
+
+cmd_set_role() {
+  valid_role "${1:-}" && valid_name "${2:-}" || usage "set-role chief|engineer NAME"
+  if [ "${FRAIM_HEADLESS:-}" = 1 ]; then echo "fraim-authority: only the owner gives a role" >&2; return 1; fi
+  migrate
+  local rest
+  rest="$(grep -v "^$1 " "$roles" 2>/dev/null || true)"
+  write_roles "${rest:+$rest$'\n'}$1 $2"$'\n'
+}
+
+case "${1:-}" in
+  role) shift; cmd_role "$@" ;;
+  role-of) shift; cmd_role_of "$@" ;;
+  set-role) shift; cmd_set_role "$@" ;;
+  *) usage "role | role-of | set-role" ;;
+esac
