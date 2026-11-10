@@ -59,9 +59,12 @@ started=0
 while IFS=$'\t' read -r ev count first msg; do
   [ -n "$ev" ] || continue
   # One conversation per error: a repeat only raises its count in the inbox.
-  thread="$(jq -n --arg key "error:$ev" --arg msg "$msg" --argjson hit "${count:-1}" \
-    '{kind: "error", key: $key, who: "Website problem", title: ($msg | .[0:120]), text: "Something went wrong on the website and an agent is looking into it.", details: $msg, hit: $hit}' \
-    | fraim-queue thread put --quiet 2>>"$state/error")" || thread=""
+  thread=""
+  if command -v fraim-queue >/dev/null; then
+    thread="$(jq -n --arg key "error:$ev" --arg msg "$msg" --arg hit "${count:-1}" \
+      '{kind: "error", key: $key, who: "Website problem", title: ($msg | .[0:120]), text: "Something went wrong on the website and an agent is looking into it.", details: $msg, hit: ($hit | tonumber? // 1)}' 2>>"$state/error" \
+      | fraim-queue thread put --quiet 2>>"$state/error")" || thread=""
+  fi
   last="$(awk -F'\t' -v e="$ev" '$1 == e { t = $2 } END { print t + 0 }' "$handled")"
   if [ $(( now - last )) -lt "$AGAIN_AFTER" ]; then
     continue   # handled lately: its goal covers this one too
