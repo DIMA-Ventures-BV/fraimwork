@@ -32,8 +32,8 @@ case "$action" in
     [ "${1:-}" = -- ] && shift
     [ $# -gt 0 ] || usage "start NAME -- CMD [ARGS]"
     stop
-    hc run --bg --name "$session" --cwd "$HOME" --label fraim=signin --no-parent --no-notify -- \
-      bash -c "$(printf '%q ' "$@"); echo; echo '[fraim-tty: finished]'; sleep 600" >/dev/null \
+    fraim-herdr open "$session" signin "$HOME" -- \
+      bash -c "$(printf '%q ' "$@"); echo; echo '[fraim-tty: finished]'; sleep 600" \
       || die "could not start the sign-in terminal"
     for _ in $(seq 60); do
       sleep 1

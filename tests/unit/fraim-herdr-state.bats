@@ -27,6 +27,22 @@ setup() {
   [ ! -s "$HC_FAKE/calls" ]
 }
 
+@test "open replaces a finished terminal and labels it" {
+  jq '.state = "finished"' "$HC_FAKE/t-g1.json" > "$T/g" && mv "$T/g" "$HC_FAKE/t-g1.json"
+  run "$HERDR" open g1 goal /tmp --label repo=x -- echo hi
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '"\(.state) \(.labels.fraim) \(.labels.repo) \(.cwd)"' "$HC_FAKE/t-g1.json")" = "live goal x /tmp" ]
+  [ "$(cat "$HC_FAKE/g1.argv")" = "$(printf 'echo\nhi')" ]
+}
+
+@test "a run without the owner may open goals only" {
+  FRAIM_HEADLESS=1 run "$HERDR" open g2 goal /tmp -- true
+  [ "$status" -eq 0 ]
+  FRAIM_HEADLESS=1 run "$HERDR" open main main /tmp -- true
+  [ "$status" -eq 1 ]
+  [ ! -e "$HC_FAKE/t-main.json" ]
+}
+
 @test "ls leaves services out" {
   run "$HERDR" ls --json
   [ "$status" -eq 0 ]

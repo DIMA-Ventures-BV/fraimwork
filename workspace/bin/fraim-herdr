@@ -9,6 +9,11 @@
 #   fraim-herdr up               workspace only: start what is missing once
 #   fraim-herdr alive            exit 0 when the core answers (never starts one)
 #   fraim-herdr hc ARGS...       run hc; in the scheduler only when the core answers
+#   fraim-herdr open NAME KIND DIR [--label K=V]... [-- CMD...]
+#                                (re)open terminal NAME in DIR, labelled fraim=KIND, in the
+#                                background with no parent; no CMD opens a shell
+#   fraim-herdr send NAME TEXT   type TEXT and Enter; on a question it is the answer, a
+#                                permission prompt is refused (the owner answers it on screen)
 #   fraim-herdr ls [--json]      the fraim terminals: name, kind, status, folder
 #   fraim-herdr attach [NAME]    humans: main (default), g3, s1, or a plain shell that stays
 #   fraim-herdr watch            tell the owner when a session needs them or a session finished
@@ -128,7 +133,43 @@ redact() {
     -e 's/(([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY))["'"'"']?[[:space:]]*[:=][[:space:]]*)["'"'"']?[^[:space:]"'"'"']{6,}/\1[hidden]/gI'
 }
 
-# A finished terminal with this name blocks a new one with the same name: remove it first.
+# Every fraim terminal opens here. A finished terminal with this name blocks a new one with
+# the same name: remove it first.
+open_term() {
+  local name="$1" kind="$2" cwd="$3" labels=(); shift 3
+  while [ "${1:-}" = --label ]; do labels+=(--label "$2"); shift 2; done
+  [ "${1:-}" != -- ] || shift
+  local run=(hc run --bg --name "$name" --cwd "$cwd" --label "fraim=$kind" ${labels[@]+"${labels[@]}"} --no-parent --no-notify)
+  [ $# -eq 0 ] || run+=(-- "$@")
+  hc rm "$name" >/dev/null 2>&1 || true
+  "${run[@]}" >/dev/null
+}
+
+cmd_open() {
+  [ $# -ge 3 ] || usage "open NAME KIND DIR [--label K=V]... [-- CMD...]"
+  headless_allows run --name "$1" \
+    || die "a run without the owner may only drive goals, not main or a coding session"
+  in_workspace || alive || die "the session service (herdr) does not answer in the workspace container; run: fraim restart workspace"
+  open_term "$@"
+}
+
+# On a question (AskUserQuestion) the text is the answer. A permission prompt is never
+# answered this way: typed text plus Enter would pick its default, "Yes".
+cmd_send() {
+  [ $# -eq 2 ] || usage "send NAME TEXT"
+  local name="$1" text="$2" status force=()
+  headless_allows send "$name" \
+    || die "a run without the owner may only drive goals, not main or a coding session"
+  in_workspace || alive || die "the session service (herdr) does not answer in the workspace container; run: fraim restart workspace"
+  status="$(hc get "$name" --json 2>/dev/null | jq -c '.status // {}')"
+  if [ "$(jq -r '.state // ""' <<<"$status")" = blocked ]; then
+    [ "$(jq -r '.kind // ""' <<<"$status")" = question ] \
+      || die "$name waits for a permission, not a question; the owner answers it on the screen (fraim shell $name)"
+    force=(--force)
+  fi
+  hc send ${force[@]+"${force[@]}"} "$name" "$text" >/dev/null
+}
+
 start_service() {
   local name="$1" kind="$2" state; shift 2
   state="$(term_state "$name")"
@@ -136,8 +177,7 @@ start_service() {
     live) return 0 ;;
     unknown) echo "fraim-herdr: $name: the core did not answer; not touching it" >&2; return 1 ;;
   esac
-  hc rm "$name" >/dev/null 2>&1 || true
-  hc run --bg --name "$name" --cwd "$HOME/fraim" --label "fraim=$kind" --no-parent --no-notify -- "$@" >/dev/null
+  open_term "$name" "$kind" "$HOME/fraim" -- "$@"
 }
 
 cmd_up() {
@@ -234,8 +274,7 @@ cmd_attach() {
     unknown) die "the session service does not answer; try again in a minute" ;;
     *)
     [ "$name" != main ] || die "the main session is not running; run: fraim restart workspace"
-    hc rm "$name" >/dev/null 2>&1 || true
-    hc run --bg --name "$name" --cwd "$HOME" --label fraim=shell --no-parent --no-notify >/dev/null || die "could not open $name" ;;
+    open_term "$name" shell "$HOME" || die "could not open $name" ;;
   esac
   echo "Leave with Ctrl+\\ ($name keeps running)."
   exec hc attach "$name"
@@ -360,6 +399,8 @@ case "$action" in
   hc) hcx "$@" ;;
   ls) cmd_ls "${1:-}" ;;
   attach) cmd_attach "${1:-main}" ;;
+  open) cmd_open "$@" ;;
+  send) cmd_send "$@" ;;
   trust) [ $# -eq 1 ] || usage "trust DIR"; cmd_trust "$1" ;;
   state) [ $# -eq 1 ] || usage "state NAME"; term_state "$1" ;;
   redact) redact ;;

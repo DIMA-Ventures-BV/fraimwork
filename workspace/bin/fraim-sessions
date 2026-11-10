@@ -65,9 +65,8 @@ launch() {
   fraim-herdr trust "$cwd" || die "could not mark $cwd as trusted in ~/.claude.json"
   local args=(fraim-claude)
   if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
-  hc rm "$id" >/dev/null 2>&1 || true
-  hc run --bg --name "$id" --cwd "$cwd" --label fraim=session --label "repo=$(cat "$dir/repo")" \
-    --no-parent --no-notify -- "${args[@]}" >/dev/null || die "could not start session $id"
+  fraim-herdr open "$id" session "$cwd" --label "repo=$(cat "$dir/repo")" -- "${args[@]}" \
+    || die "could not start session $id"
   hc wait "$id" --timeout "${FRAIM_SESSION_READY:-90}" --json >/dev/null 2>&1 || true
   local state tries=0
   while state="$(term_state "$id")"; [ "$state" = unknown ] && [ "$tries" -lt 10 ]; do
@@ -145,7 +144,7 @@ cmd_list() {
 }
 
 cmd_send() {
-  local id="$1" dir text force=()
+  local id="$1" dir text
   shift
   dir="$(session_dir "$id")" || exit $?
   text="$*"
@@ -154,16 +153,7 @@ cmd_send() {
   # Marks the session as just used, so fraim-capacity never closes it with this message in it.
   touch "$dir/last-send"
   ensure_open "$id" "$dir"
-  # On a question (AskUserQuestion) the text is the answer. A permission prompt is never
-  # answered this way: typed text plus Enter would pick its default, "Yes".
-  local status
-  status="$(term_get "$id" | jq -c '.status // {}')"
-  if [ "$(jq -r '.state // ""' <<<"$status")" = blocked ]; then
-    [ "$(jq -r '.kind // ""' <<<"$status")" = question ] \
-      || die "session $id waits for a permission, not a question; the owner answers it on the screen (fraim shell $id)"
-    force=(--force)
-  fi
-  hc send "${force[@]}" "$id" "$text" >/dev/null || die "the message did not reach session $id"
+  fraim-herdr send "$id" "$text" || die "the message did not reach session $id"
   echo "Sent to $id."
 }
 
