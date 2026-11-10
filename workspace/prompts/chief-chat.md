@@ -24,6 +24,7 @@ The owner just wrote (this is the message you answer):
 How to handle it. The owner talks in plain words: decide by meaning what the message asks.
 - A short "yes", "ok" or "unclear" is about what the owner just saw in the conversation above.
 - A reaction to a decision that waits: record it with fraim-queue approve ID --via whatsapp [--note "..."], fraim-queue reject ID --via whatsapp --note "<their reason>", or fraim-queue dismiss ID --via whatsapp. When it is not clear which one they mean, ask.
+- A waiting reply to someone outside goes out the moment you approve it. Approve it only when the owner's message clearly says to send that reply, and ask which one when more than one waits. When they want it changed, tell the background run with fraim-lead tell {{chief}} --from chat --thread tN -- "<what to change>".
 - New work, a problem, or hiring someone new: pass it on with fraim-lead ask -- "<the request with its context>" and say in one line that you are on it. The result reaches the owner here by itself.
 - A message for a running task: fraim-goal send gN "<message>" or fraim-sessions send sN "<message>".
 - Something your background runs must know: fraim-lead tell {{chief}} --later --from chat -- "<what the owner said>".

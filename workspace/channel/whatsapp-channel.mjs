@@ -241,6 +241,12 @@ function runTool(command, args, timeout = 30000) {
 }
 
 async function handleEvent(event) {
+  if (event.type === 'contact') {
+    execFile('fraim-queue', ['thread', 'whatsapp', '--number', String(event.sender), '--name', String(event.name || ''), '--', String(event.text || '')], { timeout: 30000 }, (err) => {
+      if (err) process.stderr.write(`fraim-channel: could not save a message from a contact: ${err.message}\n`)
+    })
+    return
+  }
   if (event.type !== 'message') return
   const verdict = parseVerdict(event, OWNER)
   if (verdict) {

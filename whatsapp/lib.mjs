@@ -35,6 +35,26 @@ export function httpError(status, message) {
   return Object.assign(new Error(message), { status })
 }
 
+export function parseContacts(value) {
+  return new Set(String(value || '').split(',').map(digits).filter(Boolean))
+}
+
+// A contact is someone outside the owner may answer. Their messages become conversations in the
+// inbox and never reach Claude as a chat. Someone on the allowlist stays a normal sender.
+export function contactSender(key, allow, contacts) {
+  if (!key || key.fromMe || !key.remoteJid || isGroupOrBroadcast(key.remoteJid)) return ''
+  const phone = senderPhone(key)
+  return phone && !allow.has(phone) && contacts.has(phone) ? phone : ''
+}
+
+// The chat an approved reply goes to. Only numbers the owner listed as contacts.
+export function contactChat(to, contacts) {
+  const phone = digits(to)
+  if (!phone) throw httpError(400, 'to is required')
+  if (!contacts.has(phone)) throw httpError(403, 'this number is not in WHATSAPP_CONTACTS')
+  return `${phone}@s.whatsapp.net`
+}
+
 // The chat a reply goes to. Only chats an allowed sender wrote from, or allowed numbers.
 export function resolveChat(body, knownChats, allow) {
   const jid = body.chat_id ? String(body.chat_id) : body.to ? `${digits(body.to)}@s.whatsapp.net` : ''

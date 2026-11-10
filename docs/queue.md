@@ -147,7 +147,7 @@ Everyone can send a note to everyone, and a note wakes the receiver now:
 A lead that is running when a note arrives runs once more when it ends. `--later` leaves a note without waking. To stop two leads from waking each other forever, a chain of notes stops waking after 6 hops (`FRAIM_LEAD_MAX_DEPTH`); the note then waits for the next run.
 3. **Ask you**: a decision in the queue, with the work to start when you approve.
 
-The chief cannot send mail, post, pay, merge or deploy. `fraim lead events chief --off` stops the event runs; `--every 30m` checks less often.
+The chief cannot send mail, post, pay, merge or deploy on its own. It can draft an answer to someone outside; see "Answering people outside". `fraim lead events chief --off` stops the event runs; `--every 30m` checks less often.
 
 Watchers feed the queue from outside. The examples `mail-requests` (Gmail) and `linear-new` (Linear) check every 30 minutes and add a decision when someone asks something: `fraim-auto new mail-requests --from mail-requests`.
 
@@ -213,6 +213,26 @@ Its schedule (default Monday 06:00) is a weekly check for automations that fail,
 ## Costs
 
 Every lead run and every goal is a Claude run on your plan. Start with one lead per product and a budget of 3 goals per day. Raise it when the queue stays short.
+
+## Answering people outside
+
+The chief can answer the person who wrote a mail or a WhatsApp message. You say yes first, every time.
+
+1. The chief writes the answer with `fraim-queue reply tN`. The code takes the recipient from the conversation; the chief cannot choose an address.
+2. The draft waits in the conversation in your inbox, and you get its full text on WhatsApp, word for word.
+3. You change the text in the inbox if you want, and press **Send**. On WhatsApp you can also say to send it.
+4. The text you saw goes out once. The reply appears in the conversation. If it fails, the card comes back with the reason.
+
+A yes on a reply covers that one message. It never counts as a yes for other work, and an agent cannot reuse it.
+
+| Channel | What it needs | Who can be answered |
+|---|---|---|
+| Mail | `fraim google` set up | whoever last wrote in that chain, or their Reply-To address |
+| WhatsApp | numbers in `WHATSAPP_CONTACTS` in the space's env file, then `fraim restart whatsapp` | only those numbers |
+
+WhatsApp is off until you list numbers (`WHATSAPP_CONTACTS=31612345678,31687654321`). Messages from a contact land in the inbox as a conversation and wake the chief. They never reach a Claude chat, unlike numbers in `WHATSAPP_ALLOW`.
+
+What protects this: agents have no tool that sends mail (`gmail:drafts` stays the default, and leave it there), and `/send` on WhatsApp still only reaches the allowlist. Both reply senders need their own token and can only answer. Mail goes through `google/fraim-reply`, which refuses any address but the one the chain answers to. All agents run as one Unix user, so a run that works hard to read that token could call a sender itself. It could still only answer people in a chain or your contacts. A separate user per run would close that; it is not built.
 
 ## One job, one card
 

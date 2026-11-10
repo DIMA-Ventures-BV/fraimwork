@@ -5,6 +5,8 @@
 //   GET  /events            SSE stream of allowed inbound messages
 //   POST /send              { chat_id | to, text }
 //   POST /send-file         { chat_id | to, path: "fraim/..." | "pc/...", caption }
+//   POST /reply             { to, text } an approved reply to a contact (REPLY_TOKEN, not GATEWAY_TOKEN)
+//   POST /reply/check       { to } is this number a contact (REPLY_TOKEN)
 //   POST /pair              { number } -> { code } pairing code for "Link with phone number"
 //   GET  /qr.png            current linking QR code as PNG (404 when linked)
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -22,10 +24,13 @@ import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
 import {
   allowedSender,
+  contactChat,
+  contactSender,
   digits,
   httpError,
   isGroupOrBroadcast,
   parseAllowlist,
+  parseContacts,
   resolveChat as resolveChatFor,
   resolveSharedPath,
 } from './lib.mjs'
@@ -43,6 +48,8 @@ const QUEUE_LIMIT = 100
 
 const OWNER = digits(process.env.WHATSAPP_OWNER)
 const ALLOW = parseAllowlist(OWNER, process.env.WHATSAPP_ALLOW)
+const CONTACTS = parseContacts(process.env.WHATSAPP_CONTACTS)
+const REPLY_TOKEN = process.env.REPLY_TOKEN || ''
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const waLogger = logger.child({ module: 'baileys' })
@@ -136,6 +143,20 @@ async function saveMedia(msg, inner) {
 async function onMessage(msg) {
   const key = msg.key || {}
   if (key.fromMe || !key.remoteJid || isGroupOrBroadcast(key.remoteJid)) return
+
+  const contact = contactSender(key, ALLOW, CONTACTS)
+  if (contact) {
+    const said = unwrap(msg.message)
+    emit({
+      type: 'contact',
+      id: key.id,
+      sender: contact,
+      name: msg.pushName || '',
+      text: said.conversation || said.extendedTextMessage?.text || said.imageMessage?.caption || said.documentMessage?.caption || said.videoMessage?.caption || '[sent a file or a voice message]',
+      ts: Number(msg.messageTimestamp || 0),
+    })
+    return
+  }
 
   const phone = allowedSender(key, ALLOW)
   if (!phone) {
@@ -248,9 +269,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/health') return reply(200, { ok: true })
-  if (req.headers.authorization !== `Bearer ${TOKEN}`) return reply(401, { error: 'unauthorized' })
+  const replyRoute = url.pathname === '/reply' || url.pathname === '/reply/check'
+  const allowed = replyRoute ? Boolean(REPLY_TOKEN) && req.headers.authorization === `Bearer ${REPLY_TOKEN}` : req.headers.authorization === `Bearer ${TOKEN}`
+  if (!allowed) return reply(401, { error: 'unauthorized' })
 
   try {
+    if (req.method === 'POST' && replyRoute) {
+      const body = await readJson(req)
+      const jid = contactChat(body.to, CONTACTS)
+      if (url.pathname === '/reply') {
+        if (!body.text) throw httpError(400, 'text is required')
+        await sendText(jid, String(body.text))
+      }
+      return reply(200, { ok: true })
+    }
     if (req.method === 'GET' && url.pathname === '/status') {
       return reply(200, { connected, waitingForQr, me: sock?.user?.id || null, queued: queue.length })
     }

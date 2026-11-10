@@ -31,6 +31,7 @@ x-workspace-env: &workspace-env
   FRAIM_HOSTNAME: ${FRAIM_HOSTNAME:-fraim}
   FRAIM_GATEWAY_URL: http://whatsapp:8080
   FRAIM_GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+  FRAIM_REPLY_TOKEN: ${REPLY_TOKEN:-}
   WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
   BROWSER_CDP_URL: http://${BROWSER_IP:-172.30.0.10}:9223
   FRAIM_BROWSER_VIEW_URL: ${BROWSER_VIEW_URL:-http://localhost:6080/vnc.html}
@@ -133,6 +134,8 @@ services:
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
       WHATSAPP_OWNER: ${WHATSAPP_OWNER:-}
       WHATSAPP_ALLOW: ${WHATSAPP_ALLOW:-}
+      WHATSAPP_CONTACTS: ${WHATSAPP_CONTACTS:-}
+      REPLY_TOKEN: ${REPLY_TOKEN:-}
       TZ: ${TZ:-Europe/Amsterdam}
     volumes:
       - whatsapp-auth:/data
@@ -164,6 +167,7 @@ services:
       TZ: ${TZ:-Europe/Amsterdam}
       GOOGLE_PERMISSIONS: ${GOOGLE_PERMISSIONS:-gmail:drafts drive:readonly calendar:readonly}
       WORKSPACE_MCP_ALLOWED_HOSTS: google
+      REPLY_TOKEN: ${REPLY_TOKEN:-}
     volumes:
       - google-store:/data/google
     networks: [secrets, secrets-out]

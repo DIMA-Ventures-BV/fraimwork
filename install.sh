@@ -65,6 +65,7 @@ start_space() {
     set_env BROWSER_VIEW_URL "http://$(get_env FRAIM_HOSTNAME):$(get_env VNC_PORT)/vnc.html"
   fi
   [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
+  [ -n "$(get_env REPLY_TOKEN)" ] || set_env REPLY_TOKEN "$(openssl rand -hex 24)"
   [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
   [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"
   [ -n "$(get_env SECRETS_TOKEN)" ] || set_env SECRETS_TOKEN "$(openssl rand -hex 32)"
@@ -148,6 +149,7 @@ fi
 
 say "Generating secrets"
 [ -n "$(get_env GATEWAY_TOKEN)" ] || set_env GATEWAY_TOKEN "$(openssl rand -hex 24)"
+[ -n "$(get_env REPLY_TOKEN)" ] || set_env REPLY_TOKEN "$(openssl rand -hex 24)"
 # VNC only uses the first 8 characters of a password.
 [ -n "$(get_env VNC_PASSWORD)" ] || set_env VNC_PASSWORD "$(openssl rand -hex 4)"
 [ -n "$(get_env SYNCTHING_GUI_PASSWORD)" ] || set_env SYNCTHING_GUI_PASSWORD "$(openssl rand -hex 12)"

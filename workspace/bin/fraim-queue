@@ -32,6 +32,9 @@
 //   fraim-queue thread ignore --from ADDRESS|@DOMAIN        keep a sender out for good (~/fraim/inbox-rules.md)
 //   fraim-queue thread ignore "RULE"                        an example of what does not belong
 //   fraim-queue thread show tN | list
+//   fraim-queue thread whatsapp --number N [--name NAME] -- TEXT   a contact wrote (from the WhatsApp channel)
+//   fraim-queue reply tN [--file F | -- TEXT] [--lead NAME] [--need WHY] [--priority N]
+//                                          draft an answer to whoever wrote in tN; it goes out only when the owner approves
 //
 // Items live in ~/fraim/queue/<id>/item.json, media next to it. Priority 1 is urgent.
 // Exit codes: 0 ok, 1 failure, 2 usage.
@@ -217,7 +220,7 @@ function cardToContinue(id) {
   if (!/^q\d{1,6}$/.test(id)) usage('--continues needs a queue item id (q1, q2, ...)')
   try {
     const card = readItem(id)
-    return card.brain || card.skill ? null : card
+    return card.brain || card.skill || card.reply ? null : card
   } catch { return null }
 }
 
@@ -287,6 +290,8 @@ export function addItem(opts) {
     // An automation or lead the engineer built switched off; approve switches it on.
     switch_on: opts.switchOn || '',
     thread: itemThread(opts),
+    // Set only by draftReply; a value from the command line is a string and does not count.
+    ...(opts.reply && typeof opts.reply === 'object' ? { reply: opts.reply } : {}),
     state: 'open',
     note: '',
     created: now(),
@@ -379,13 +384,22 @@ export function approveText(item, note) {
 
 // The one place where a decision has effects, used by the CLI, the page and WhatsApp.
 // Only the owner decides: a headless Claude run (goal, lead, automation) cannot.
-export function decide(id, verdict, note = '', via = 'cli') {
+export function decide(id, verdict, note = '', via = 'cli', editedText = undefined) {
   if (process.env.FRAIM_HEADLESS === '1') throw new Error('only the owner decides; a goal, lead or automation cannot approve, reject or dismiss')
   const item = readItem(id)
   if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
   note = String(note || '').trim()
   if (verdict === 'rejected' && !note) usage('reject needs a reason (--note), so the agent knows what to change')
   if (!['approved', 'rejected', 'dismissed'].includes(verdict)) usage(`unknown decision ${verdict}`)
+  if (item.reply && verdict === 'approved' && editedText != null) {
+    const text = String(editedText).trim()
+    if (!text) usage('the reply is empty')
+    if (text.length > MAX_REPLY) usage(`a reply is at most ${MAX_REPLY} characters`)
+    if (text !== item.reply.text) {
+      Object.assign(item.reply, { text, edited: true })
+      item.summary = replySummary(item.reply)
+    }
+  }
   return applyDecision(item, verdict, note, via)
 }
 
@@ -400,6 +414,7 @@ export function approvedByGrant(item, grantId) {
   const decision = [grant, ...[...(grant.history || [])].reverse()].find((s) => s.state !== 'open')
   if (decision?.state !== 'approved' || decision.via === 'grant') throw new Error(`${grantId} is not a yes from the owner; ask the owner in the queue instead`)
   if (grant.brain || grant.skill) throw new Error(`${grantId} approved a brain change; ask the owner in the queue instead`)
+  if (grant.reply) throw new Error(`${grantId} approved one message to one person; ask the owner in the queue instead`)
   const age = Date.now() - Date.parse(String(decision.decided).replace(' ', 'T'))
   if (!(age < GRANT_DAYS * 86400000)) throw new Error(`the owner's yes on ${grantId} is older than ${GRANT_DAYS} days; ask again in the queue`)
   item.approved_by = grantId
@@ -428,6 +443,8 @@ function applyDecision(item, verdict, note, via, opts = {}) {
     outcome = verdict === 'approved' ? brain(['apply', item.brain]) : brain(['discard', item.brain, '--note', verdict === 'rejected' ? note : ''])
   } else if (item.skill) {
     outcome = verdict === 'approved' ? brain(['skill', 'install', item.skill]) : brain(['skill', 'discard', item.skill, '--note', note])
+  } else if (verdict === 'approved' && item.reply) {
+    item.reply = { ...item.reply, status: 'sending', error: '' }
   } else if (verdict === 'approved' && (item.switch_on || item.on_approve)) {
     if (item.switch_on) outcome = switchOn(item.switch_on, opts.HEADLESS_OK)
     if (item.on_approve) followUp = startGoal(approveText(item, note), item)
@@ -442,11 +459,13 @@ function applyDecision(item, verdict, note, via, opts = {}) {
   item.outcome = outcome
   item.via = via
   writeItem(item)
+  // The sender reads the card, so it starts after the write. It never waits inside the page.
+  if (verdict === 'approved' && item.reply) fire(tool('fraim-queue'), ['send-reply', item.id], runtimeEnv())
   // A change to the brain from the command line could come from an agent: tell the owner.
   if ((item.brain || item.skill) && verdict === 'approved' && via === 'cli') notify(`${item.id} was approved from the command line: ${outcome}\nNot you? Tell me and I undo it.`, true)
   if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead && via !== 'grant') {
-    const covers = verdict === 'approved' ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''
+    const covers = verdict === 'approved' && !item.reply ? ` This yes covers the work that follows from it: when you ask the engineer to build something for it, say "the owner approved ${item.id}", so it starts without a second question.` : ''
     tellLead(item.lead, 'owner', `The owner ${verdict} "${item.title}" (${item.id})${note ? `: ${note}` : '.'}${followUp ? ` Goal ${followUp} started for it.` : ''}${covers}`, item.thread)
   }
   return item
@@ -497,7 +516,7 @@ export function markSolved(id, proof) {
   if (proof.length < 10) usage('solved ID --proof "<what proves it is solved>"')
   const item = readItem(id)
   if (item.state !== 'open') throw new Error(`${id} is already ${item.state}`)
-  if (item.on_approve || item.switch_on || item.brain || item.skill) throw new Error(`${id} still needs the owner's decision`)
+  if (item.on_approve || item.switch_on || item.brain || item.skill || item.reply) throw new Error(`${id} still needs the owner's decision`)
   if (item.kind !== 'failed' && !/^automation /.test(item.source || '')) throw new Error(`${id} is for the owner to review`)
   return closeSolved(item, proof, 'chief')
 }
@@ -950,7 +969,7 @@ function promptText(name, values) {
   }
 }
 
-const SOURCE_WORD = { email: 'email', linear: 'Linear issue', error: 'website problem' }
+const SOURCE_WORD = { email: 'email', whatsapp: 'WhatsApp message', linear: 'Linear issue', error: 'website problem' }
 function announce({ thread, isNew }) {
   tellChief(thread, thread.kind, promptText('thread-new', { is_new: isNew ? '1' : '', what: SOURCE_WORD[thread.kind] || thread.kind, who: thread.messages.at(-1)?.from || thread.who || 'someone', title: thread.title, id: thread.id }))
 }
@@ -1066,10 +1085,11 @@ function itemOwner(i) {
 }
 
 const ANSWER = { approved: 'Yes, go ahead.', dismissed: 'No, leave it.', rejected: 'No.' }
+const REPLY_ANSWER = { approved: 'Send it.', dismissed: 'Do not send it.', rejected: 'Not like this.' }
 function itemChat(i) {
-  const ask = { time: i.created, from: displayName(itemOwner(i)), to: 'You', item: { id: i.id, title: i.title, ask: i.ask, need: i.need, if_yes: i.if_yes, advise: i.advise, state: i.state } }
+  const ask = { time: i.created, from: displayName(itemOwner(i)), to: 'You', item: { id: i.id, title: i.title, ask: i.ask, need: i.need, if_yes: i.if_yes, advise: i.advise, state: i.state, reply: i.reply } }
   if (i.state === 'open') return [ask]
-  return [ask, { time: i.decided, from: 'You', to: displayName(itemOwner(i)), text: `${ANSWER[i.state] || ''}${i.note ? ` ${i.note}` : ''}`.trim() }]
+  return [ask, { time: i.decided, from: 'You', to: displayName(itemOwner(i)), text: `${(i.reply ? REPLY_ANSWER : ANSWER)[i.state] || ''}${i.note ? ` ${i.note}` : ''}`.trim() }]
 }
 
 export function threadDetail(id) {
@@ -1238,6 +1258,110 @@ export async function captureMail(gmailThread, quiet = false) {
   return r
 }
 
+// A contact wrote on WhatsApp. Each number is one conversation, and the message never reaches a
+// Claude as a chat: the chief reads it as data, like a mail.
+export function addWhatsApp(number, name, text) {
+  const phone = String(number || '').replace(/\D/g, '')
+  if (!/^\d{8,15}$/.test(phone)) usage('thread whatsapp needs --number with the phone number')
+  if (!String(text || '').trim()) usage('thread whatsapp needs the text of the message')
+  const key = `whatsapp:${phone}`
+  const who = String(name || '').trim() || `+${phone}`
+  const before = allThreads().find((t) => t.key === key)
+  const message = { from: who, address: `+${phone}`, to: '', date: now(), text: String(text).slice(0, 40000), quoted: '', html: '', designed: false, attachments: [] }
+  const r = putThread({ kind: 'whatsapp', key, title: `WhatsApp from ${who}`, who, messages: [...(before?.messages || []), message].slice(-200) })
+  if (r.news) announce(r)
+  return r
+}
+
+// --- answering someone outside: an agent drafts, only the owner's yes sends ------------------
+
+const MAX_REPLY = 20000
+const CHANNEL_WORD = { email: 'email', whatsapp: 'WhatsApp' }
+const replySummary = (r) => `To: ${r.name} (${r.to}), by ${CHANNEL_WORD[r.channel]}${r.subject ? `\nSubject: ${r.subject}` : ''}\n\n${r.text}`
+
+async function replyCall(channel, route, body) {
+  const env = runtimeEnv()
+  const base = channel === 'email' ? env.FRAIM_REPLY_MAIL_URL || 'http://google:8001' : env.FRAIM_GATEWAY_URL
+  if (!env.FRAIM_REPLY_TOKEN || !base) throw new Error('sending replies is not set up on this server; run fraim update')
+  const r = await fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.FRAIM_REPLY_TOKEN}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) })
+  const out = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(out.error || `the sender answered ${r.status}`)
+  return out
+}
+
+// Who the answer goes to comes from the conversation itself, never from the agent.
+async function replyTarget(t) {
+  const mail = /^gmail:([\w-]{6,64})$/.exec(t.key)
+  if (mail) {
+    const who = await replyCall('email', '/who', { thread_id: mail[1] })
+    return { channel: 'email', to: who.to, name: who.name || who.to, subject: who.subject, gmail_thread: mail[1] }
+  }
+  const phone = /^whatsapp:(\d{8,15})$/.exec(t.key)
+  if (phone) {
+    await replyCall('whatsapp', '/reply/check', { to: phone[1] })
+    return { channel: 'whatsapp', to: phone[1], name: t.who || `+${phone[1]}`, subject: '' }
+  }
+  usage('only a mail or a WhatsApp conversation has someone to answer')
+}
+
+export function draftText(item) {
+  const r = item.reply
+  return [`Reply ready for ${r.name} (${r.to}), by ${CHANNEL_WORD[r.channel]}. Nothing has gone out.`, '', r.text, '', ...(item.need ? [`Why: ${item.need}`] : []), 'Send it? You can change it in the inbox first:', queueUrl()].join('\n')
+}
+
+export async function draftReply(id, text, opts = {}) {
+  if (process.env.FRAIM_GOAL) usage('a task does not answer people itself: tell the chief of staff what to say')
+  const t = readThread(id)
+  text = String(text || '').trim()
+  if (!text) usage('reply needs the text of the answer (--file F or -- TEXT)')
+  if (text.length > MAX_REPLY) usage(`a reply is at most ${MAX_REPLY} characters`)
+  const reply = { ...await replyTarget(t), text, status: 'draft', error: '' }
+  // One waiting answer per conversation: a new draft takes the place of the one before.
+  for (const old of allItems()) {
+    if (old.thread === t.id && old.state === 'open' && old.reply) closeSolved(old, 'a newer draft took its place', 'system')
+  }
+  const item = addItem({
+    title: `Reply to ${reply.name}`, ask: `Send this ${CHANNEL_WORD[reply.channel]} to ${reply.name}?`, advise: 'approve', kind: 'decision',
+    need: opts.need, ifYes: `${reply.name} receives exactly this text.`, ifNo: 'Nothing goes out.', summary: replySummary(reply),
+    priority: opts.priority || 2, lead: opts.lead, source: opts.lead ? `lead ${opts.lead}` : 'chief', thread: t.id, reply, quiet: true,
+  })
+  notify(draftText(item), true)
+  return item
+}
+
+// Runs once, for a card the owner approved. A failed send puts the question back; when the
+// answer never came, the mail may be out, so a retry could send it twice and it stays closed.
+export async function sendApproved(id) {
+  const item = readItem(id)
+  if (item.state !== 'approved' || item.reply?.status !== 'sending') throw new Error(`${id} is not an approved reply waiting to go out`)
+  const claim = path.join(itemDir(id), '.sending')
+  fs.mkdirSync(claim)
+  const r = item.reply
+  const finish = (changes, card = {}) => {
+    const fresh = readItem(id)
+    Object.assign(fresh, card)
+    fresh.reply = { ...fresh.reply, ...changes }
+    writeItem(fresh)
+  }
+  try {
+    if (r.channel === 'email') await replyCall('email', '/reply', { thread_id: r.gmail_thread, to: r.to, text: r.text })
+    else await replyCall('whatsapp', '/reply', { to: r.to, text: r.text })
+  } catch (err) {
+    if (err.name === 'TimeoutError') {
+      finish({ status: 'unknown', error: 'no answer from the sender' })
+      notify(`I do not know if your reply to ${r.name} went out: the sender did not answer. Check your sent messages before you send it again.`, true)
+      return
+    }
+    fs.rmdirSync(claim)
+    finish({ status: 'failed', error: err.message }, { state: 'open', decided: '', via: '' })
+    notify(`Your reply to ${r.name} did not go out: ${err.message}. It waits in your inbox.`, true)
+    return
+  }
+  finish({ status: 'sent', sent: now() })
+  try { if (item.thread) sayInThread(item.thread, item.lead || 'manual', '', `Sent to ${r.name}:\n\n${r.text}`) } catch {}
+  notify(`Your reply to ${r.name} went out.`)
+}
+
 // --- the web page ------------------------------------------------------------------------
 
 function token() {
@@ -1362,7 +1486,7 @@ export function createServer(secret = token()) {
         if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
         const body = await readBody(req)
         if (action[2] === 'priority') return send(res, 200, setPriority(action[1], body.priority))
-        return send(res, 200, decide(action[1], body.verdict, body.note, 'page'))
+        return send(res, 200, decide(action[1], body.verdict, body.note, 'page', body.text))
       }
       return send(res, 404, { error: 'not found' })
     } catch (err) {
@@ -2160,6 +2284,12 @@ a { color:var(--accent); }
 .nr { float:right; background:none; border:1px solid var(--line2); border-radius:6px; color:var(--muted); font-size:12px; font-weight:500; padding:3px 9px; cursor:pointer; }
 .nr:hover { color:var(--ink); background:var(--hover); }
 .toast button { background:none; border:0; color:var(--accent); font-weight:600; cursor:pointer; margin-left:10px; padding:0; }
+.reply { margin-top:8px; }
+.reply small { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+.reply .sent { white-space:pre-wrap; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+.reply textarea { width:100%; min-height:150px; resize:vertical; background:var(--panel); color:var(--ink); border:1px solid var(--line2); border-radius:6px; padding:8px 10px; font:inherit; }
+.reply .status { margin:5px 0 0; }
+.reply .status.bad { color:var(--red); }
 .foryou { font-size:11px; font-weight:600; color:var(--yellow); margin-bottom:3px; }
 .c.side { grid-template-columns:22px minmax(0,1fr); gap:8px; margin-bottom:10px; }
 .c.side .av { width:22px; height:22px; font-size:9px; }
@@ -2321,7 +2451,7 @@ function drawCard(t) {
     (t.media || []).map(function (m) { var src = '/media/' + t.id + '/' + encodeURIComponent(m); return /\.(webm|mp4|mov)$/i.test(m) ? '<video class="shot" controls preload="metadata" src="' + src + '"></video>' : '<img class="shot" alt="" src="' + src + '">' }).join('') +
     ((t.links || []).length ? '<div class="files">' + t.links.map(function (u) { return '<a class="file" target="_blank" rel="noopener" href="' + esc(/^https?:/i.test(u) ? u : '#') + '">' + esc(u) + '</a>' }).join('') + '</div>' : '')
 }
-var LAYOUT = { email: drawMail, linear: drawLinear, error: drawError }
+var LAYOUT = { email: drawMail, whatsapp: drawMail, linear: drawLinear, error: drawError }
 function sizeSheets() {
   document.querySelectorAll('iframe.sheet').forEach(function (f) {
     var fit = function () { try { f.style.height = Math.max(120, f.contentDocument.documentElement.scrollHeight) + 'px' } catch (e) {} }
@@ -2342,6 +2472,13 @@ function drawMiddle(force) {
   sizeSheets()
   if (force) box.scrollTop = top; else box.scrollTop = 0
 }
+function replyHtml(i, open) {
+  var r = i.reply; if (!r) return ''
+  var said = { sending: ['Sending now', ''], sent: ['Sent', ''], failed: ['Did not go out: ' + r.error, 'bad'], unknown: ['Maybe sent. Check your sent messages.', 'bad'] }[r.status]
+  return '<div class="reply"><small>To ' + esc(r.name) + ', ' + esc(r.to) + (r.subject ? '<br>' + esc(r.subject) : '') + '</small>' +
+    (open ? '<textarea class="draft" aria-label="The reply" data-draft="' + esc(i.id) + '">' + esc(r.text) + '</textarea>' : '<div class="sent">' + esc(r.text) + '</div>') +
+    (said ? '<small class="status ' + said[1] + '">' + esc(said[0]) + '</small>' : '') + '</div>'
+}
 function chatHtml(c) {
   var time = when(c.time, true)
   if (c.from === 'You') return '<div class="row me"><div class="bub">' + esc(c.text) + '<small>' + time + '</small></div></div>'
@@ -2349,12 +2486,13 @@ function chatHtml(c) {
   if (!i && c.to !== 'You') return '<div class="c side">' + av(c.from) + '<div><div class="n"><em>' + esc(c.from) + '</em> to <em>' + esc(c.to || 'the team') + '</em><small>' + time + '</small></div><div class="b">' + esc(c.text) + '</div></div></div>'
   var head = '<div class="n">' + esc(c.from) + '<small>' + time + '</small></div>'
   if (!i) return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask"><div class="foryou">For you</div>' + esc(c.text) + '</div></div></div>'
-  return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask' + (open ? '' : ' closed') + '">' + (open ? '<div class="foryou">For you</div>' : '') + esc(i.ask || i.title) + (i.need ? '<p>' + esc(i.need) + '</p>' : '') + (i.if_yes ? '<p>If yes: ' + esc(i.if_yes) + '</p>' : '') +
-    (open ? '<div class="acts"><button class="btn p" data-v="approved" data-item="' + esc(i.id) + '">Yes</button><button class="btn" data-v="dismissed" data-item="' + esc(i.id) + '">No</button></div>' : '') + '</div></div></div>'
+  return '<div class="c">' + av(c.from) + '<div>' + head + '<div class="ask' + (open ? '' : ' closed') + '">' + (open ? '<div class="foryou">For you</div>' : '') + esc(i.ask || i.title) + (i.need ? '<p>' + esc(i.need) + '</p>' : '') + (i.if_yes ? '<p>If yes: ' + esc(i.if_yes) + '</p>' : '') + replyHtml(i, open) +
+    (open ? '<div class="acts"><button class="btn p" data-v="approved" data-item="' + esc(i.id) + '">' + (i.reply ? 'Send' : 'Yes') + '</button><button class="btn" data-v="dismissed" data-item="' + esc(i.id) + '">' + (i.reply ? 'Do not send' : 'No') + '</button></div>' : '') + '</div></div></div>'
 }
 function drawAgents() {
   var t = data; if (!t) { $('#agents').innerHTML = ''; return }
-  var key = JSON.stringify([t.id, t.chat, t.working, Boolean(t.closed)]); if (key === sideKey) return
+  var typing = document.activeElement && document.activeElement.classList.contains('draft')
+  var key = JSON.stringify([t.id, t.chat, t.working, Boolean(t.closed)]); if (key === sideKey || typing) return
   var same = sideKey && JSON.parse(sideKey)[0] === t.id
   sideKey = key
   var waiting = t.chat.some(function (c) { return c.item && c.item.state === 'open' })
@@ -2434,7 +2572,10 @@ $('#message').addEventListener('click', function (e) {
 $('#agents').addEventListener('click', async function (e) {
   if (e.target.id === 'nr') { markThread(); return }
   var b = e.target.closest('button[data-v]'); if (!b) return
-  if (await post('/api/items/' + b.dataset.item + '/decide', { verdict: b.dataset.v, note: '' })) { sideKey = ''; loadRows(); loadDetail() }
+  var draft = document.querySelector('textarea[data-draft="' + b.dataset.item + '"]')
+  var body = { verdict: b.dataset.v, note: '' }
+  if (draft) { body.text = draft.value; draft.blur() }
+  if (await post('/api/items/' + b.dataset.item + '/decide', body)) { sideKey = ''; loadRows(); loadDetail() }
 })
 $('#message').addEventListener('keydown', async function (e) {
   if (e.target.id !== 'csay' || e.key !== 'Enter' || e.shiftKey) return
@@ -2503,6 +2644,10 @@ function threadCommand(args) {
     case 'say':
       if (!id) usage('thread say tN --from WHO [--to WHO] -- TEXT')
       return sayInThread(id, args.from || 'owner', args.to || '', words.join(' '))
+    case 'whatsapp': {
+      const r = addWhatsApp(args.number, args.name, args._.slice(1).join(' '))
+      return console.log(r.thread.id)
+    }
     case 'show':
       if (!id) usage('thread show tN')
       return console.log(describeThread(id))
@@ -2550,6 +2695,14 @@ function main(argv) {
       const item = decide(id, verdict, args.note || args._.slice(1).join(' '), args.via === 'whatsapp' ? 'whatsapp' : 'cli')
       return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}${item.outcome ? `. ${item.outcome}` : ''}`)
     }
+    case 'reply': {
+      if (!id) usage('reply tN [--file F | -- TEXT] [--lead NAME] [--need WHY] [--priority N]')
+      const text = args.file ? fs.readFileSync(args.file, 'utf8') : args._.slice(1).join(' ')
+      return draftReply(id, text, { lead: args.lead, need: args.need, priority: args.priority }).then((item) => console.log(item.id))
+    }
+    case 'send-reply':
+      if (!id) usage('send-reply ID')
+      return sendApproved(id)
     case 'supersede': {
       const closed = supersedeFailed(args.origin, args.by)
       return console.log(closed.length ? `closed ${closed.join(' ')}` : 'nothing to close')
@@ -2586,7 +2739,7 @@ function main(argv) {
       return
     }
     default:
-      usage('add | grant --title T | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
+      usage('add | grant --title T | reply tN | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
   }
 }
 

@@ -440,6 +440,7 @@ AUTO_CONFIRM_CHANNEL=$(m AUTO_CONFIRM_CHANNEL 1)
 MCP_DENY=
 CLAUDEAI_CONNECTORS=on
 GATEWAY_TOKEN=$(openssl rand -hex 24)
+REPLY_TOKEN=$(openssl rand -hex 24)
 VNC_PASSWORD=$(openssl rand -hex 4)
 SYNCTHING_GUI_PASSWORD=$(openssl rand -hex 12)
 SECRETS_TOKEN=$(openssl rand -hex 32)
@@ -697,6 +698,7 @@ cmd_local() {
         env_set FRAIM_SUBNET_SYNC "172.31.$((128 + offset / 100)).0/24"
         env_set BROWSER_IP "172.30.$((offset / 100)).10"
         env_set GATEWAY_TOKEN "$(openssl rand -hex 24)"
+        env_set REPLY_TOKEN "$(openssl rand -hex 24)"
         env_set VNC_PASSWORD "$(openssl rand -hex 4)"
         env_set BIND_IP 127.0.0.1
         env_set PRIVATE_BIND_IP 127.0.0.1
