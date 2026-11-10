@@ -259,6 +259,7 @@ export function addItem(opts) {
   if (opts.skill && !/^s\d{1,6}$/.test(opts.skill)) usage('--skill needs a skill proposal id (s1, s2, ...)')
   if (opts.switchOn && !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(opts.switchOn)) usage('--switch-on needs an automation name')
   if (opts.approvedBy && !/^q\d{1,6}$/.test(opts.approvedBy)) usage('--approved-by needs the id of a queue item the owner approved (q1, q2, ...)')
+  if (opts.switchOn) requireTrial(opts.switchOn)
   const advise = opts.advise ? String(opts.advise).toLowerCase().replace(/^send-?back$/, 'reject').replace(/^skip$/, 'dismiss') : ''
   if (advise && !ADVICE.includes(advise)) usage('--advise must be approve, reject (send back) or dismiss (skip)')
   const why = (Array.isArray(opts.why) ? opts.why : opts.why ? [opts.why] : []).map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
@@ -330,6 +331,14 @@ function brainNote(item, verdict, note) {
   const args = ['log', '--verdict', verdict, '--item', item.id, '--title', item.title]
   if (item.lead) args.push('--lead', item.lead)
   try { brain([...args, '--', note]) } catch (err) { process.stderr.write(`fraim-queue: the brain did not save the reason: ${err.message}\n`) }
+}
+
+// A switched-off employee is only offered to the owner after a passed trial of its current brief.
+function requireTrial(name) {
+  const dir = path.join(LEADS, name)
+  if (!fs.existsSync(path.join(dir, 'lead.md')) || !fs.existsSync(path.join(dir, 'paused'))) return
+  const res = spawnSync(tool('fraim-lead'), ['try', name, '--status'], { encoding: 'utf8', timeout: 30000 })
+  if (res.status !== 0) throw new Error(`${name} cannot be hired yet: ${(res.stdout || res.stderr || res.error?.message || '').trim()}`)
 }
 
 function switchOn(name, granted = false) {

@@ -29,7 +29,7 @@ The engineer is the lead that builds (`fraim-lead list` shows it as kind `engine
 3. Skip step 7. Instead, ask the owner once: `fraim-queue add --lead <engineer> --kind decision --switch-on <name> --title "..." --ask "Switch on: <when it runs and what the owner gets>?" --advise approve --why "..." --summary "<the file and the dry-run answer>"`. When the owner approves, `fraim-auto on <name>` removes `enabled: false` and updates the scheduler. Nothing else is needed.
 4. Step 8 becomes a note to who asked: `fraim-lead tell <chief or lead> --from <engineer> -- "<what it does, and that it waits for the owner>"`.
 
-A new lead works the same way: `fraim-lead new <name> --area "..." --off`, write its brief, then the same queue item with `--switch-on <name>`.
+A new lead works the same way: `fraim-lead new <name> --area "..." --off`, write its brief, put the tools its job needs in `~/fraim/leads/<name>/tools`, run `fraim-lead try <name>` until it passes, then the same queue item with `--switch-on <name>`. The queue refuses that item without a passed trial. Unclear what the owner needs? Ask through the chief of staff; the `hiring` prompt has the rules.
 
 When a session with the owner (WhatsApp, the terminal) gets a request to build something and an engineer exists, pass it on with `fraim-lead tell <engineer> --from owner -- "..."` unless the owner asks you to build it right now.
 
