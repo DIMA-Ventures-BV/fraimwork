@@ -27,6 +27,22 @@ EOF
   export PATH="$T/bin:$BIN:$PATH" FRAIM_RUNTIME_ENV="$T/runtime.env"
 }
 
+@test "chat: the owner writes in the app, the chief answers there and nothing goes to WhatsApp" {
+  make_chief
+  FAKE_OUTPUT="She is back in." run fraim-relay chat -- "Is Anna back in?"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.who + ": " + .text' "$FRAIM_RELAY_DIR/conversation.jsonl" | tr '\n' '|')" = "owner: Is Anna back in?|me: She is back in.|" ]
+  [ "$(jq -r .chat "$FRAIM_RELAY_DIR/conversation.jsonl" | sort -u)" = app ]
+  grep -q 'Is Anna back in?' "$CLAUDE_ARGS"
+  [ ! -e "$SENT" ]
+  [ ! -e "$FRAIM_RELAY_DIR/chat.lock" ]
+  FAKE_FAIL=1 run fraim-relay chat -- "Again?"
+  [ "$status" -eq 0 ]
+  tail -1 "$FRAIM_RELAY_DIR/conversation.jsonl" | grep -q 'could not answer'
+  run fraim-relay chat -- "   "
+  [ "$status" -eq 2 ]
+}
+
 make_chief() {
   mkdir -p "$FRAIM_LEADS_DIR/chief"
   printf -- '---\nrole: chief\n---\n# Chief of staff\nKeep the owner informed.\n' > "$FRAIM_LEADS_DIR/chief/lead.md"
@@ -191,4 +207,15 @@ EOF
   [[ "$output" != *"message 300"* ]]
   run fraim-relay log someone -- hi
   [ "$status" -eq 2 ]
+}
+
+@test "how the chief writes to the owner is the owner's own prompt when they have one" {
+  make_chief
+  mkdir -p "$FRAIM_LEADS_DIR/chief/prompts"
+  printf 'Write like a pirate. {{notices}}\n' > "$FRAIM_LEADS_DIR/chief/prompts/relay.md"
+  run fraim-notify "Goal g9 done."
+  [ "$status" -eq 0 ]
+  grep -q 'Write like a pirate' "$CLAUDE_ARGS"
+  grep -q 'Goal g9 done' "$CLAUDE_ARGS"
+  run grep -q 'Never write ids' "$CLAUDE_ARGS"; [ "$status" -eq 1 ]
 }

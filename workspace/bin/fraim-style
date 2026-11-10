@@ -31,22 +31,7 @@ usage() { printf 'usage: %s\n' "$1" >&2; exit 2; }
 
 builtin_style() {
   case "$1" in
-    adhd) cat <<'EOF'
-- The first line is the answer, or the one thing the owner must do. No greeting, no intro.
-- At most 5 short lines. Cut background and reasoning the owner does not need to act.
-- One idea per line. Short sentences, plain words.
-- Steps only when the owner must do things in order: numbered, at most 5.
-- End with the one next step, or with nothing. No recap, no "let me know".
-- Details go in a file or the queue item, not in the message.
-EOF
-      ;;
-    detailed) cat <<'EOF'
-- The first line is the answer. Then explain it.
-- Give the reasoning, what you checked, the options you weighed and the risks.
-- Split long text into short labelled parts with lists. Plain words still.
-- Name the files, links and sources you used.
-EOF
-      ;;
+    adhd|detailed) fraim-prompt render "style-$1" ;;
     normal) ;;
     *) return 1 ;;
   esac
@@ -70,22 +55,7 @@ style_of() {
 
 # Rules for every text the owner reads, whatever the style: the owner does not know the
 # server's ids, commands or internals and must understand a message without asking.
-plain_words() { cat <<'EOF'
-Plain words, always (every style). The owner reads this and must understand it without asking:
-- Never show ids or internal names (g5, q6, s2, r3, lead names as codes, file paths, commands). Name the thing itself: the product or repo, and what the task was for. Not "g5 (Dependabot)" but "the Dependabot updates for the pupstar shop".
-- Say what happened and the real cause in everyday words. Not "the run disappeared" but "the server restarted during the task, so it stopped halfway". When you do not know the cause, say so and say what you will check.
-- Leave out tests, retries and internal steps that change nothing for the owner.
-- Times as people say them: "this morning at 11:05", "an hour ago".
-- A question names what will happen when the owner says yes, so a yes is enough: "Shall I run the Dependabot updates for pupstar again?", not "Retry g5?".
-- Never ask the owner to do a manual step (log in, enter a code) when an agent can find another way; a yes must be enough.
-- A decision for the owner says, in business words, why it is needed, what changes when the owner says yes (and the risk), what happens on no, and your advice. Translate tools and packages into what they do: not "update sharp and puppeteer-core" but "fix security holes in the tools that make photos and PDF books".
-- The owner talks to one assistant. Never name the server's own parts (lead, engineer, builder, "de bouwer", agent, chief, goal, session, queue, automation, worker): say "I" for whatever they do, and name the work itself. Not "the builder is on it" but "I'm setting it up".
-- Translate developer words: merge/"gemerged" = "added to the code, not live yet"; deploy = "put live"; pull request/PR = "a proposed change"; built switched off = "ready, but not running yet"; dry run = "a test run"; repo = the product's name; dependency/package = what the tool does.
-- Write in the language of the owner's latest message. In Dutch, say "je", never "u".
-- Every yes gets its result: say what happens now and when the owner hears back. Never ask for a yes the owner already gave.
-- When the owner says a message was unclear, do not ask which part. Write it again from the start in plain words: what they asked or answered, what happened, what still waits for them.
-EOF
-}
+plain_words() { fraim-prompt render plain-words; }
 
 voice_rules() { [ -f "$voice" ] && grep -E '^- ' "$voice" || true; }
 

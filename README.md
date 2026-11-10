@@ -47,6 +47,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 - **Add a product:** a repo can carry its own leads and automations in a `.fraim/` folder. Ask Claude to "add this project to fraim". They arrive switched off and you choose what runs (see `docs/projects.md`).
 - **While you sleep:** ask Claude to schedule a job, for example "every morning at 8, summarize my inbox and WhatsApp me".
 - **Approvals:** before your agent does something risky, it asks you on WhatsApp. Reply with the code it shows, for example `yes abcde`.
+- **Change anything:** say it in your own words, for example "the chief of staff should be more direct" or "stop telling me about X". Everything your agents are told is a text file that is yours to change, for one agent or for all of them (see `docs/prompts.md`).
 - **Limits:** your agent uses your normal Claude plan. Scheduled jobs and WhatsApp chats count toward its usage limits. When a limit is reached, a job fails and you get a WhatsApp message with the reason; it works again when the limit resets.
 - **Problems:** your server checks itself every hour and sends you a WhatsApp message when something breaks, and again when it is fixed. If you need help, ask Claude to "make a fraim support bundle" and send that file to whoever helps you; passwords and phone numbers are removed from it.
 
@@ -72,6 +73,7 @@ Claude drives everything through `bin/fraim`, a CLI written for agents: it never
 | `bin/fraim-config` | Claude configuration shared between laptop and server (see `docs/config.md`). |
 | `skills/` | The Claude Code skills that set up and operate fraim. |
 | `workspace/` | The server's Claude Code container: SSH, herdr sessions, scheduler, helper scripts. |
+| `workspace/prompts/` | Every instruction agents get, as default files. The owner's files win (`fraim-prompt`, `docs/prompts.md`). |
 | `workspace/channel/` | The WhatsApp channel for Claude Code, with approvals over WhatsApp. |
 | `whatsapp/` | WhatsApp gateway: linked device, allowlist, internal API. |
 | `browser/` | The server's Chrome with a persistent profile and a screen viewer (noVNC). |

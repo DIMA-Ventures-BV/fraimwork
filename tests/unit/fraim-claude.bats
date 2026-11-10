@@ -36,3 +36,32 @@ setup() {
   run fraim-claude --dangerously-load-development-channels server:whatsapp
   [ "$output" = "headless=0" ]
 }
+
+@test "every Claude gets the server prompt, and a run nobody watches may not edit prompts" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  printf '#!/usr/bin/env bash\necho "the server text"\n' > "$T/bin/fraim-prompt"
+  chmod +x "$T/bin/fraim-prompt"
+  unset FRAIM_HEADLESS
+  run fraim-claude --continue
+  [[ "$output" == *"--append-system-prompt-file"* ]]
+  [[ "$output" != *"--disallowedTools"* ]]
+  grep -q 'the server text' "$HOME/.local/state/fraim/server-prompt.md"
+  run fraim-claude -p "hi"
+  [[ "$output" == *"Edit(~/fraim/prompts/**)"* ]]
+  [ "${lines[1]}" = "-p" ]
+}
+
+@test "the server rules never go missing: last copy first, then the shipped one" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$T/bin/fraim-prompt"
+  chmod +x "$T/bin/fraim-prompt"
+  mkdir -p "$T/shipped"
+  printf 'shipped rules\n' > "$T/shipped/server.md"
+  export FRAIM_PROMPT_DEFAULTS="$T/shipped"
+  run fraim-claude --continue
+  [[ "$output" == *"$T/shipped/server.md"* ]]
+  mkdir -p "$HOME/.local/state/fraim"
+  printf 'last good\n' > "$HOME/.local/state/fraim/server-prompt.md"
+  run fraim-claude --continue
+  [[ "$output" == *"$HOME/.local/state/fraim/server-prompt.md"* ]]
+}

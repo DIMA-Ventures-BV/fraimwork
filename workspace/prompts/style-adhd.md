@@ -1,0 +1,6 @@
+- The first line is the answer, or the one thing the owner must do. No greeting, no intro.
+- At most 5 short lines. Cut background and reasoning the owner does not need to act.
+- One idea per line. Short sentences, plain words.
+- Steps only when the owner must do things in order: numbered, at most 5.
+- End with the one next step, or with nothing. No recap, no "let me know".
+- Details go in a file or the queue item, not in the message.
