@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lead agents: one per area of focus (a product, ops, marketing). A lead wakes on a
-# schedule, looks at its area, starts goals for clear work (within a daily budget) and puts
+# schedule, looks at its area, asks the owner's yes for clear work and puts
 # ideas and decisions in the owner's review queue. The chief of staff is a lead that reads
 # all other leads and the queue, ranks the queue and sends the owner one digest each morning.
 # During the day it also wakes on events: new goal results, failures and automation answers in
@@ -348,6 +348,11 @@ cmd_run() {
   # One run at a time; a lock from a run that died is taken over.
   if ! mkdir "$dir/.running" 2>/dev/null; then
     if kill -0 "$(cat "$dir/.running/pid" 2>/dev/null)" 2>/dev/null; then echo "Lead $name is already running."; return 0; fi
+    # Notes the dead run held (a reboot, an out-of-memory kill) go back to the inbox.
+    if [ -s "$dir/.running/inbox.md" ]; then
+      cat "$dir/.running/inbox.md" "$dir/inbox.md" 2>/dev/null > "$dir/.running/inbox.new"
+      mv "$dir/.running/inbox.new" "$dir/inbox.md"
+    fi
     rm -rf "$dir/.running"; mkdir "$dir/.running" || die "could not lock $dir"
   fi
   printf '%s\n' "$$" > "$dir/.running/pid"

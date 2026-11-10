@@ -444,6 +444,82 @@ Not logged in · Please run /login"
   [ ! -e "$FRAIM_QUEUE_DIR/q2" ]
 }
 
+# A goal that always says it is ready, and a fake reviewer whose last line is $CHECK_VERDICT.
+ready_goal() {
+  export CLAUDE_ARGS="$T/claude.args" FRAIM_GOAL_KEEP=5 FRAIM_GOAL_CHECK_POLL=0.1
+  export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue" FRAIM_BRAIN_DIR="$T/home/fraim/brain"
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGS"
+echo "I read the change."
+echo "$CHECK_VERDICT"
+EOF
+  cat > "$T/bin/say-ready" <<'EOF'
+#!/usr/bin/env bash
+[ "${ONE_READY:-}" != 1 ] || [ ! -e "$HC_FAKE/ready-once" ] || exit 0
+touch "$HC_FAKE/ready-once"
+printf 'https://example.com/pr/7' > "$FRAIM_GOALS_DIR/g1/ready-to-merge"
+EOF
+  chmod +x "$T/bin/fraim-claude" "$T/bin/say-ready"
+  export FAKE_SEND_HOOK="$T/bin/say-ready"
+}
+
+@test "a passed check tells the goal to merge and only reader tools were given" {
+  ready_goal
+  ONE_READY=1 CHECK_VERDICT=PASS "$GOAL" start -- fix the button
+  wait_state g1 done
+  grep -q 'The independent check passed. Merge https://example.com/pr/7' "$HC_FAKE/g1.sent"
+  grep -qx -- '-p' "$CLAUDE_ARGS"
+  grep -q 'fix the button' "$CLAUDE_ARGS"
+  tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
+  [[ "$tools" == *"Bash(gh pr diff:*)"* ]]
+  [[ "$tools" != *"Bash,"* ]]
+  [[ "$tools" != *"Edit"* ]]
+  [[ "$tools" != *"Write"* ]]
+  [[ "$tools" != *"gh pr merge"* ]]
+  [ ! -e "$FRAIM_GOALS_DIR/g1/check-note" ]
+  "$GOAL" stop g1
+}
+
+@test "a check that keeps failing sends the goal back once, then the owner decides" {
+  ready_goal
+  CHECK_VERDICT="FAIL: the button is still missing" "$GOAL" start -- fix the button
+  wait_state g1 done
+  grep -q 'found a problem: the button is still missing Do not merge' "$HC_FAKE/g1.sent"
+  [ "$(cat "$FRAIM_GOALS_DIR/g1/checks")" = 2 ]
+  run grep -c 'found a problem' "$HC_FAKE/g1.sent"
+  [ "$output" = 1 ]
+  item="$FRAIM_QUEUE_DIR/q1/item.json"
+  for _ in $(seq 20); do [ -s "$item" ] && break; sleep 0.1; done
+  [ "$(jq -r .advise "$item")" = reject ]
+  [[ "$(jq -r .ask "$item")" == *"independent check did not pass"* ]]
+  [[ "$(jq -r .on_approve "$item")" == *"https://example.com/pr/7"* ]]
+  [[ "$(jq -r '.why | join(" ")' "$item")" == *"the button is still missing"* ]]
+  run grep -c 'The independent check passed' "$HC_FAKE/g1.sent"
+  [ "$output" = 0 ]
+  "$GOAL" stop g1
+}
+
+@test "a check that gives no verdict merges nothing and the owner decides" {
+  ready_goal
+  CHECK_VERDICT="I could not decide." "$GOAL" start -- fix the button
+  wait_state g1 done
+  [[ "$(cat "$FRAIM_GOALS_DIR/g1/check-note")" == *"could not run"* ]]
+  run grep -c 'The independent check passed' "$HC_FAKE/g1.sent"
+  [ "$output" = 0 ]
+  "$GOAL" stop g1
+}
+
+@test "a goal that did not say it is ready gets no check" {
+  ready_goal
+  rm "$T/bin/say-ready"
+  unset FAKE_SEND_HOOK
+  "$GOAL" start -- tidy up
+  wait_state g1 done
+  [ ! -e "$CLAUDE_ARGS" ]
+  "$GOAL" stop g1
+}
+
 @test "bad input is a usage error" {
   run "$GOAL" start
   [ "$status" -eq 2 ]

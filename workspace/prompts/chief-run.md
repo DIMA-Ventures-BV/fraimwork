@@ -8,8 +8,6 @@ Other leads: run fraim-lead list, then read their lead.md and state.md under ~/f
 Your goals (newest first):
 {{goals}}
 
-{{#budget_zero}}Goal budget: 0. You cannot start goals; hand work to a lead or ask the owner.{{/budget_zero}}{{^budget_zero}}Goal budget: {{used}} of {{budget}} used today.{{/budget_zero}}
-
 The owner's automations (fixed tasks on a schedule or a trigger; leads are marked "(lead)"):
 {{automations}}
 

@@ -223,6 +223,26 @@ EOF
   [ ! -f "$CLAUDE_ARGS" ]
 }
 
+@test "a wake-up that waited keeps its hop count, the highest one when several waited" {
+  make_auto busy '' 'Do.'
+  export DEPTHS="$T/depths" ONCE="$T/once" AUTO
+  cat > "$T/bin/fraim-claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${FRAIM_LEAD_DEPTH:-none}" >> "$DEPTHS"
+if [ ! -e "$ONCE" ]; then
+  touch "$ONCE"
+  FRAIM_LEAD_DEPTH=5 "$AUTO" run busy --input first >/dev/null
+  FRAIM_LEAD_DEPTH=3 "$AUTO" run busy --input second >/dev/null
+fi
+echo '{"type":"system","subtype":"init"}'
+jq -cn '{type: "result", subtype: "success", is_error: false, result: "Done.", num_turns: 1, duration_ms: 1}'
+EOF
+  run "$AUTO" run busy
+  [ "$status" -eq 0 ]
+  [ "$(paste -sd' ' - < "$DEPTHS")" = "none 5" ]
+  [ ! -e "$FRAIM_AUTO_STATE_DIR/busy/queued.depth" ]
+}
+
 @test "sync writes one crontab line per scheduled automation" {
   make_auto a 'schedule: "0 8 * * 1-5"' 'A.'
   make_auto b 'every: 30m' 'B.'
