@@ -7,6 +7,9 @@
 # Health check every hour; WhatsApp only when something breaks or recovers.
 0 * * * * fraim-doctor --notify
 
+# Every hour: a question nobody answered in time (expire_hours, default 72) counts as no.
+30 * * * * fraim-queue expire
+
 # Every 10 minutes: learn from the owner's chats once they pause (stated preferences become
 # rules at once, corrections wait in the queue). Does nothing, and costs nothing, without new messages.
 */10 * * * * fraim-brain review --quiet

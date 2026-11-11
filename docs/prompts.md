@@ -37,6 +37,8 @@ The first file that exists is used:
 | `stale-card` | The queue card when a default you copied changed |
 | `notice-goal-done`, `notice-goal-answered`, `notice-goal-failed` | What you hear when a background task finishes, answers or fails |
 | `notice-asks`, `notice-session-done`, `notice-who` | What you hear when a task or coding session asks you something or finishes, and how it is named |
+| `notice-queue-new`, `notice-reply-ready` | What you hear when a question or a drafted answer to someone outside waits for your yes |
+| `notice-asks-expired`, `notice-always-used` | What you hear when questions went unanswered too long, or one was approved by your standing yes |
 | `notice-main-blocked`, `notice-whatsapp-down` | What you hear when the main session is stuck on its screen or WhatsApp cannot reach it |
 | `goal-check-passed`, `goal-check-failed` | What a background task is told after the independent check of its change |
 

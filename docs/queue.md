@@ -51,7 +51,12 @@ A decision is written so you can decide from the card alone, in business words, 
 | `if_no` | `--if-no` | what happens when you say no or wait |
 | `why` | `--why` (at most 3) | the reasons for the advice |
 
-The WhatsApp message about a new item carries the same parts, without ids.
+The WhatsApp message about a new item carries the same parts, without ids, and you answer it there (prompt `notice-queue-new`).
+
+### No answer, and always yes
+
+- **No answer counts as no.** A question that waits longer than 72 hours closes as skipped: nothing starts, and the agent behind it hears it. You get one message for all of them (`notice-asks-expired`). Change the wait with `expire_hours=N` in `~/fraim/queue/settings`; `0` means never. `fraim-queue expire` runs every hour.
+- **Always yes.** Say "always yes" to a question and the chief runs `fraim-queue always qN`: it approves that card and every later card from the same agent with the same title (numbers may differ) and the same effect (start a task, or switch on the same automation). You hear each time it is used (`notice-always-used`). "What do I always say yes to?" lists them (`fraim-queue always list`), and "stop that one" removes one (`fraim-queue always rm N`). A message to someone outside and a change to the rules are asked every time. Only you can add or remove a standing yes; a run nobody watches cannot.
 
 Your decision has these effects, and only these:
 

@@ -1,7 +1,7 @@
 // Answering someone outside: an agent drafts, only the owner's yes sends.
 import fs from 'node:fs'
 import path from 'node:path'
-import { allItems, itemDir, now, queueUrl, readItem, readThread, runtimeEnv, usage, writeItem } from './fraim-queue-store.mjs'
+import { allItems, itemDir, now, promptText, readItem, readThread, runtimeEnv, usage, writeItem } from './fraim-queue-store.mjs'
 import { channelWord, replyTarget as channelTarget, sendReply } from './fraim-channels.mjs'
 import { MAX_REPLY, addItem, closeSolved, notify, replySummary } from './fraim-queue-approve.mjs'
 import { sayInThread } from './fraim-queue-threads.mjs'
@@ -13,7 +13,7 @@ async function replyTarget(t) {
 
 function draftText(item) {
   const r = item.reply
-  return [`Reply ready for ${r.name} (${r.to}), by ${channelWord(r.channel)}. Nothing has gone out.`, '', r.text, '', ...(item.need ? [`Why: ${item.need}`] : []), 'Send it? You can change it in the inbox first:', queueUrl()].join('\n')
+  return promptText('notice-reply-ready', { name: r.name, to: r.to, channel: channelWord(r.channel), text: r.text, need: item.need || '' })
 }
 
 export async function draftReply(id, text, opts = {}) {

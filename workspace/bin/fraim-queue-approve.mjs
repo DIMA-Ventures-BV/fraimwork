@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { channelWord } from './fraim-channels.mjs'
 import {
-  ADVICE, GOALS, KINDS, LEADS, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId, now,
-  promptText, queueUrl, readItem, runtimeEnv, tellLead, theContact, tool, usage, validId, validThread, writeItem,
+  ADVICE, GOALS, KINDS, LEADS, QUEUE, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId, now,
+  promptText, readItem, runtimeEnv, tellLead, theContact, tool, usage, validId, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
@@ -21,16 +21,87 @@ export function notify(text, direct = false) {
 export const ADVICE_WORD = { approve: 'Approve', reject: 'Send back', dismiss: 'Skip' }
 
 // The message about a new item says what it is about and what the owner gains or risks, so the
-// owner can decide from the message alone.
+// owner can decide from the message alone and answer in the chat (prompt notice-queue-new).
 function newText(item) {
-  const lines = [`New in your queue: ${item.title}`]
-  if (item.ask) lines.push(item.ask)
-  if (item.need) lines.push(`Why: ${item.need}`)
-  if (item.if_yes) lines.push(`If you approve: ${item.if_yes}`)
-  if (item.if_no) lines.push(`If you say no: ${item.if_no}`)
-  if (item.advise) lines.push(`My advice: ${ADVICE_WORD[item.advise]}`)
-  lines.push(queueUrl())
-  return lines.join('\n')
+  const hours = expireHours()
+  return promptText('notice-queue-new', {
+    title: item.title, ask: item.ask, need: item.need, if_yes: item.if_yes, if_no: item.if_no,
+    advise: item.advise ? ADVICE_WORD[item.advise] : '', hours: hours ? String(hours) : '',
+  })
+}
+
+// A question that waits for the owner: something happens, or something is sent, only on a yes.
+const asksOwner = (item) => Boolean(item.ask || item.on_approve || item.switch_on || item.reply || item.brain || item.skill)
+
+// A question nobody answers counts as no after this many hours (0: never). The owner sets it in
+// ~/fraim/queue/settings (expire_hours=N); FRAIM_QUEUE_EXPIRE_HOURS still wins.
+export function expireHours() {
+  let v = process.env.FRAIM_QUEUE_EXPIRE_HOURS
+  if (v == null) {
+    try { v = (fs.readFileSync(path.join(QUEUE, 'settings'), 'utf8').match(/^expire_hours=(\d+)\s*$/m) || [])[1] } catch {}
+  }
+  const n = parseInt(v ?? '72', 10)
+  return Number.isFinite(n) && n >= 0 ? n : 72
+}
+
+// The questions that waited longer than expireHours() close as a no (dismissed: nothing starts,
+// no rework). The agents behind them hear it; the owner gets one message for all of them.
+export function expireOpen(quiet = false) {
+  const hours = expireHours()
+  if (!hours) return []
+  const cutoff = Date.now() - hours * 3600000
+  const closed = []
+  for (const item of allItems()) {
+    const asked = Date.parse(String(item.created).replace(' ', 'T'))
+    if (item.state !== 'open' || !asksOwner(item) || !(asked < cutoff)) continue
+    try {
+      applyDecision(readItem(item.id), 'dismissed', `No answer in ${hours} hours, so it counts as no.`, 'expired')
+      closed.push(item)
+    } catch (err) { process.stderr.write(`fraim-queue: could not close ${item.id}: ${err.message}\n`) }
+  }
+  if (closed.length && !quiet) notify(promptText('notice-asks-expired', { hours: String(hours), items: closed.map((i) => `- ${i.title}`).join('\n') }))
+  return closed
+}
+
+// "Always yes": the owner's standing yes for one question from one agent. A later card from the
+// same agent with the same title and the same kind of effect is approved at once, and the owner
+// hears it. Never for a message to someone outside or a change to the brain: those are asked
+// every time. Rules live in ~/fraim/queue/always.json; only the owner adds or removes them.
+const ALWAYS = path.join(QUEUE, 'always.json')
+const sameTitle = (t) => String(t || '').toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()
+const effectOf = (item) => (item.switch_on ? `switch on ${item.switch_on}` : item.on_approve ? 'start a task' : 'nothing')
+const standingYesAllowed = (item) => !item.reply && !item.brain && !item.skill
+
+export function alwaysRules() {
+  try { return JSON.parse(fs.readFileSync(ALWAYS, 'utf8')) } catch { return [] }
+}
+
+function saveRules(rules) {
+  fs.mkdirSync(QUEUE, { recursive: true })
+  fs.writeFileSync(`${ALWAYS}.tmp`, `${JSON.stringify(rules, null, 2)}\n`)
+  fs.renameSync(`${ALWAYS}.tmp`, ALWAYS)
+}
+
+const ruleFor = (item) => alwaysRules().find((r) => r.lead === (item.lead || '') && r.title === sameTitle(item.title) && r.effect === effectOf(item))
+
+// always ID: the owner says yes to qN and to every same question after it.
+export function addAlways(id) {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Refused('only the owner gives a standing yes; a goal, lead or automation cannot')
+  let item = readItem(id)
+  if (!standingYesAllowed(item)) throw new Error(`${id} is a message to someone or a change to the rules; those are asked every time`)
+  if (!ruleFor(item)) saveRules([...alwaysRules(), { lead: item.lead || '', title: sameTitle(item.title), effect: effectOf(item), from: item.id, added: now() }])
+  if (item.state === 'open') item = applyDecision(item, 'approved', 'The owner always says yes to this.', 'always')
+  return item
+}
+
+export function removeAlways(n) {
+  if (process.env.FRAIM_HEADLESS === '1') throw new Refused('only the owner removes a standing yes')
+  const rules = alwaysRules()
+  const i = parseInt(n, 10) - 1
+  if (!(i >= 0 && i < rules.length)) usage(`always rm N, where N is a number from always list (1 to ${rules.length})`)
+  const [gone] = rules.splice(i, 1)
+  saveRules(rules)
+  return gone
 }
 
 // One job, one card: the card a goal was started from, when it can carry the next step.
@@ -128,6 +199,12 @@ export function addItem(opts) {
       if (err instanceof UsageError) throw err
       process.stderr.write(`fraim-queue: ${err.message}. ${id} waits in the queue as a normal question.\n`)
     }
+  }
+  const rule = item.state === 'open' && asksOwner(item) && standingYesAllowed(item) ? ruleFor(item) : null
+  if (rule) {
+    const done = applyDecision(item, 'approved', `The owner always says yes to this (standing yes from ${rule.from}).`, 'always', { HEADLESS_OK: true })
+    if (!opts.quiet) notify(promptText('notice-always-used', { title: item.title, if_yes: item.if_yes }))
+    return done
   }
   if (!opts.quiet && item.state === 'open') notify(newText(item))
   // A lead hears at once when a goal it started ends; queue=all hears through its queue events.
@@ -302,7 +379,7 @@ function applyDecision(item, verdict, note, via, opts = {}) {
   if (verdict === 'approved' && item.reply) fire(tool('fraim-queue'), ['send-reply', item.id], runtimeEnv())
   // A change to the brain from the command line could come from an agent: tell the owner.
   if ((item.brain || item.skill) && verdict === 'approved' && (via === 'cli' || via.startsWith('api:'))) notify(`${item.id} was approved ${via === 'cli' ? 'from the command line' : `by the app "${via.slice(4)}"`}: ${outcome}\nNot you? Tell me and I undo it.`, true)
-  if (verdict !== 'dismissed' && via !== 'grant') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
+  if (verdict !== 'dismissed' && via !== 'grant' && via !== 'always') brainNote(item, verdict === 'approved' ? 'approved' : 'rejected', note)
   if (item.lead && via !== 'grant') {
     const covers = verdict === 'approved' && !item.reply ? '1' : ''
     tellLead(item.lead, 'owner', promptText('queue-decided', { verdict, title: item.title, id: item.id, note, follow_up: followUp, covers }), item.thread)
