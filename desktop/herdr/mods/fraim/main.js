@@ -11,7 +11,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { exec, hc, readTextFile, terminals, agents, spaces, run, props, shared, setShared, notify, openOverlay, closeOverlay, layout } from "herdr";
+import { exec, hc, readTextFile, terminals, agents, spaces, machines, run, props, shared, setShared, notify, openOverlay, closeOverlay, layout } from "herdr";
 
 const C = {
   bg: "#0b0b0c", side: "#0b0b0c", panel: "#101012", hover: "#17171a", sel: "#1c1d23",
@@ -273,6 +273,7 @@ const chiefTerminal = () => terminals().find((t) => t.name === "main" && t.state
 // it). The chief is never a tab: closing a tab ends its terminal. A chief that still has one
 // (an older server labelled it into the space) loses the label and the tab, and keeps running.
 function keepChief() {
+  keepSpace();
   const t = chiefTerminal();
   if (!t) return;
   const tree = layout();
@@ -285,6 +286,27 @@ function keepChief() {
   if (agents().some((a) => a.address === t.address) && shared("fraim.parked") !== t.address) {
     setShared("fraim.parked", t.address);
     hc(["label", t.address, "herdr.space="]).finally(() => run("terminal.park", { terminal: t.address }));
+  }
+}
+// Herdr removes a space with its last tab. Team, dashboards and agents open as tabs of
+// fraim's space, so when it is gone, make it again (with the machine, once it answers) and
+// tell the server its new id, where goals and sessions read it (~/.config/fraim/herdr-space).
+function keepSpace() {
+  const m = machines().find((x) => x.name && /^fraim(-|$)/.test(x.name) && x.layout === "ready");
+  if (!m) return;
+  const space = spaces().find((s) => s.machine === m.name && s.name === "fraim");
+  if (!space) {
+    if (shared("fraim.making") !== true) {
+      setShared("fraim.making", true);
+      run("space.new", { name: "fraim", machine: m.name, folder: "/home/claude/fraim" });
+    }
+    return;
+  }
+  setShared("fraim.making", false);
+  const id = space.id.replace(/^[^/]+\//, "");
+  if (shared("fraim.spaceSaved") !== id && /^sp[0-9a-f]{8,64}$/.test(id)) {
+    setShared("fraim.spaceSaved", id);
+    exec("bash", ["-lc", `mkdir -p ~/.config/fraim && printf '%s\\n' ${id} > ~/.config/fraim/herdr-space`], { on: m.name, timeout: 20000 }).catch(() => setShared("fraim.spaceSaved", ""));
   }
 }
 const chiefStatus = () => {
@@ -467,7 +489,6 @@ export default class FraimChat extends View {
     const right = [div().text_size(11).text_color(C.faint).child(state)];
     const workHidden = !!findNode(layout(), "work")?.hidden;
     right.push(btn("fc-work", workHidden ? "Show workspace" : "Hide workspace", () => run(workHidden ? "layout.show" : "layout.hide", { id: "work" })));
-    if (shared("fraim.today") === false) right.push(btn("fc-expand", "Activity", () => setTodayShown(true)));
     return v_flex().size_full().bg(C.bg)
       .child(header([status(a?.status === "working" ? "working" : a?.status === "blocked" ? "blocked" : "chief"),
         div().text_size(13).font_semibold().text_color(C.strong).child(chiefName())], right));
