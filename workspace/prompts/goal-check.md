@@ -6,7 +6,7 @@ The task it was given:
 
 The change to review: {{change}}
 
-1. Read the change itself. For a pull request use its full link with gh pr view, gh pr diff and gh pr checks.
+1. Read the change itself. For a pull request use its full link with gh pr view, gh pr diff and gh pr checks, one command per Bash call (no `cd`, `;` or `&&`: a chained command is refused).
 2. Compare the change with what the task asked. Do not rely on what the change's description claims.
 3. Fail it when any of these is true:
    - It does not do what the task asked, or only part of it.

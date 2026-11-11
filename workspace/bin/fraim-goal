@@ -293,6 +293,7 @@ launch() {
   local args=(env FRAIM_HEADLESS=1 "FRAIM_GOAL=$id" fraim-claude)
   if [ -n "$resume" ]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
   args+=(--permission-mode acceptEdits --allowedTools "$(tools)")
+  [ ! -d "${FRAIM_CODE_DIR:-$HOME/code}" ] || args+=(--add-dir "${FRAIM_CODE_DIR:-$HOME/code}")
   fraim-herdr trust "$dir" 2>>"$dir/log.txt" || true
   wait_for_room "$dir" || return 1
   fraim-herdr open "$id" goal "$dir" --label "sid=$sid" --label "title=$(head -1 "$dir/goal.md" | cut -c1-80)" \
@@ -355,7 +356,7 @@ independent_check() {
   (
     cd "$dir" || exit 1
     ${limit[@]+"${limit[@]}"} fraim-claude -p "$(fraim-prompt render goal-check --set "goal=$(cat goal.md)" --set "change=$change")" \
-      --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
+      --allowedTools "Read,Glob,Grep,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(head:*),Bash(tail:*),Bash(grep:*),mcp__github-mcp__pull_request_read" \
       ${dirs[@]+"${dirs[@]}"} --output-format text
   ) </dev/null > "$dir/check.out" 2>>"$dir/log.txt" &
   pid=$!

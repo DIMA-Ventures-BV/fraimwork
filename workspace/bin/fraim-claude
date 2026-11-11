@@ -77,14 +77,14 @@ fi
 # Runs nobody watches may not rewrite instructions or their own tool list with the edit tools.
 # A goal has a full shell and runs as the same Unix user, so this does not stop it (docs/prompts.md).
 if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
-  set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Write(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Write(~/fraim/leads/*/prompts/**),Edit(~/fraim/leads/*/tools),Write(~/fraim/leads/*/tools)"
-  set -- "$@" --disallowedTools "Edit(~/fraim/ui/**),Write(~/fraim/ui/**)"
-  set -- "$@" --disallowedTools "Edit(~/fraim/leads/*/budget),Write(~/fraim/leads/*/budget)"
-  set -- "$@" --disallowedTools "Edit(~/.config/fraim/authority/**),Write(~/.config/fraim/authority/**)"
+  set -- "$@" --disallowedTools "Edit(~/fraim/prompts/**),Edit(~/fraim/leads/*/prompts/**),Edit(~/fraim/leads/*/tools)"
+  set -- "$@" --disallowedTools "Edit(~/fraim/ui/**)"
+  set -- "$@" --disallowedTools "Edit(~/fraim/leads/*/budget)"
+  set -- "$@" --disallowedTools "Edit(~/.config/fraim/authority/**)"
   # The brief of the chat and contact agents goes into the owner's own chat, so no unattended
   # run may write it, also while its folder is gone.
   for who in "$(fraim-authority get chat --recorded 2>/dev/null)" "$(fraim-authority get contact --recorded 2>/dev/null)"; do
-    [ -z "$who" ] || set -- "$@" --disallowedTools "Edit(~/fraim/leads/$who/lead.md),Write(~/fraim/leads/$who/lead.md)"
+    [ -z "$who" ] || set -- "$@" --disallowedTools "Edit(~/fraim/leads/$who/lead.md)"
   done
 fi
 # fraim-config loads this machine's secrets (~/.config/fraim/secrets.env) when installed.

@@ -292,7 +292,7 @@ tools_for() {
     while IFS= read -r repo; do [ -z "$repo" ] || t+=("$repo"); done < <(fraim-auto sources --tools 2>/dev/null)
   fi
   while IFS= read -r repo; do
-    for verb in fetch log status diff show; do t+=("Bash(git -C $repo $verb:*)"); done
+    for verb in fetch log status diff show ls-tree rev-parse; do t+=("Bash(git -C $repo $verb:*)"); done
   done < <(lead_repos)
   if [ -f "$dir/tools" ]; then
     local extra
