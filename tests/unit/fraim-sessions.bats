@@ -41,12 +41,14 @@ EOF
   grep -q -- '--name s1 .*--label herdr.space=sp0123abcd' "$HC_FAKE/calls"
 }
 
-@test "with a linked Herdr app, main (the chief) opens in fraim's space there" {
+@test "main (the chief) is no tab in fraim's Herdr space: closing a tab there would end it" {
   mkdir -p "$HOME/.config/fraim"
   printf 'sp0123abcd\n' > "$HOME/.config/fraim/herdr-space"
   : > "$HOME/fraim/services"
   "$HERDR" up
-  grep -q -- '--name main .*--label herdr.space=sp0123abcd' "$HC_FAKE/calls"
+  grep -q -- '--name main ' "$HC_FAKE/calls"
+  run grep -q -- '--name main .*herdr.space' "$HC_FAKE/calls"
+  [ "$status" -ne 0 ]
 }
 
 @test "new refuses folders outside home and unknown repos" {

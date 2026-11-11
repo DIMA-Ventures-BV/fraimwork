@@ -270,12 +270,11 @@ function findNode(node, id) {
 }
 const chiefTerminal = () => terminals().find((t) => t.name === "main" && t.state === "live" && String(t.address ?? "").startsWith(`${machine()}/`));
 // Points the chief column at the live chief (its address changes when the server restarts
-// it), puts it back in the fraim space, and keeps its tab from being the shown one, so
-// closing a tab never ends the chief.
+// it). The chief is never a tab: closing a tab ends its terminal. A chief that still has one
+// (an older server labelled it into the space) loses the label and the tab, and keeps running.
 function keepChief() {
   const t = chiefTerminal();
-  const space = fraimSpace();
-  if (!t || !space) return;
+  if (!t) return;
   const tree = layout();
   const node = findNode(tree, "chief-term");
   if (node && node.content?.terminal !== t.address) {
@@ -283,23 +282,15 @@ function keepChief() {
     findNode(copy, "chief-term").content = { terminal: t.address };
     run("layout.set", { layout: copy });
   }
-  const inSpace = agents().some((a) => a.address === t.address);
-  if (!inSpace && !shared("fraim.labeling")) {
-    setShared("fraim.labeling", true);
-    hc(["label", t.address, `herdr.space=${space.id.replace(/^[^/]+\//, "")}`]).finally(() => setShared("fraim.labeling", false));
+  if (agents().some((a) => a.address === t.address) && shared("fraim.parked") !== t.address) {
+    setShared("fraim.parked", t.address);
+    hc(["label", t.address, "herdr.space="]).finally(() => run("terminal.park", { terminal: t.address }));
   }
-  const chiefTab = agents().find((a) => a.address === t.address)?.tab;
-  const active = space.tabs.find((x) => x.active);
-  if (chiefTab && active?.id === chiefTab) {
-    const other = space.tabs.find((x) => x.id !== chiefTab);
-    if (other) run("tab.select", { id: other.id });
-    else run("tab.new", { space: space.id, name: "Team", mod: "fraim", props: { role: "team" } });
-  }
-  if (chiefTab && !space.tabs.find((x) => x.id === chiefTab)?.settled) run("tab.settle", { id: chiefTab });
-  // Its tab is a stand-in (the chief shows in its own column); say so where Herdr lists tabs.
-  const label = `${chiefName()} (left column)`;
-  if (chiefTab && space.tabs.find((x) => x.id === chiefTab)?.name !== label) run("tab.rename", { id: chiefTab, name: label });
 }
+const chiefStatus = () => {
+  const s = chiefTerminal()?.status;
+  return typeof s === "string" ? s : s?.state ?? "";
+};
 function setTodayShown(shown) {
   run(shown ? "layout.show" : "layout.hide", { id: "today" });
   setShared("fraim.today", shown);
@@ -393,7 +384,7 @@ export default class FraimChat extends View {
     const d = data();
     const s = sel();
     const all = live();
-    const main = all.find((a) => a.tname === "main");
+    const main = { status: chiefStatus() };
     const others = all.filter((a) => a.tname !== "main");
     const team = d.leads.filter((l) => l.name !== "chief");
     const boards = d.boards ?? [];
@@ -471,7 +462,7 @@ export default class FraimChat extends View {
   // The header over the chief's own column: always there.
   chiefHead() {
     const t = chiefTerminal();
-    const a = t ? agents().find((x) => x.address === t.address) : null;
+    const a = t ? { status: chiefStatus() } : null;
     const state = !t ? "Restarting..." : a?.status === "working" ? "Thinking" : a?.status === "blocked" ? "Waiting for you" : "Same chief as on WhatsApp";
     const right = [div().text_size(11).text_color(C.faint).child(state)];
     const workHidden = !!findNode(layout(), "work")?.hidden;
