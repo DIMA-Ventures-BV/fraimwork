@@ -94,6 +94,50 @@ FAKE
   grep -q '"Looking."' "$log.jsonl"
 }
 
+herdr_fake() {
+  export HC_FAKE="$T/hc" FRAIM_LEAD_TERMINAL=1
+  cp "$BATS_TEST_DIRNAME/fakes/hc" "$T/bin/hc"
+  chmod +x "$T/bin/hc"
+}
+
+@test "with herdr, a run is a terminal the owner can watch: unattended, its tools, closed after" {
+  fraim-lead new web
+  herdr_fake
+  mkdir -p "$HOME/.config/fraim"
+  printf 'sp0123abcd\n' > "$HOME/.config/fraim/herdr-space"
+  FAKE_RUN_REPLY="Found nothing new." run fraim-lead run web
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Found nothing new."* ]]
+  argv="$HC_FAKE/lead-web.argv"
+  grep -qx -- '--fraim-unattended' "$argv"
+  grep -qx -- '--session-id' "$argv"
+  grep -qx 'FRAIM_LEAD_NAME=web' "$argv"
+  # The task comes before the tool list: a word after --allowedTools would become a tool.
+  task_line="$(grep -n -x -- '--session-id' "$argv" | cut -d: -f1)"
+  tools_line="$(grep -n -x -- '--allowedTools' "$argv" | cut -d: -f1)"
+  [ "$tools_line" -gt "$(( task_line + 2 ))" ]
+  grep -q -- '--label fraim=lead' "$HC_FAKE/calls"
+  grep -q -- '--label herdr.space=sp0123abcd' "$HC_FAKE/calls"
+  grep -q -- "--cwd $FRAIM_LEADS_DIR/web" "$HC_FAKE/calls"
+  [ ! -f "$HC_FAKE/t-lead-web.json" ]
+  grep -q '^ok ' "$FRAIM_LEADS_DIR/web/last"
+  log="$(ls "$FRAIM_LEADS_DIR"/web/runs/*.md)"
+  grep -qx 'Found nothing new.' "$log"
+  grep -q '"Found nothing new."' "$log.jsonl"
+  [ ! -e "$FRAIM_LEADS_DIR/web/.running" ]
+}
+
+@test "with herdr, no free memory skips the run and keeps the notes" {
+  fraim-lead new web
+  herdr_fake
+  fraim-lead tell web -- "check the login page"
+  FAKE_RUN_EXIT=75 run fraim-lead run web
+  [ "$status" -eq 75 ]
+  grep -q '^skipped ' "$FRAIM_LEADS_DIR/web/last"
+  grep -q 'check the login page' "$FRAIM_LEADS_DIR/web/inbox.md"
+  [ ! -f "$HC_FAKE/t-lead-web.json" ]
+}
+
 @test "a run whose result is an error fails" {
   fraim-lead new web
   cat > "$T/bin/fraim-claude" <<'FAKE'

@@ -24,6 +24,10 @@
 #   fraim-herdr trust DIR        mark a folder trusted for Claude Code (atomic ~/.claude.json write)
 #   fraim-herdr redact           hide tokens and keys in stdin
 #   fraim-herdr last-text ADDR   the last thing Claude said in that terminal (from its transcript)
+#   fraim-herdr last-text --session ID   the same, by Claude's session id
+#   fraim-herdr transcript ID    the path of Claude's transcript for that session id
+#   fraim-herdr space            the Herdr app space for fraim's agents, when a laptop linked one
+#                                (`fraim herdr link` writes ~/.config/fraim/herdr-space)
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -uo pipefail
 
@@ -71,18 +75,52 @@ in_workspace() { [ "${FRAIM_ROLE:-workspace}" = workspace ]; }
 # Reading (ls, get, read, wait, events) stays open.
 headless_allows() {
   [ "${FRAIM_HEADLESS:-}" = 1 ] || return 0
-  local sub="$1" target=""; shift
+  local sub="$1" target="" program=(); shift
   case "$sub" in
     ls|get|read|wait|events|schema|templates|--version|-V) return 0 ;;
     run)
       while [ $# -gt 0 ]; do
-        case "$1" in --name) target="${2:-}"; break ;; --) break ;; esac
+        case "$1" in
+          --name) target="${2:-}"; shift 2; continue ;;
+          --) shift; program=("$@"); break ;;
+        esac
         shift
       done ;;
     send|keys|kill|rm|interrupt|put|label|keep|attach)
       for a in "$@"; do case "$a" in -*) ;; *) target="$a"; break ;; esac; done ;;
   esac
-  printf '%s' "$target" | grep -Eq '^g[0-9]{1,6}$'
+  case "$target" in
+    lead-*) lead_run_allowed "$sub" "$target" ${program[@]+"${program[@]}"} ;;
+    *) printf '%s' "$target" | grep -Eq '^g[0-9]{1,6}$' ;;
+  esac
+}
+
+# The terminal of a lead's run (fraim-lead run) is started, ended and removed only by that
+# lead's own runner, never typed into. It may run nothing but unattended Claude with a tool
+# list, so the name is no way to a shell without the owner's yes.
+lead_term_of() {
+  local term="lead-$1"
+  [ "${#term}" -le 32 ] || term="lead-${1:0:20}-$(printf '%s' "$1" | cksum | cut -c1-6)"
+  printf '%s' "$term"
+}
+lead_run_allowed() {
+  local sub="$1" target="$2"; shift 2
+  [ -n "${FRAIM_LEAD_NAME:-}" ] && [ "$target" = "$(lead_term_of "$FRAIM_LEAD_NAME")" ] || return 1
+  case "$sub" in
+    kill|rm) return 0 ;;
+    run) ;;
+    *) return 1 ;;
+  esac
+  [ "${1:-}" = env ] && shift
+  # Only what fraim-lead passes: FRAIM_TOOL_LISTS=open or FRAIM_PERMISSIONS=ask would lift the list.
+  while [ $# -gt 0 ] && [[ "$1" =~ ^FRAIM_(LEAD_NAME|THREAD|BUILDS_OFF)= ]]; do shift; done
+  [ "${1:-}" = fraim-claude ] && [ "${2:-}" = --fraim-unattended ] || return 1
+  local a
+  for a in "$@"; do
+    case "$a" in --dangerously-skip-permissions|--permission-mode|--fraim-unattended=*) return 1 ;; esac
+  done
+  for a in "$@"; do [ "$a" != --allowedTools ] || return 0; done
+  return 1
 }
 
 hcx() {
@@ -140,6 +178,13 @@ open_term() {
   local name="$1" kind="$2" cwd="$3" labels=(); shift 3
   while [ "${1:-}" = --label ]; do labels+=(--label "$2"); shift 2; done
   [ "${1:-}" != -- ] || shift
+  # With a linked Herdr app (fraim herdr link), goals and coding sessions show in fraim's space there.
+  case "$kind" in
+    goal|session)
+      local space
+      space="$(cmd_space)"
+      [ -z "$space" ] || labels+=(--label "herdr.space=$space") ;;
+  esac
   local run=(hc run --bg --name "$name" --cwd "$cwd" --label "fraim=$kind" ${labels[@]+"${labels[@]}"} --no-parent --no-notify)
   [ $# -eq 0 ] || run+=(-- "$@")
   hc rm "$name" >/dev/null 2>&1 || true
@@ -300,11 +345,16 @@ cmd_ls() {
   jq -r --arg h "$HOME/" '.[] | "\(.name)\t\(.kind)\t\(.status)\t\(.cwd | if startswith($h) then "~/" + .[($h | length):] else . end)\(if .question != "" then "\t" + .question else "" end)"' <<<"$json"
 }
 
+transcript_file() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]{1,64}$' || return 0
+  find "$HOME/.claude/projects" -maxdepth 2 -name "$1.jsonl" 2>/dev/null | head -1
+}
+
 # Claude Code's transcript for a session id: the last text it wrote (empty when none yet).
 transcript_text() {
   local sid="$1" file
   [ -n "$sid" ] || return 0
-  file="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+  file="$(transcript_file "$sid")"
   [ -n "$file" ] || return 0
   jq -rs '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | last // ""' "$file" 2>/dev/null
 }
@@ -321,8 +371,16 @@ cmd_busy() {
   hc exec ps -o comm= --ppid "$pid" 2>/dev/null | grep -qxE 'bash|sh|dash|zsh'
 }
 
+cmd_space() {
+  local id
+  id="$(head -1 "${FRAIM_HERDR_SPACE_FILE:-$HOME/.config/fraim/herdr-space}" 2>/dev/null | tr -d '[:space:]')"
+  printf '%s' "$id" | grep -Eq '^sp[0-9a-f]{8,64}$' || return 0
+  printf '%s\n' "$id"
+}
+
 # Goals and sessions carry Claude's session id as label sid (fraim-goal, fraim-sessions).
 cmd_last_text() {
+  [ "$1" != --session ] || { transcript_text "${2:-}"; return; }
   transcript_text "$(hc get "$1" --json 2>/dev/null | jq -r '.labels.sid // ""')"
 }
 
@@ -350,7 +408,8 @@ cmd_watch() {
     rec="$(hc get "$addr" --json 2>/dev/null)" || continue
     name="$(jq -r '.name // .address' <<<"$rec")"
     kind="$(jq -r '.labels.fraim // ""' <<<"$rec")"
-    [ -n "$kind" ] && [ "$kind" != service ] || continue
+    # A lead's run ends itself on a question or an error, and its runner tells the owner.
+    [ -n "$kind" ] && [ "$kind" != service ] && [ "$kind" != lead ] || continue
     case "$state" in
       blocked)
         msg="$(jq -r '.params.data.status.msg // ""' <<<"$line")"
@@ -397,7 +456,10 @@ case "$action" in
   confirm-channel) cmd_confirm_channel "${1:-}" ;;
   heal) cmd_heal ;;
   status) [ $# -eq 1 ] || usage "status NAME"; status_of "$1" ;;
-  last-text) [ $# -eq 1 ] || usage "last-text NAME"; cmd_last_text "$1" ;;
+  last-text) [ $# -ge 1 ] || usage "last-text NAME | last-text --session ID"; cmd_last_text "$@" ;;
+  transcript) [ $# -eq 1 ] || usage "transcript ID"; transcript_file "$1" ;;
+  space) cmd_space ;;
+  lead-term) [ $# -eq 1 ] || usage "lead-term NAME"; lead_term_of "$1" ;;
   busy) [ $# -eq 1 ] || usage "busy NAME"; cmd_busy "$1" ;;
-  *) usage "supervise | up | alive | hc ARGS | ls [--json] | attach [NAME] | watch | status NAME | last-text NAME" ;;
+  *) usage "supervise | up | alive | hc ARGS | ls [--json] | attach [NAME] | watch | status NAME | last-text NAME | last-text --session ID | transcript ID | space | lead-term NAME" ;;
 esac
