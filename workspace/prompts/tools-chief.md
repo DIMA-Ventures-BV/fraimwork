@@ -1,6 +1,5 @@
 {{! One tool rule per line. Lines that start with # are skipped. File rules are written as Edit(path). }}
 Bash(fraim-goal start --lead {{name}} --approved-by:*)
-Bash(fraim-goal send:*)
 Bash(fraim-queue solved:*)
 Bash(fraim-queue thread close:*)
 Bash(fraim-queue thread ignore:*)

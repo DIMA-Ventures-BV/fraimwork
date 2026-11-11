@@ -191,7 +191,7 @@ EOF
   PATH="$T/fc:$T/bin:$BIN:/usr/bin:/bin" run "$T/fc/fraim-claude" -p hi
   [[ "$output" == *'Edit(~/fraim/leads/*/budget)'* ]]
   [[ "$output" == *'Edit(~/fraim/leads/winston/lead.md)'* ]]
-  [[ "$output" == *'Write(~/fraim/leads/winston/lead.md)'* ]]
+  [[ "$output" != *'Write(~/fraim/leads/winston/lead.md)'* ]]
 }
 
 @test "the owner's chat is not limited by those rules" {
