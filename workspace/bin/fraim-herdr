@@ -178,10 +178,11 @@ open_term() {
   local name="$1" kind="$2" cwd="$3" labels=(); shift 3
   while [ "${1:-}" = --label ]; do labels+=(--label "$2"); shift 2; done
   [ "${1:-}" != -- ] || shift
-  # With a linked Herdr app (fraim herdr link), main (the chief), goals and coding sessions
-  # show in fraim's space there, also after a restart.
+  # With a linked Herdr app (fraim herdr link), goals and coding sessions show in fraim's
+  # space there. main (the chief) does not: fraim's layout shows it in its own column, and as
+  # a tab it could be closed, which ends it.
   case "$kind" in
-    main|goal|session)
+    goal|session)
       local space
       space="$(cmd_space)"
       [ -z "$space" ] || labels+=(--label "herdr.space=$space") ;;
