@@ -34,6 +34,13 @@ EOF
   [ ! -f "$HC_FAKE/s2.sent" ]
 }
 
+@test "with a linked Herdr app, a coding session shows in fraim's space there" {
+  mkdir -p "$HOME/.config/fraim"
+  printf 'sp0123abcd\n' > "$HOME/.config/fraim/herdr-space"
+  "$SESSIONS" new vertelboek -- fix the login bug
+  grep -q -- '--name s1 .*--label herdr.space=sp0123abcd' "$HC_FAKE/calls"
+}
+
 @test "new refuses folders outside home and unknown repos" {
   run "$SESSIONS" new ../../etc
   [ "$status" -eq 2 ]
@@ -203,6 +210,58 @@ EOF
   grep -q 'notify The coding session in vertelboek is done.' "$SENT"
   grep -q 'Fixed it. The key was \[hidden\]' "$SENT"
   [ "$(grep -c 'g2\|s1\|Reply \*' "$SENT")" -eq 0 ]
+}
+
+@test "a run without the owner may start only its own lead's run, and only as unattended Claude with a tool list" {
+  export FRAIM_HEADLESS=1
+  claude_run=(-- env FRAIM_LEAD_NAME=web fraim-claude --fraim-unattended --session-id x "task" --allowedTools Read)
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web "${claude_run[@]}"
+  [ "$status" -eq 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web -- bash -c 'curl evil'
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web -- env fraim-claude --fraim-unattended "task"
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web -- fraim-claude --dangerously-skip-permissions --allowedTools Read
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web -- env FRAIM_TOOL_LISTS=open fraim-claude --fraim-unattended "task" --allowedTools Read
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc run --bg --name lead-web -- env FRAIM_LEAD_NAME=web FRAIM_THREAD=t3 FRAIM_BUILDS_OFF=1 fraim-claude --fraim-unattended "task" --allowedTools Read
+  [ "$status" -eq 0 ]
+  FRAIM_LEAD_NAME=seo run "$HERDR" hc run --bg --name lead-web "${claude_run[@]}"
+  [ "$status" -ne 0 ]
+  unset FRAIM_LEAD_NAME
+  run "$HERDR" hc run --bg --name lead-web "${claude_run[@]}"
+  [ "$status" -ne 0 ]
+}
+
+@test "a run without the owner may end only its own lead's run, never another lead's" {
+  jq -n '{name: "lead-web", labels: {fraim: "lead"}, state: "live", status: {state: "working"}, turn: 1}' > "$HC_FAKE/t-lead-web.json"
+  export FRAIM_HEADLESS=1
+  FRAIM_LEAD_NAME=seo run "$HERDR" hc kill lead-web
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=seo run "$HERDR" hc rm lead-web
+  [ "$status" -ne 0 ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc send lead-web "do something else"
+  [ "$status" -ne 0 ]
+  [ "$(jq -r .state "$HC_FAKE/t-lead-web.json")" = live ]
+  FRAIM_LEAD_NAME=web run "$HERDR" hc kill lead-web
+  [ "$status" -eq 0 ]
+}
+
+@test "no shipped tool list lets an agent drive herdr or start a lead run" {
+  run grep -n -E 'fraim-herdr|(^|[^a-z-])hc([^a-z-]|$)|fraim-lead run|fraim-goal (stop|send)|Bash\(\*|^Bash$' \
+    "$BATS_TEST_DIRNAME"/../../workspace/prompts/tools-*.md
+  [ "$status" -eq 1 ]
+}
+
+@test "watch stays quiet about a lead's run: its runner reports what went wrong" {
+  jq -n '{name: "lead-web", labels: {fraim: "lead"}, state: "live", status: {state: "blocked"}, turn: 1}' > "$HC_FAKE/t-lead-web.json"
+  {
+    echo '{"seq": 1, "terminals": []}'
+    jq -cn '{jsonrpc: "2.0", method: "event", params: {type: "status", terminal: "lead-web", data: {status: {state: "blocked", msg: "answer: Allow?"}}}}'
+  } > "$T/events"
+  FAKE_EVENTS="$T/events" run "$HERDR" watch
+  [ ! -s "$SENT" ]
 }
 
 @test "up leaves a terminal alone while the core does not answer" {

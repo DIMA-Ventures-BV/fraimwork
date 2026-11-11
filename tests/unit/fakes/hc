@@ -51,6 +51,16 @@ case "$cmd" in
     printf '%s\n' "$@" > "$d/$name.argv"
     jq -n --arg n "$name" --arg c "$cwd" --argjson l "$labels" \
       '{address: $n, name: $n, cwd: $c, labels: $l, state: "live", status: {app: "claude-code", state: "idle"}, turn: 0, foreground: {pid: 4242}}' > "$(file "$name")"
+    # FAKE_RUN_REPLY: Claude answers the task it was started with (its first turn ends done).
+    # FAKE_RUN_EXIT: the program exits at once with this code (75: no free memory).
+    if [ -n "${FAKE_RUN_EXIT:-}" ]; then
+      set_field "$name" ".state = \"finished\" | .status = null | .exit_code = ${FAKE_RUN_EXIT}"
+    elif [ -n "${FAKE_RUN_REPLY:-}" ]; then
+      sid="$(grep -A1 -E '^--session-id$' "$d/$name.argv" | tail -1)"
+      mkdir -p "$HOME/.claude/projects/-fake"
+      jq -cn --arg t "$FAKE_RUN_REPLY" '{type: "assistant", message: {content: [{type: "text", text: $t}]}}' >> "$HOME/.claude/projects/-fake/$sid.jsonl"
+      set_field "$name" '.turn = 1 | .status.state = "done"'
+    fi
     jq -c '{address, name, state}' "$(file "$name")" ;;
   get)
     # $HC_FAKE/get-fail holds a count: that many gets fail with exit 1 (a busy core).

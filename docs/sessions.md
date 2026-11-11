@@ -55,8 +55,36 @@ The owner gets a WhatsApp message, written by the chief of staff in plain words 
   `blocked` (a question or permission, with the question in `msg`), `error`. fraim never reads
   the screen to guess a status. `fraim-herdr watch` follows `hc events` and sends the WhatsApp
   messages above.
-- **Labels.** Each terminal has `fraim=main|goal|session|service|shell`; `fraim-herdr ls` shows
-  the ones that are not services.
+- **Labels.** Each terminal has `fraim=main|goal|session|lead|service|shell`; `fraim-herdr ls`
+  shows main, goals, sessions and shells (a lead's run shows on the queue page instead).
+
+### Watch them in the Herdr app
+
+`fraim herdr link` on the laptop installs the [Herdr app](https://herdr.dev) when it is missing,
+adds the server as Herdr machine `fraim` (SSH to `claude@` on the workspace port, with fraim's
+key and known_hosts), makes one Herdr space `fraim` there, and writes its id to
+`~/.config/fraim/herdr-space` on the server. From then on every lead run, goal and coding
+session gets the label `herdr.space=<id>`, so it appears in that space by itself, with Herdr's
+own working, done and needs-you status. `fraim herdr unlink` removes both. The laptop reaches the
+server, never the reverse. A linked laptop is a shell as user claude: herdr-core has no
+permissions per client, so only the owner links.
+
+### Lead runs
+
+A lead's scheduled run (the chief's too) is a terminal `lead-NAME` when the core answers, and
+`fraim-claude -p` as before when it does not (`FRAIM_LEAD_TERMINAL=0` forces that). The run:
+
+1. opens the terminal in the lead's own folder (main's `claude --continue` must never pick it up)
+   with `fraim-claude --fraim-unattended --session-id SID "PROMPT" --allowedTools TOOLS`. The
+   flag marks it `FRAIM_HEADLESS=1` and runs it in `dontAsk`, so a tool that is not on its list
+   is refused, as in a `-p` run. The task comes before `--allowedTools`: that option takes every
+   word after it, so a task after it would add the tools it names.
+2. waits for the turn to end (`done`), `FRAIM_LEAD_TIMEOUT` at most (default 1800 seconds);
+3. takes the answer from the transcript, which is also the run's live log on the queue page,
+   then closes the terminal, so it holds no memory after.
+
+The scheduler starts each lead itself, never as the chief's child: a child ends with its
+parent, and a lead must run without a chief. The lead's notes, budget and tools work as before.
 
 ### Goals
 
@@ -118,7 +146,8 @@ opens terminal `sN` with `fraim-claude --session-id SID`, and sends the task.
 These sessions are the owner's own: `FRAIM_HEADLESS` is not set in them. So a run without the
 owner (a goal, lead or automation, which has `FRAIM_HEADLESS=1`) may not start, steer or stop
 one, and `fraim-herdr hc` lets it drive only goals (`gN`), never main or a session; reading
-stays open. Otherwise a goal that read a hostile page could have a session approve its own
+stays open. It may also start, end and remove a lead's run terminal (`lead-NAME`), never type
+into one. Otherwise a goal that read a hostile page could have a session approve its own
 work. Like every `FRAIM_HEADLESS` check this is a guard for Claude's own tools, not a sandbox:
 a run with Bash could still call `hc` directly. The text of a finished session's last message
 is shortened and tokens or keys in it are hidden (`fraim-herdr redact`) before it goes to
@@ -133,5 +162,5 @@ WhatsApp. A new session opens only when the server has memory for one more Claud
   reopened with `send`.
 - Memory: on a 4 GB server two extra Claude sessions leave about 850 MB; fraim-michael runs on 8 GB (CX33) since 2026-11-09.
 - herdr-core is pre-1.0 (protocol generation 1). fraim pins the version and uses only the CLI.
-- The core trusts every process of user claude (no separate API password), as tmux did.
+- The core trusts every process of user claude (no separate API password).
 - Phone access is WhatsApp and the Claude app for main; there is no terminal on the phone.

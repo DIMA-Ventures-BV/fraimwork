@@ -323,6 +323,79 @@ lead_message() {
   printf '\nAnswer here: %s' "$(fraim-queue url 2>/dev/null)"
 }
 
+# With herdr answering, a run is a terminal the owner can watch in the Herdr app (docs/sessions.md).
+# FRAIM_LEAD_TERMINAL=0 keeps every run headless (-p); 1 needs no check (the tests).
+use_terminal() {
+  case "${FRAIM_LEAD_TERMINAL:-auto}" in
+    0) return 1 ;;
+    1) return 0 ;;
+  esac
+  fraim-herdr alive
+}
+
+lead_term() { fraim-herdr lead-term "$1"; }
+
+# The run in a terminal: the same prompt and tool list as -p, marked unattended (fraim-claude).
+# It works in the lead's folder, because main's `claude --continue` in ~/fraim must never pick
+# up a lead's conversation. Its turn ends done; then the terminal closes, so it holds no memory.
+# Sets code and output for cmd_run, and links the transcript as the live log.
+run_terminal() {
+  local name="$1" dir="$2" prompt="$3" tools="$4" term sid space rec state status turn file="" start=$SECONDS
+  local hc=(fraim-herdr hc) envs=(env "FRAIM_LEAD_NAME=$name") labels=(--label fraim=lead)
+  term="$(lead_term "$name")"
+  sid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+  [ -z "${FRAIM_THREAD:-}" ] || envs+=("FRAIM_THREAD=$FRAIM_THREAD")
+  [ -z "${FRAIM_BUILDS_OFF:-}" ] || envs+=("FRAIM_BUILDS_OFF=$FRAIM_BUILDS_OFF")
+  space="$(fraim-herdr space 2>/dev/null)"
+  [ -z "$space" ] || labels+=(--label "herdr.space=$space")
+  fraim-herdr trust "$dir" 2>/dev/null || true
+  "${hc[@]}" rm "$term" >/dev/null 2>&1 || true
+  # The task comes before --allowedTools: words after it would become allowed tools.
+  if ! "${hc[@]}" run --bg --name "$term" --cwd "$dir" "${labels[@]}" --no-parent --no-notify -- \
+      "${envs[@]}" fraim-claude --fraim-unattended --session-id "$sid" "$prompt" \
+      --allowedTools "$tools" --disallowedTools mcp__whatsapp --add-dir "$HOME/fraim" ${dirs[@]+"${dirs[@]}"} \
+      >/dev/null 2>"$log.err"; then
+    code=1 output=""
+    return
+  fi
+  code=""
+  while [ -z "$code" ]; do
+    rec="$("${hc[@]}" get "$term" --json 2>/dev/null)" || rec='{}'
+    if [ -z "$file" ]; then
+      file="$(fraim-herdr transcript "$sid")"
+      [ -z "$file" ] || ln -sfn "$file" "$live"
+    fi
+    state="$(jq -r '.state // ""' <<<"$rec" 2>/dev/null)"
+    status="$(jq -r '.status.state // ""' <<<"$rec" 2>/dev/null)"
+    turn="$(jq -r '.turn // 0' <<<"$rec" 2>/dev/null)"
+    if [ "$state" = finished ]; then
+      code="$(jq -r '.exit_code // 1' <<<"$rec")"
+      [ "$code" != 0 ] || [ "${turn:-0}" -ge 1 ] || code=1
+    elif [ "${turn:-0}" -ge 1 ] && [[ "$status" =~ ^(done|idle)$ ]]; then
+      code=0
+    elif [ "$status" = blocked ] || [ "$status" = error ]; then
+      code=1
+    elif [ $(( SECONDS - start )) -ge "${FRAIM_LEAD_TIMEOUT:-1800}" ]; then
+      code=124
+    elif [ "$status" = working ]; then
+      "${hc[@]}" wait "$term" --timeout 60 >/dev/null 2>&1 || sleep 2
+    else
+      sleep 2
+    fi
+  done
+  [ -n "$file" ] || file="$(fraim-herdr transcript "$sid")"
+  [ -z "$file" ] || ln -sfn "$file" "$live"
+  output="$(fraim-herdr last-text --session "$sid")"
+  # A usage limit or a lost sign-in ends the turn with an error message, not an answer.
+  if [ "$code" = 0 ] && [ -n "$file" ] \
+    && jq -se '[.[] | select(.type == "assistant")] | last | .isApiErrorMessage == true' "$file" >/dev/null 2>&1; then
+    code=1
+  fi
+  [ "$code" = 0 ] || "${hc[@]}" read "$term" --lines 40 >> "$log.err" 2>/dev/null || true
+  "${hc[@]}" kill "$term" >/dev/null 2>&1 || true
+  "${hc[@]}" rm "$term" >/dev/null 2>&1 || true
+}
+
 cmd_run() {
   local name="$1" dir direct=0 log output code before after new started=0
   dir="$(lead_dir "$name")" || exit $?
@@ -367,17 +440,23 @@ cmd_run() {
   export FRAIM_LEAD_NAME="$name"
   # stream-json writes each step as it happens, so the queue page shows what the run does now
   # (.running/live.jsonl). The answer is the last "result" line; plain text is kept as it is.
-  local live="$dir/.running/live.jsonl"
-  "${limit[@]}" fraim-claude -p "$(prompt_for "$name" "$dir"; fraim-prompt render talk-rules --lead "$name")" --allowedTools "$(tools_for "$name" "$dir")" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
-    --output-format stream-json --verbose > "$live" 2>"$log.err"
-  code=$?
-  if grep -q '"type":"result"' "$live" 2>/dev/null; then
-    output="$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .result // empty' "$live" 2>/dev/null)"
-    if [ "$code" -eq 0 ] && [ "$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .is_error // false' "$live" 2>/dev/null)" = true ]; then
-      code=1
-    fi
+  local live="$dir/.running/live.jsonl" prompt tools
+  prompt="$(prompt_for "$name" "$dir"; fraim-prompt render talk-rules --lead "$name")"
+  tools="$(tools_for "$name" "$dir")"
+  if use_terminal; then
+    run_terminal "$name" "$dir" "$prompt" "$tools"
   else
-    output="$(cat "$live" 2>/dev/null)"
+    "${limit[@]}" fraim-claude -p "$prompt" --allowedTools "$tools" --disallowedTools mcp__whatsapp ${dirs[@]+"${dirs[@]}"} \
+      --output-format stream-json --verbose > "$live" 2>"$log.err"
+    code=$?
+    if grep -q '"type":"result"' "$live" 2>/dev/null; then
+      output="$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .result // empty' "$live" 2>/dev/null)"
+      if [ "$code" -eq 0 ] && [ "$(jq -rs 'map(select(type == "object" and .type == "result")) | last | .is_error // false' "$live" 2>/dev/null)" = true ]; then
+        code=1
+      fi
+    else
+      output="$(cat "$live" 2>/dev/null)"
+    fi
   fi
   printf '%s\n' "$output" > "$log"
   cp "$live" "$log.jsonl" 2>/dev/null || true

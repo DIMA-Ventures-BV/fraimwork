@@ -25,16 +25,22 @@ fi
 # that only the owner may run (queue decisions, brain changes) check this and refuse.
 # The exception is the owner's own message in the app (fraim-relay chat): the owner is the one
 # asking, as on WhatsApp. It covers this run only, so nothing this run starts inherits it.
+# --fraim-unattended is the same kind of run in a herdr terminal (a lead's scheduled run, which
+# the owner can watch in the Herdr app): marked headless, its tool list enforced.
 headless_run=""
 owner_chat="${FRAIM_OWNER_CHAT:-}"
 unset FRAIM_OWNER_CHAT
 tool_list=""
+args=()
 for arg in "$@"; do
   case "$arg" in
+    --fraim-unattended) headless_run=1; export FRAIM_HEADLESS=1; continue ;;
     -p|--print) headless_run=1; [ "$owner_chat" = 1 ] || export FRAIM_HEADLESS=1 ;;
     --allowedTools|--allowed-tools) tool_list=1 ;;
   esac
+  args+=("$arg")
 done
+set -- ${args[@]+"${args[@]}"}
 # A run nobody watches (automations, leads, the brain) waits for free memory, at most
 # FRAIM_CAPACITY_WAIT seconds (default 300, shorter than its caller's own time limit), instead
 # of starting a Claude the server cannot hold (fraim-capacity). Exit 75 means "not started":

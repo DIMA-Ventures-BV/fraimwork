@@ -970,6 +970,7 @@ main() {
     host) load_group host; cmd_host "$@" ;;
     connect) load_group connect; cmd_connect "$@" ;;
     tool) load_group tool; cmd_tool "$@" ;;
+    herdr) load_group herdr; cmd_herdr "$@" ;;
     mirror) load_group mirror; cmd_mirror "$@" ;;
     invite) load_group invite; cmd_invite "$@" ;;
     attach) load_group invite; cmd_attach "$@" ;;

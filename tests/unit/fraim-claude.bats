@@ -97,6 +97,22 @@ setup() {
   [ "${lines[0]}" = "-p" ]
 }
 
+@test "an unattended run in a terminal is marked and gets only its tools, like a -p run" {
+  [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
+  unset FRAIM_HEADLESS
+  run fraim-claude --fraim-unattended "hi" --allowedTools "Read"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "--permission-mode" ]
+  [ "${lines[1]}" = "dontAsk" ]
+  [ "${lines[2]}" = "hi" ]
+  [[ "$output" != *"--fraim-unattended"* ]]
+  [[ "$output" != *"--dangerously-skip-permissions"* ]]
+  [[ "$output" == *"Edit(~/fraim/prompts/**)"* ]]
+  printf '#!/usr/bin/env bash\necho "headless=${FRAIM_HEADLESS:-0}"\n' > "$T/bin/claude"
+  run fraim-claude --fraim-unattended "hi" --allowedTools "Read"
+  [ "$output" = "headless=1" ]
+}
+
 @test "the guard is a hook for every Claude, and a run nobody watches may not edit its own tool list" {
   [ -r /etc/fraim/runtime.env ] && skip "this machine has a real runtime.env"
   jq -e '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command == "/usr/local/bin/fraim-guard"' "$BATS_TEST_DIRNAME/../../workspace/managed-settings.json"

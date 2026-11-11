@@ -45,6 +45,8 @@ Operate
   fraim ask "PROMPT" [--allow TOOLS] [--json]  one-off claude -p run on the server
   fraim goal "TASK" | list | show ID | stop ID  background task on the server; result on WhatsApp
   fraim goal send ID "MSG" | read ID | attach ID   talk to a live goal, see its screen, take it over
+  fraim herdr link | unlink                  show the server's leads, goals and coding sessions live in
+                                             the Herdr app on this computer (installs it when missing)
   fraim session [list | all | new REPO ["TASK"] | send ID "MSG" | read ID | attach ID | stop ID]
                                              coding sessions on the server (s1, s2, ...) that keep
                                              working with the laptop closed; all = every session

@@ -63,6 +63,18 @@ wait_gone() {
   grep -q 'second goal' "$HC_FAKE/g2.sent"
 }
 
+@test "with a linked Herdr app, a goal shows in fraim's space there; without one it has no space" {
+  "$GOAL" start -- "first"
+  wait_state g1 done
+  run grep -q 'herdr.space' "$HC_FAKE/calls"
+  [ "$status" -eq 1 ]
+  mkdir -p "$HOME/.config/fraim"
+  printf 'sp0123abcd\n' > "$HOME/.config/fraim/herdr-space"
+  "$GOAL" start -- "second"
+  wait_state g2 done
+  grep -q -- '--name g2 .*--label herdr.space=sp0123abcd' "$HC_FAKE/calls"
+}
+
 @test "the terminal runs headless Claude with acceptEdits, the tools and its own session id" {
   "$GOAL" start -- 'text with $(danger) and "quotes"'
   wait_state g1 done
