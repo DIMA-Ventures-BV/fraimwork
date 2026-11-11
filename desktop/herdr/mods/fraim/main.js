@@ -26,7 +26,8 @@ const SCRIPT = `for d in "$HOME"/fraim/leads/*/; do
   n="$(basename "$d")"
   disp="$(sed -n 's/^display:[[:space:]]*//p' "$d/lead.md" | head -1)"
   area="$(awk '/^## Area/{f=1;next} f&&NF{print;exit}' "$d/lead.md" | cut -c1-300)"
-  printf 'L\\t%s\\t%s\\t%s\\n' "$n" "$disp" "$area"
+  team="$(sed -n 's/^team:[[:space:]]*//p' "$d/lead.md" | head -1)"
+  printf 'L\\t%s\\t%s\\t%s\\t%s\\n' "$n" "$disp" "$area" "$team"
   for f in $(ls -1 "$d"/runs/*.md 2>/dev/null | tail -3); do
     text="$(sed -n '1,/^---/p' "$f" | grep -v '^---' | tr '\\n\\t' '  ' | sed 's/  */ /g' | cut -c1-600)"
     printf 'R\\t%s\\t%s\\t%s\\n' "$n" "$(basename "$f" .md)" "$text"
@@ -329,10 +330,10 @@ export default class FraimChat extends View {
         let chief = "";
         for (const line of r.stdout.split("\n")) {
           const f = line.split("\t");
-          if (f[0] === "L") leads.set(f[1], { name: f[1], disp: f[2] || titleCase(f[1]), area: f[3] || "" });
+          if (f[0] === "L") leads.set(f[1], { name: f[1], disp: f[2] || titleCase(f[1]), area: f[3] || "", team: (f[4] ?? "").trim() });
           if (f[0] === "R" && f[3] && !/^\s*SILENT\b/.test(f[3]) && !isNoise(f[3])) reports.push({ lead: f[1], stamp: f[2], text: f[3].trim() });
           const m = line.match(/^S\t(\S+)\s{2}(\S+)\s{2}(.+?)\s{2}budget .*?last: (.*)$/);
-          if (m && leads.has(m[1])) Object.assign(leads.get(m[1]), { sched: m[3], last: m[4] });
+          if (m && leads.has(m[1])) Object.assign(leads.get(m[1]), { kind: m[2], sched: m[3], last: m[4] });
           const am = line.match(/^A\t(\S+)\s+\[(\w+)\]\s+(.+?)\s+last: (.*)$/);
           if (am) autos.push({ name: am[1], state: am[2], trigger: am[3], last: am[4] });
           if (f[0] === "C") chief = (f[1] ?? "").trim();
@@ -493,6 +494,8 @@ export default class FraimChat extends View {
     const a = t ? agents().find((x) => x.address === t.address) : null;
     const state = !t ? "Restarting..." : a?.status === "working" ? "Thinking" : a?.status === "blocked" ? "Waiting for you" : "Same chief as on WhatsApp";
     const right = [div().text_size(11).text_color(C.faint).child(state)];
+    const workHidden = !!findNode(layout(), "work")?.hidden;
+    right.push(btn("fc-work", workHidden ? "Show workspace" : "Hide workspace", () => run(workHidden ? "layout.show" : "layout.hide", { id: "work" })));
     if (shared("fraim.today") === false) right.push(btn("fc-expand", "Activity", () => setTodayShown(true)));
     return v_flex().size_full().bg(C.bg)
       .child(header([status(a?.status === "working" ? "working" : a?.status === "blocked" ? "blocked" : "chief"),
@@ -691,9 +694,28 @@ export default class FraimChat extends View {
       state: chief ? (stateOf(chief)[0] === "idle" ? ["chief", stateOf(chief)[1]] : stateOf(chief)) : ["chief", ""],
       width: 300, strong: true, onClick: () => pick("lead", "chief"),
     });
-    const teamCards = team.map((l) => v_flex().items_center()
-      .child(line(1, 16))
-      .child(card(`oc-${l.name}`, { name: l.disp, sub: firstSentence(l.area), state: stateOf(l), width: 220, onClick: () => pick("lead", l.name) })));
+    // Groups: the `team:` line in a lead's brief, else a guess from its role and name.
+    const groupOf = (l) => l.team
+      || (l.kind === "engineer" ? "Builder"
+        : /^mlv-/.test(l.name) ? "Mijn Levensverhalen"
+        : /market|content|advert|ads|seo|social/i.test(`${l.name} ${l.disp}`) ? "Marketing"
+        : "Operations");
+    const groups = new Map();
+    for (const l of team) {
+      const g = groupOf(l);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(l);
+    }
+    const groupCols = [...groups.entries()].map(([g, members]) => v_flex().id(`og-${g}`).items_center().flex_shrink(0)
+      .child(line(1, 18))
+      .child(h_flex().px(12).h(28).gap(8).items_center().rounded(14).border(1).border_color(C.line2).bg(C.bg)
+        .child(div().text_size(12).font_semibold().text_color(C.text).child(g))
+        .child(div().text_size(11).text_color(C.faint).child(String(members.length))))
+      .child(line(1, 14))
+      .child(v_flex().gap(10).ml(24).pl(0).border_l(1).border_color(C.line2).py(4)
+        .children(members.map((l) => h_flex().items_center()
+          .child(line(16, 1))
+          .child(card(`oc-${l.name}`, { name: l.disp, sub: firstSentence(l.area), state: stateOf(l), width: 220, onClick: () => pick("lead", l.name) }))))));
     const autoCards = autos.map((a) => {
       const failed = !/^(ok|silent|never|skipped)/.test(a.last);
       const every = /^every (\S+)/.exec(a.trigger);
@@ -708,9 +730,9 @@ export default class FraimChat extends View {
     return v_flex().size_full().bg(C.bg)
       .child(v_flex().id("oc-body").flex_1().min_h(0).overflow_y_scrollbar().px(24).py(28).items_center()
         .child(chiefCard)
-        .child(line(1, 20))
-        .child(div().w("80%").h(1).bg(C.line2))
-        .child(h_flex().w_full().max_w(1200).flex_wrap().justify_center().gap(14).children(teamCards))
+        .child(line(1, 22))
+        .child(v_flex().items_center()
+          .child(h_flex().items_start().gap(28).border_t(1).border_color(C.line2).children(groupCols)))
         .when(autoCards.length > 0, (e) => e
           .child(h_flex().w_full().max_w(1200).pt(36).pb(10).gap(10).items_center()
             .child(div().text_size(12).font_semibold().text_color(C.muted).child("Automations"))
