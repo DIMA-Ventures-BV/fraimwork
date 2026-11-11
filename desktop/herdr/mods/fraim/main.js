@@ -485,7 +485,7 @@ export default class FraimChat extends View {
   chiefHead() {
     const t = chiefTerminal();
     const a = t ? { status: chiefStatus() } : null;
-    const state = !t ? "Restarting..." : a?.status === "working" ? "Thinking" : a?.status === "blocked" ? "Waiting for you" : "Same chief as on WhatsApp";
+    const state = !t ? "Restarting..." : a?.status === "working" ? "Thinking" : a?.status === "blocked" ? "Waiting for you" : "";
     const right = [div().text_size(11).text_color(C.faint).child(state)];
     const workHidden = !!findNode(layout(), "work")?.hidden;
     right.push(btn("fc-work", workHidden ? "Show workspace" : "Hide workspace", () => run(workHidden ? "layout.show" : "layout.hide", { id: "work" })));
