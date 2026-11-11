@@ -48,6 +48,34 @@ Quick answers without that skill:
 
 Old-style jobs (`~/fraim/jobs/<name>.md` plus a `fraim-job` crontab line) are moved into automations when the scheduler starts. `fraim-job <name>` still works.
 
+## What the owner sees in the Herdr app
+
+The owner may watch this server in the Herdr app on the laptop (`fraim herdr link`). It shows, read from this server once a minute:
+
+- The chief (main) in its own column, named by `fraim-lead display` (change it with `fraim-lead display --chief -- "NAME"`).
+- The team as an org chart: every lead by the `display:` line in its `lead.md`, the automations below. A card shows the lead's `## Area`, its schedule and whether its last run failed.
+- One lead's rules: its `lead.md` sections (`## Job`, `## Each run`, `## Area`, `## Where to look`, `## What good looks like`, `## Limits`), its tool list and budget, and the shared brain rules. Herdr hides commands, paths and flags, so write every section as plain sentences the owner understands; the agent-only details go in parentheses.
+- Activity: the first sentence of each lead report. Start a report with what matters to the owner.
+- Dashboards: see below.
+
+To rename a lead, change its `display:` line. Never write code for the Herdr app: its panels run on the owner's laptop, and only fraimwork ships them.
+
+## Dashboards
+
+A dashboard is one JSON file `~/fraim/dashboards/NAME.json` (lowercase name with dashes). Herdr lists it in the sidebar and draws it; it rereads the file every 30 seconds. To make or change one, write the whole file in this shape; leave out any part you have no data for:
+
+```json
+{ "title": "Sales yesterday", "subtitle": "one plain line", "updated": "2026-11-11 07:00", "source": "Daily Brief",
+  "tiles": [{ "label": "Ad spend", "value": "€72.74", "note": "456 clicks", "tone": "good" }],
+  "bars": { "title": "Spend by campaign", "unit": "€", "items": [{ "label": "Campaign", "value": 44.33, "note": "2 purchases", "tone": "bad" }] },
+  "notes": ["at most a few plain sentences"] }
+```
+
+- `tone` is `good`, `warn` or `bad`, or left out. At most 8 tiles, 12 bars, 10 notes. `value` in bars is a number.
+- Only real numbers from a source you read; never invent or round a gap away.
+- To keep a dashboard current, an automation writes it: give that automation `Write(~/fraim/dashboards/NAME.json)` in its `tools:` and the exact shape in its prompt (the `daily-brief` automation does this for `sales.json`).
+- Remove a dashboard by deleting its file.
+
 ## An automation failed
 
 The owner gets one message per new kind of failure. After 5 failures in a row the automation pauses itself.
