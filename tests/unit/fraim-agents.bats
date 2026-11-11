@@ -173,7 +173,7 @@ fake_claude_runner() {
   FAKE_OUTPUT="The digest." run fraim-lead run sales
   [ "$status" -eq 0 ]
   grep -q 'Item of another agent' "$CLAUDE_ARGS"
-  grep -q 'Bash(fraim-goal send:\*)' "$CLAUDE_ARGS"
+  grep -q 'Bash(fraim-queue solved:\*)' "$CLAUDE_ARGS"
   grep -q 'The digest.' "$SENT"
   ! grep -q 'checked in' "$SENT"
 }
@@ -185,7 +185,7 @@ fake_claude_runner() {
   FAKE_OUTPUT="All fine." FAKE_ACTION='fraim-queue add --quiet --lead sales --kind idea --title "My idea" >/dev/null' run fraim-lead run sales
   [ "$status" -eq 0 ]
   ! grep -q 'Item of another agent' "$CLAUDE_ARGS"
-  ! grep -q 'Bash(fraim-goal send:\*)' "$CLAUDE_ARGS"
+  ! grep -q 'Bash(fraim-queue solved:\*)' "$CLAUDE_ARGS"
   grep -q 'sales checked in' "$SENT"
 }
 
@@ -249,7 +249,7 @@ fake_claude_runner() {
   [ "$status" -eq 0 ]
   run fraim-lead run anna
   [ "$status" -eq 0 ]
-  grep -q 'Bash(fraim-goal send:\*)' "$CLAUDE_ARGS"
+  grep -q 'Bash(fraim-queue solved:\*)' "$CLAUDE_ARGS"
   run fraim-relay chat -- "Hello"
   [ "$status" -eq 0 ]
   grep -q 'fraim-lead tell anna' "$CLAUDE_ARGS"
@@ -511,7 +511,7 @@ EOF
   [ "$("$A" get fixer)" = engineer ]
   run fraim-lead run chief
   [ "$status" -eq 0 ]
-  grep -q 'Bash(fraim-goal send:\*)' "$CLAUDE_ARGS"
+  grep -q 'Bash(fraim-queue solved:\*)' "$CLAUDE_ARGS"
   grep -q 'chief of staff: ranks the queue' "$FRAIM_AUTOMATIONS_DIR/chief/automation.md"
   grep -q 'engineer: builds and fixes' "$FRAIM_AUTOMATIONS_DIR/engineer/automation.md"
   [ -f "$FRAIM_AUTOMATIONS_DIR/chief-events/automation.md" ]
