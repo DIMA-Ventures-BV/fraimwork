@@ -296,6 +296,9 @@ function keepChief() {
     else run("tab.new", { space: space.id, name: "Team", mod: "fraim", props: { role: "team" } });
   }
   if (chiefTab && !space.tabs.find((x) => x.id === chiefTab)?.settled) run("tab.settle", { id: chiefTab });
+  // Its tab is a stand-in (the chief shows in its own column); say so where Herdr lists tabs.
+  const label = `${chiefName()} (left column)`;
+  if (chiefTab && space.tabs.find((x) => x.id === chiefTab)?.name !== label) run("tab.rename", { id: chiefTab, name: label });
 }
 function setTodayShown(shown) {
   run(shown ? "layout.show" : "layout.hide", { id: "today" });
@@ -391,8 +394,7 @@ export default class FraimChat extends View {
     const s = sel();
     const all = live();
     const main = all.find((a) => a.tname === "main");
-    const byTerm = new Map(all.map((a) => [a.tname, a]));
-    const others = all.filter((a) => a.tname !== "main" && !d.leads.some((l) => `lead-${l.name}` === a.tname));
+    const others = all.filter((a) => a.tname !== "main");
     const team = d.leads.filter((l) => l.name !== "chief");
     const boards = d.boards ?? [];
     const autos = d.autos ?? [];
@@ -405,7 +407,7 @@ export default class FraimChat extends View {
         }))
         .child(this.row("fc-team", {
           icon: div().size(12).flex_shrink(0).rounded(3).border(2).border_color(C.muted),
-          name: "Team and rules", active: s === "team" && !shared("fraim.member"), meta: String(team.length + autos.length + 1),
+          name: "Team", active: s === "team", meta: String(team.length + autos.length + 1),
           onClick: () => { setShared("fraim.member", null); openTeam(); },
         }))
         .when(boards.length > 0, (e) => e.child(this.group("Dashboards", boards.length)).children(boards.map((b) =>
@@ -413,34 +415,12 @@ export default class FraimChat extends View {
         .when(others.length > 0, (e) => e.child(this.group("Working now", others.length)).children(others.map((a) =>
           this.row(`fc-o-${a.address}`, {
             icon: status(a.status === "blocked" ? "blocked" : a.status === "working" ? "working" : "done"),
-            name: a.tab_name || a.tname, active: s === a.address,
+            name: d.leads.find((l) => `lead-${l.name}` === a.tname)?.disp ?? (a.tab_name || a.tname), active: s === a.address,
             meta: a.status === "blocked" ? "Needs you" : "",
             onClick: () => showWorkTab(a.tab, a.address),
           }))))
-        .child(this.group("Team", team.length))
         .when(!d.loaded, (e) => e.child(div().px(16).py(4).text_size(12).text_color(C.faint).child("Loading...")))
-        .when(!!d.error, (e) => e.child(div().px(16).py(4).text_size(12).text_color(C.red).child(d.error)))
-        .children(team.map((l) => {
-          const a = byTerm.get(`lead-${l.name}`);
-          const failed = !!l.last && !/^(ok|never)/.test(l.last);
-          const paused = l.sched === "paused";
-          return this.row(`fc-l-${l.name}`, {
-            icon: status(a ? (a.status === "blocked" ? "blocked" : "working") : failed ? "failed" : paused ? "paused" : "idle"),
-            name: l.disp, active: s === l.name || (s === "team" && shared("fraim.member")?.name === l.name), strong: !!a,
-            meta: a ? (a.status === "blocked" ? "Needs you" : "Working") : paused ? "Paused" : failed ? "Failed" : "",
-            onClick: () => this.openLead(l),
-          });
-        }))
-        .when(autos.length > 0, (e) => e.child(this.group("Automations", autos.length)).children(autos.map((a) => {
-          const failed = !/^(ok|silent|never|skipped)/.test(a.last);
-          return this.row(`fc-a-${a.name}`, {
-            icon: status(a.state !== "on" ? "paused" : failed ? "failed" : "idle"),
-            name: titleCase(a.name),
-            meta: a.state !== "on" ? "Off" : failed ? "Failed" : "",
-            active: s === "team" && shared("fraim.member")?.name === a.name,
-            onClick: () => openTeam({ kind: "auto", name: a.name }),
-          });
-        }))));
+        .when(!!d.error, (e) => e.child(div().px(16).py(4).text_size(12).text_color(C.red).child(d.error))));
   }
 
   // ---------------- activity column ----------------
@@ -706,16 +686,16 @@ export default class FraimChat extends View {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(l);
     }
-    const groupCols = [...groups.entries()].map(([g, members]) => v_flex().id(`og-${g}`).items_center().flex_shrink(0)
-      .child(line(1, 18))
+    // One group under the other (fits any column width and scrolls up and down): a line from
+    // the chief, the group's name, its members in a grid.
+    const groupRows = [...groups.entries()].map(([g, members]) => v_flex().id(`og-${g}`).w_full().items_center()
+      .child(line(1, 22))
       .child(h_flex().px(12).h(28).gap(8).items_center().rounded(14).border(1).border_color(C.line2).bg(C.bg)
         .child(div().text_size(12).font_semibold().text_color(C.text).child(g))
         .child(div().text_size(11).text_color(C.faint).child(String(members.length))))
-      .child(line(1, 14))
-      .child(v_flex().gap(10).ml(24).pl(0).border_l(1).border_color(C.line2).py(4)
-        .children(members.map((l) => h_flex().items_center()
-          .child(line(16, 1))
-          .child(card(`oc-${l.name}`, { name: l.disp, sub: firstSentence(l.area), state: stateOf(l), width: 220, onClick: () => pick("lead", l.name) }))))));
+      .child(line(1, 12))
+      .child(h_flex().w_full().flex_wrap().justify_center().gap(12).p(12).rounded(10).border(1).border_color(C.line)
+        .children(members.map((l) => card(`oc-${l.name}`, { name: l.disp, sub: firstSentence(l.area), state: stateOf(l), width: 220, onClick: () => pick("lead", l.name) })))));
     const autoCards = autos.map((a) => {
       const failed = !/^(ok|silent|never|skipped)/.test(a.last);
       const every = /^every (\S+)/.exec(a.trigger);
@@ -730,9 +710,7 @@ export default class FraimChat extends View {
     return v_flex().size_full().bg(C.bg)
       .child(v_flex().id("oc-body").flex_1().min_h(0).overflow_y_scrollbar().px(24).py(28).items_center()
         .child(chiefCard)
-        .child(line(1, 22))
-        .child(v_flex().items_center()
-          .child(h_flex().items_start().gap(28).border_t(1).border_color(C.line2).children(groupCols)))
+        .children(groupRows)
         .when(autoCards.length > 0, (e) => e
           .child(h_flex().w_full().max_w(1200).pt(36).pb(10).gap(10).items_center()
             .child(div().text_size(12).font_semibold().text_color(C.muted).child("Automations"))
