@@ -65,6 +65,22 @@ EOF
   grep -q 'rm -f .*herdr-space' "$SSH_LOG"
 }
 
+@test "link installs fraim's look (layout and panel) and switches the window to it" {
+  "$FRAIM" herdr link
+  [ -f "$HOME/.config/herdr-app/mods/fraim/main.js" ]
+  [ -f "$HOME/.config/herdr-app/mods/fraim/mod.json" ]
+  jq -e '.. | objects | select(.id? == "chief-term") | .content.terminal == "fraim/main"' "$HOME/.config/herdr-app/layouts/fraim.json"
+  grep -q 'herdr-app do layout.switch --name fraim' "$HERDR_LOG"
+}
+
+@test "link keeps the owner's own edits to fraim's layout aside before it replaces it" {
+  mkdir -p "$HOME/.config/herdr-app/layouts"
+  printf '{"mine":true}\n' > "$HOME/.config/herdr-app/layouts/fraim.json"
+  "$FRAIM" herdr link
+  grep -q mine "$HOME"/.config/herdr-app/layouts/fraim.json.old-*
+  jq -e '.id == "root"' "$HOME/.config/herdr-app/layouts/fraim.json"
+}
+
 @test "herdr without a subcommand or with an unknown one explains itself" {
   run "$FRAIM" herdr nonsense
   [ "$status" -eq 2 ]

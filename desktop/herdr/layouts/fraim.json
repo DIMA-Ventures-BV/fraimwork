@@ -1,0 +1,22 @@
+{
+  "id": "root", "type": "column", "titlebar": "none", "theme": "graphite", "traffic_lights": [16, 18],
+  "ui_font": "Inter",
+  "terminal_padding": [16, 10],
+  "background": "#0b0b0c",
+  "colors": { "background": "#0b0b0c", "surface": "#0b0b0c", "raised": "#101012", "foreground": "#d4d4d8", "terminal_foreground": "#d4d4d8", "muted": "#8b8b94", "dim": "#5f5f68", "border": "#1f1f23", "accent": "#5e6ad2", "selection": "#1c1d23", "hover": "#17171a" },
+  "children": [
+    { "id": "top", "type": "block", "size": { "px": 36 }, "window_drag": true, "background": "#0b0b0c", "content": { "mod": "fraim", "props": { "role": "top" } } },
+    { "id": "body", "type": "row", "resizable": true, "divider": { "width": 1, "color": "#1f1f23" }, "children": [
+      { "id": "sidebar", "type": "block", "size": { "px": 240 }, "min": 200, "max": 340, "background": "#0b0b0c", "content": { "mod": "fraim", "props": { "role": "sidebar" } } },
+      { "id": "chief", "type": "column", "size": { "weight": 1 }, "min": 420, "background": "#0b0b0c", "children": [
+        { "id": "chief-head", "type": "block", "size": { "px": 44 }, "content": { "mod": "fraim", "props": { "role": "chiefhead" } } },
+        { "id": "chief-term", "type": "block", "content": { "terminal": "fraim/main" } }
+      ] },
+      { "id": "work", "type": "column", "size": { "weight": 1 }, "min": 420, "hidden": true, "background": "#0b0b0c", "children": [
+        { "id": "thread-title", "type": "block", "size": { "px": 44 }, "content": { "mod": "fraim", "props": { "role": "thread" } } },
+        { "id": "terminals", "type": "block", "content": { "tab": "active", "pane": { "gap": 0, "radius": 0, "background": "#0b0b0c", "border": { "width": 0, "color": "#0b0b0c" }, "focus": { "width": 0, "color": "#0b0b0c" } } } }
+      ] },
+      { "id": "today", "type": "block", "size": { "px": 320 }, "min": 260, "max": 520, "background": "#0b0b0c", "content": { "mod": "fraim", "props": { "role": "today" } } }
+    ] }
+  ]
+}

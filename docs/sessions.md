@@ -63,11 +63,46 @@ The owner gets a WhatsApp message, written by the chief of staff in plain words 
 `fraim herdr link` on the laptop installs the [Herdr app](https://herdr.dev) when it is missing,
 adds the server as Herdr machine `fraim` (SSH to `claude@` on the workspace port, with fraim's
 key and known_hosts), makes one Herdr space `fraim` there, and writes its id to
-`~/.config/fraim/herdr-space` on the server. From then on every lead run, goal and coding
+`~/.config/fraim/herdr-space` on the server. From then on main, every lead run, goal and coding
 session gets the label `herdr.space=<id>`, so it appears in that space by itself, with Herdr's
 own working, done and needs-you status. `fraim herdr unlink` removes both. The laptop reaches the
 server, never the reverse. A linked laptop is a shell as user claude: herdr-core has no
 permissions per client, so only the owner links.
+
+Link also installs fraim's own look (`desktop/herdr`: the layout `fraim` and the panel mod
+`fraim`, Linear-style dark) and switches the window to it. An edited `layouts/fraim.json` is
+kept aside as `fraim.json.old-<time>` first. The window:
+
+- **The chief** (main) has its own column that always shows. Its address changes when the
+  server restarts it; the panel repoints the column, puts main back in the space, and never
+  leaves main's tab the shown one, because closing a tab in Herdr ends its terminal.
+- **The sidebar** lists the chief (by its `display:` name), dashboards, whatever works now, the
+  team (leads, by their `display:` name) and the automations. A word on the right only when
+  something needs the owner: Working, Needs you, Failed, Paused, Off.
+- **The work column** beside the chief shows a running agent, the Team view or a dashboard;
+  Close hides it. **Team** shows one agent's rules in owner words (when it works, its brief
+  section by section without commands, what it can use, the shared brain rules) and its
+  activity (reports, work, cards waiting for the owner). **Activity** on the right lists one
+  sentence per lead report, newest first, and can be hidden.
+
+The panel only reads the server (`fraim-lead list`, `fraim-auto list`, `fraim-brain show`, the
+leads' `runs/`), once a minute. Its Run now buttons run `fraim-lead run` or `fraim-auto run`
+there. Herdr has no web view, so pages under `/p/` still open in a browser.
+
+### Dashboards
+
+A dashboard is a file `~/fraim/dashboards/NAME.json` on the server, written by an agent or an
+automation; the Herdr panel draws it in the work column and rereads it every 30 seconds:
+
+```json
+{ "title": "Sales today", "subtitle": "...", "updated": "2026-11-11 07:00", "source": "Daily Brief",
+  "tiles": [{ "label": "Ad spend", "value": "€72.74", "note": "456 clicks", "tone": "good|warn|bad" }],
+  "bars": { "title": "Spend by campaign", "unit": "€", "items": [{ "label": "...", "value": 44.33, "note": "...", "tone": "good" }] },
+  "notes": ["one plain sentence per note"] }
+```
+
+Agents only write data: the panel decides how it looks, and nothing an agent writes runs on
+the laptop.
 
 ### Lead runs
 

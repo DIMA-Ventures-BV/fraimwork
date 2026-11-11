@@ -26,6 +26,23 @@ herdr_open() {
   die "the Herdr app did not open; open it once by hand, then run: fraim herdr link"
 }
 
+# fraim's look in the app: the chief in its own column, the team, its rules, dashboards
+# (desktop/herdr). Our files are replaced on every link; an edited layout is kept aside first.
+herdr_look() {
+  local machine="$1" home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}" src="$REPO/desktop/herdr" layout
+  [ -d "$src" ] || return 0
+  mkdir -p "$home/mods" "$home/layouts"
+  rm -rf "$home/mods/fraim"
+  cp -R "$src/mods/fraim" "$home/mods/fraim"
+  layout="$(jq --arg t "$machine/main" '(.. | objects | select(.id? == "chief-term") | .content.terminal) = $t' "$src/layouts/fraim.json")" \
+    || die "could not prepare fraim's Herdr layout"
+  if [ -f "$home/layouts/fraim.json" ] && [ "$(cat "$home/layouts/fraim.json")" != "$layout" ]; then
+    mv "$home/layouts/fraim.json" "$home/layouts/fraim.json.old-$(date +%Y%m%d%H%M%S)"
+  fi
+  printf '%s\n' "$layout" > "$home/layouts/fraim.json"
+  herdr_app "do" layout.switch --name fraim >/dev/null 2>&1 || true
+}
+
 herdr_space_id() {
   herdr_app ls 2>/dev/null | jq -r --arg m "$1" '[.spaces[]? | select(.machine == $m and .name == "fraim") | .id] | first // empty' | sed 's|^.*/||'
 }
@@ -49,7 +66,8 @@ cmd_herdr_link() {
   [ -n "$space" ] || die "Herdr made no fraim space; run: fraim herdr link"
   printf '%s\n' "$space" | workspace_ssh 'mkdir -p ~/.config/fraim && cat > ~/.config/fraim/herdr-space' \
     || die "could not tell the server which Herdr space to use"
-  say "Herdr shows the server as '$machine'. Leads, goals and coding sessions appear in its 'fraim' space while they run."
+  herdr_look "$machine"
+  say "Herdr shows the server as '$machine': the chief on the left, your team, their rules and your dashboards."
 }
 
 cmd_herdr_unlink() {
