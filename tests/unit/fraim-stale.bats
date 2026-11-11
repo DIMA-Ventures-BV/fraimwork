@@ -107,11 +107,11 @@ card() { fraim-queue list --json | jq -r ".[$1].$2"; }
   [ "$(card 0 kind)" = info ]
   [[ "$(card 0 summary)" == *"greet"*"inbox"* ]]
   for _ in $(seq 1 50); do [ -s "$T/sent" ] && break; sleep 0.1; done
-  [ "$(grep -c 'New in your queue' "$T/sent")" -eq 1 ]
+  [ "$(grep -cF "$(card 0 title)" "$T/sent")" -eq 1 ]
   run fraim-prompt stale --notify
   [ "$status" -eq 0 ]
   [ "$(cards)" = 1 ]
-  [ "$(grep -c 'New in your queue' "$T/sent")" -eq 1 ]
+  [ "$(grep -cF "$(card 0 title)" "$T/sent")" -eq 1 ]
 }
 
 @test "the default changing again is news; a copy being fixed is not" {

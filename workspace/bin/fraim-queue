@@ -20,6 +20,11 @@
 //                                          record a request the owner gave in the chat as their yes
 //   fraim-queue reject ID --note TEXT      saves the reason for the brain; reworks the goal behind it
 //   fraim-queue dismiss ID                 closes the item, nothing else happens
+//   fraim-queue always ID | always list | always rm N
+//                                          the owner's standing yes: approves ID and every later card from
+//                                          the same agent with the same title and effect (never replies or rules)
+//   fraim-queue expire [--quiet]           questions older than expire_hours (~/fraim/queue/settings,
+//                                          default 72, 0 = never) close as a no; the owner hears it once
 //   fraim-queue prio ID 1|2|3
 //   fraim-queue solved ID --proof TEXT   the chief closes a card that proved solved; nothing else happens
 //   fraim-queue recovered --source S     closes the failure cards of an automation that works again
@@ -47,7 +52,8 @@ import {
 } from './fraim-queue-store.mjs'
 import { tokenCommand } from './fraim-queue-tokens.mjs'
 import {
-  ADVICE_WORD, addItem, closeRecovered, decide, grantRequest, markSolved, setPriority, supersedeFailed, useYesForGoal,
+  ADVICE_WORD, addAlways, addItem, alwaysRules, closeRecovered, decide, expireOpen, grantRequest, markSolved, removeAlways,
+  setPriority, supersedeFailed, useYesForGoal,
 } from './fraim-queue-approve.mjs'
 import { addRule, addWhatsApp, announce, closeThread, putThread, sayInThread } from './fraim-queue-threads.mjs'
 import { describeThread, inboxRows } from './fraim-queue-views.mjs'
@@ -180,6 +186,23 @@ function main(argv) {
       const item = decide(id, verdict, args.note || args._.slice(1).join(' '), args.via === 'whatsapp' ? 'whatsapp' : 'cli')
       return console.log(`${item.id} ${item.state}${item.follow_up ? `; goal ${item.follow_up} started` : ''}${item.outcome ? `. ${item.outcome}` : ''}`)
     }
+    case 'always': {
+      if (id === 'list' || !id) {
+        const rules = alwaysRules()
+        if (!rules.length) return console.log('No standing yes yet.')
+        return console.log(rules.map((r, i) => `${i + 1}. "${r.title}" from ${r.lead || 'anyone'}: ${r.effect} (since ${r.added}, ${r.from})`).join('\n'))
+      }
+      if (id === 'rm') {
+        const gone = removeAlways(args._[1])
+        return console.log(`No standing yes any more for "${gone.title}"`)
+      }
+      const item = addAlways(id)
+      return console.log(`Standing yes for "${item.title}"${item.follow_up ? `; goal ${item.follow_up} started` : ''}`)
+    }
+    case 'expire': {
+      const closed = expireOpen(args.quiet)
+      return console.log(closed.length ? `closed ${closed.map((i) => i.id).join(' ')}` : 'nothing to close')
+    }
     case 'reply': {
       if (!id) usage('reply tN [--file F | -- TEXT] [--lead NAME] [--need WHY] [--priority N]')
       const text = args.file ? fs.readFileSync(args.file, 'utf8') : args._.slice(1).join(' ')
@@ -227,7 +250,7 @@ function main(argv) {
       return
     }
     default:
-      usage('add | grant --title T | reply tN | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
+      usage('add | grant --title T | reply tN | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | always ID|list|rm N | expire | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
   }
 }
 

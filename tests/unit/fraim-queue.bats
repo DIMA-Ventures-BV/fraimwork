@@ -25,7 +25,7 @@ EOF
   run "$Q" add --title "First"
   [ "$status" -eq 0 ]
   [ "$output" = q1 ]
-  grep -q 'New in your queue: First' "$SENT"
+  grep -q '^notify First' "$SENT"
   run "$Q" add --title "Second" --quiet
   [ "$output" = q2 ]
   [ "$(grep -c '^notify' "$SENT")" = 1 ]
@@ -77,11 +77,13 @@ EOF
   "$Q" add --title "PDF tool update" --ask "Merge the PDF tool update?" --advise approve \
     --need "It closes security holes on the live site." --if-yes "Safer site; check one PDF book first." \
     --if-no "The holes stay open." --why "Tests pass"
-  grep -q '^notify New in your queue: PDF tool update' "$SENT"
+  grep -q '^notify PDF tool update' "$SENT"
   grep -q 'Why: It closes security holes on the live site.' "$SENT"
-  grep -q 'If you approve: Safer site; check one PDF book first.' "$SENT"
+  grep -q 'If you say yes: Safer site; check one PDF book first.' "$SENT"
   grep -q 'If you say no: The holes stay open.' "$SENT"
   grep -q 'My advice: Approve' "$SENT"
+  grep -q 'Answer here: yes or no' "$SENT"
+  grep -q 'No answer in 72 hours counts as no' "$SENT"
   ! grep -q 'q1' "$SENT"
   run "$Q" show q1
   [[ "$output" == *"Question: Merge the PDF tool update?"*"Why it is needed: It closes"*"If you approve: Safer"*"If you say no: The holes"*"Advice: Approve"* ]]
@@ -192,7 +194,7 @@ EOF
   [ "$(jq -r '.used_by[0]' "$FRAIM_QUEUE_DIR/q1/item.json")" = q2 ]
   # The owner hears it runs, with no question.
   grep -q 'already said yes to "AI costs: read-only check": Daily AI cost report' "$SENT"
-  run grep -q 'New in your queue' "$SENT"; [ "$status" -eq 1 ]
+  run grep -q 'Answer here' "$SENT"; [ "$status" -eq 1 ]
 }
 
 @test "a yes cannot be borrowed: no open, rejected, brain or chained item; the item then waits as a question" {
@@ -389,4 +391,73 @@ EOF
   FRAIM_RUNTIME_ENV="$T/runtime.env" run "$Q" url
   [[ "$output" =~ ^http://fraim-x:3119/\?t=[A-Za-z0-9_-]{20,}$ ]]
   [ "$(stat -c %a "$HOME/.config/fraim/queue-token" 2>/dev/null || stat -f %Lp "$HOME/.config/fraim/queue-token")" = 600 ]
+}
+
+age() { jq --arg c "$2" '.created = $c' "$FRAIM_QUEUE_DIR/$1/item.json" > "$T/i" && mv "$T/i" "$FRAIM_QUEUE_DIR/$1/item.json"; }
+
+@test "expire closes questions older than 72 hours as a no, and tells the owner once" {
+  "$Q" add --quiet --title "Old question" --ask "Do it?" --on-approve "do it"
+  "$Q" add --quiet --title "Fresh question" --ask "Do it too?"
+  "$Q" add --quiet --title "Old note without a question"
+  age q1 2026-01-01T00:00:00Z
+  age q3 2026-01-01T00:00:00Z
+  run "$Q" expire
+  [ "$status" -eq 0 ]
+  [ "$output" = "closed q1" ]
+  [ "$(jq -r '.state + " " + .via' "$FRAIM_QUEUE_DIR/q1/item.json")" = "dismissed expired" ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q2/item.json")" = open ]
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q3/item.json")" = open ]
+  [ ! -e "$GOAL_ARGS" ]
+  [ "$(grep -c 'No answer in 72 hours, so I took these as a no' "$SENT")" = 1 ]
+  grep -q -- '- Old question' "$SENT"
+}
+
+@test "expire_hours in the queue settings changes the wait, and 0 never expires" {
+  "$Q" add --quiet --title "Q" --ask "Do it?"
+  age q1 "$(date -u -d '-3 hours' +%FT%TZ 2>/dev/null || date -u -v-3H +%FT%TZ)"
+  run "$Q" expire --quiet
+  [ "$output" = "nothing to close" ]
+  echo expire_hours=2 > "$FRAIM_QUEUE_DIR/settings"
+  run "$Q" expire --quiet
+  [ "$output" = "closed q1" ]
+  "$Q" add --quiet --title "Q2" --ask "Again?"
+  age q2 2026-01-01T00:00:00Z
+  echo expire_hours=0 > "$FRAIM_QUEUE_DIR/settings"
+  run "$Q" expire --quiet
+  [ "$output" = "nothing to close" ]
+  [ ! -e "$SENT" ]
+}
+
+@test "always ID approves it and every same question from the same agent after it" {
+  "$Q" add --quiet --title "Merge dependabot PR 12" --lead web --ask "Merge?" --on-approve "merge it"
+  run "$Q" always q1
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.state + " " + .via' "$FRAIM_QUEUE_DIR/q1/item.json")" = "approved always" ]
+  rm -f "$GOAL_ARGS"
+  run "$Q" add --title "Merge Dependabot PR 47" --lead web --ask "Merge?" --on-approve "merge 47"
+  [ "$(jq -r '.state + " " + .via' "$FRAIM_QUEUE_DIR/q2/item.json")" = "approved always" ]
+  grep -q 'merge 47' "$GOAL_ARGS"
+  grep -q 'Done without asking, because you always say yes to this: Merge Dependabot PR 47' "$SENT"
+  "$Q" add --quiet --title "Merge dependabot PR 48" --lead shop --ask "Merge?" --on-approve "x"
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q3/item.json")" = open ]
+  "$Q" add --quiet --title "Merge dependabot PR 49" --lead web --ask "Merge?" --switch-on nightly
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q4/item.json")" = open ]
+  run "$Q" always list
+  [[ "$output" == '1. "merge dependabot pr #" from web: start a task'* ]]
+  run "$Q" always rm 1
+  [ "$status" -eq 0 ]
+  "$Q" add --quiet --title "Merge dependabot PR 50" --lead web --ask "Merge?" --on-approve "y"
+  [ "$(jq -r .state "$FRAIM_QUEUE_DIR/q5/item.json")" = open ]
+}
+
+@test "only the owner gives a standing yes, and never for a brain change" {
+  "$Q" add --quiet --title "T" --lead web --ask "Do it?"
+  FRAIM_HEADLESS=1 run "$Q" always q1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only the owner"* ]]
+  [ ! -e "$FRAIM_QUEUE_DIR/always.json" ]
+  "$Q" add --quiet --title "Rule change" --brain p1
+  run "$Q" always q2
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"asked every time"* ]]
 }
