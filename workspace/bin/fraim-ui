@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fraim-ui: the inbox and every other page are files the owner's chief can change.
+# fraim-ui: the settings page and every other page are files the owner's chief can change.
 # fraimwork ships the defaults; the owner's file wins and an update never overwrites it.
 #
 #   fraim-ui list                 every page and whose version is used
@@ -11,8 +11,8 @@
 #   fraim-ui reset NAME           back to the default (the owner's file goes to .history)
 #   fraim-ui restore NAME         put back the newest copy reset kept in .history
 #
-# Pages: inbox (/), team (/team), settings (/settings), and the owner's own at /p/NAME.
-# Adding ?builtin=1 to the first three always shows the default. Only the owner changes pages: a run nobody watches may not.
+# Pages: settings (/settings) and the owner's own at /p/NAME.
+# Adding ?builtin=1 to /settings always shows the default. Only the owner changes pages: a run nobody watches may not.
 # Exit codes: 0 ok, 1 failure, 2 usage.
 set -euo pipefail
 

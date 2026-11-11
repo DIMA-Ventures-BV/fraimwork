@@ -214,7 +214,7 @@ FAKE
   [[ "$tools" != *"fraim-goal start"* ]]
   [[ "$tools" == *"Edit(~/fraim/leads/web/**)"* ]]
   [[ "$tools" != *"Bash,"* ]]
-  [[ "$tools" != *"fraim-queue prio"* ]]
+  [[ "$tools" != *"fraim-goal send"* ]]
   grep -q '^ok ' "$FRAIM_LEADS_DIR/web/last"
   [ ! -s "$SENT" ]
   [ ! -e "$FRAIM_LEADS_DIR/web/.running" ]
@@ -263,7 +263,7 @@ FAKE
   grep -A1 -x -- '--disallowedTools' "$CLAUDE_ARGS" | grep -qx mcp__whatsapp
   grep -q 'Two things today.' "$SENT"
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  [[ "$tools" == *"Bash(fraim-queue prio:*)"* ]]
+  [[ "$tools" == *"Bash(fraim-goal send:*)"* ]]
   [[ "$tools" == *"Bash(fraim-auto show:*)"* ]]
   [[ "$tools" == *"Bash(fraim-goal start --lead chief --approved-by:*)"* ]]
   [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
@@ -467,7 +467,7 @@ FAKE
   fraim-lead run web
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
-  [[ "$tools" != *"Bash(fraim-queue prio:*)"* ]]
+  [[ "$tools" != *"Bash(fraim-goal send:*)"* ]]
   grep -q 'fraim-lead tell chief --from web' "$CLAUDE_ARGS"
   ! grep -q 'started early' "$CLAUDE_ARGS"
 }
@@ -759,7 +759,7 @@ FAKE
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   [[ "$tools" == *"Bash(fraim-lead tell:*)"* ]]
   [[ "$tools" == *"Edit(~/fraim/leads/shop/**)"* ]]
-  [[ "$tools" != *"fraim-queue prio"* ]]
+  [[ "$tools" != *"fraim-goal send"* ]]
   mkdir -p "$FRAIM_LEADS_DIR/shop/prompts"
   printf '# only these\nRead\nBash(curl -s:*)\n' > "$FRAIM_LEADS_DIR/shop/prompts/tools-lead.md"
   fraim-lead run shop
@@ -775,12 +775,12 @@ FAKE
   fraim-lead new shop
   fraim-lead run shop
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  [ "$tools" = "Read,Glob,Grep,WebSearch,Edit(~/fraim/leads/shop/**),Write(~/fraim/leads/shop/**),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue add:*),Bash(fraim-queue thread show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-lead list:*),Bash(fraim-lead show:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-auto runs:*),Bash(fraim-api:*),Bash(git log:*),Bash(git status:*),Bash(git diff:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(fraim-lead tell:*)" ]
+  [ "$tools" = "Read,Glob,Grep,WebSearch,Edit(~/fraim/leads/shop/**),Write(~/fraim/leads/shop/**),Bash(fraim-queue list:*),Bash(fraim-queue show:*),Bash(fraim-queue add:*),Bash(fraim-queue thread show:*),Bash(fraim-goal list:*),Bash(fraim-goal show:*),Bash(fraim-lead list:*),Bash(fraim-lead show:*),Bash(fraim-auto list:*),Bash(fraim-auto show:*),Bash(fraim-auto runs:*),Bash(fraim-api:*),Bash(git log:*),Bash(git status:*),Bash(git diff:*),Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh run list:*),Bash(fraim-lead tell:*),Bash(fraim-lead brief:*),Bash(fraim-goal read:*),Bash(fraim-prompt list:*),Bash(fraim-prompt show:*),Bash(fraim-doctor:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*),Bash(sort:*),Bash(ls:*),Bash(cat:*)" ]
   fraim-lead run chief
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
-  for rule in 'Bash(fraim-queue prio:*)' 'Bash(fraim-queue solved:*)' 'Bash(fraim-queue thread close:*)' 'Bash(fraim-queue thread ignore:*)' 'Bash(fraim-queue reply:*)'; do [[ "$tools" == *"$rule"* ]]; done
+  for rule in 'Bash(fraim-goal send:*)' 'Bash(fraim-queue solved:*)' 'Bash(fraim-queue thread close:*)' 'Bash(fraim-queue thread ignore:*)' 'Bash(fraim-queue reply:*)'; do [[ "$tools" == *"$rule"* ]]; done
   fraim-lead run engineer
   tools="$(grep -A1 -x -- '--allowedTools' "$CLAUDE_ARGS" | tail -1)"
   for rule in Skill 'Edit(~/fraim/automations/**)' 'Bash(fraim-auto run:*)' 'Bash(fraim-lead new:*)' 'Bash(fraim-brain skill propose:*)'; do [[ "$tools" == *"$rule"* ]]; done
-  [[ "$tools" != *"fraim-queue prio"* ]]
+  [[ "$tools" != *"fraim-goal send"* ]]
 }

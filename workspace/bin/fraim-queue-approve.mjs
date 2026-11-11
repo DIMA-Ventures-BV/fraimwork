@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { channelWord } from './fraim-channels.mjs'
 import {
-  ADVICE, GOALS, KINDS, LEADS, QUEUE, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir, newId, now,
-  promptText, readItem, runtimeEnv, tellLead, theContact, tool, usage, validId, validThread, writeItem,
+  ADVICE, GOALS, KINDS, LEADS, QUEUE, Refused, THREADS, UsageError, allItems, capability, copyMedia, fire, itemDir,
+  newId, now, promptText, readItem, runtimeEnv, tellLead, theContact, tool, usage, validId, validThread, writeItem,
 } from './fraim-queue-store.mjs'
 
 export const MAX_REPLY = 20000
@@ -448,13 +448,4 @@ export function closeRecovered(source) {
     closed.push(item.id)
   }
   return closed
-}
-
-export function setPriority(id, priority) {
-  const item = readItem(id)
-  const p = parseInt(priority, 10)
-  if (![1, 2, 3].includes(p)) usage('priority must be 1, 2 or 3')
-  item.priority = p
-  writeItem(item)
-  return item
 }

@@ -16,10 +16,8 @@ setup() {
 @test "the shipped pages exist and are complete" {
   unset FRAIM_UI_DEFAULTS
   run fraim-ui list
-  [[ "$output" == *"inbox"*"default"* ]]
-  [[ "$output" == *"team"*"default"* ]]
-  grep -qi '</html>' "$BIN/../ui/inbox.html"
-  grep -qi '</html>' "$BIN/../ui/team.html"
+  [[ "$output" == *"settings"*"default"* ]]
+  [[ "$output" != *"inbox"* ]]
   grep -qi '</html>' "$BIN/../ui/settings.html"
 }
 

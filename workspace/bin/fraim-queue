@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// fraim-queue: one prioritized list of everything that needs the owner. Goals and lead
-// agents add items; the owner clears them in batches on a web page, on WhatsApp or here.
+// fraim-queue: every question for the owner and the owner's answers. Goals and lead agents
+// add items; the chief asks the owner in chat, and the owner answers there or here.
 //
 //   fraim-queue add --title T [--ask QUESTION] [--advise approve|reject|dismiss] [--why REASON]...
 //                   [--summary S | --summary-file F] [--kind review|decision|idea|info|failed]
@@ -25,11 +25,10 @@
 //                                          the same agent with the same title and effect (never replies or rules)
 //   fraim-queue expire [--quiet]           questions older than expire_hours (~/fraim/queue/settings,
 //                                          default 72, 0 = never) close as a no; the owner hears it once
-//   fraim-queue prio ID 1|2|3
 //   fraim-queue solved ID --proof TEXT   the chief closes a card that proved solved; nothing else happens
 //   fraim-queue recovered --source S     closes the failure cards of an automation that works again
-//   fraim-queue serve                      the web page (started by the workspace container)
-//   fraim-queue url                        the page address, with its access token
+//   fraim-queue serve                      the settings page and /api/v1 (started by the workspace container)
+//   fraim-queue url                        the settings page address, with its access token
 //   fraim-queue token new --name N --scope read|write|decide [--origin https://...]...   a token for an app (docs/api.md)
 //   fraim-queue token list | rm NAME       the owner only; a run nobody watches is refused
 //   fraim-queue thread mail GMAIL_THREAD_ID   save a mail chain as a conversation (--quiet: tell nobody)
@@ -52,8 +51,8 @@ import {
 } from './fraim-queue-store.mjs'
 import { tokenCommand } from './fraim-queue-tokens.mjs'
 import {
-  ADVICE_WORD, addAlways, addItem, alwaysRules, closeRecovered, decide, expireOpen, grantRequest, markSolved, removeAlways,
-  setPriority, supersedeFailed, useYesForGoal,
+  ADVICE_WORD, addAlways, addItem, alwaysRules, closeRecovered, decide, expireOpen, grantRequest, markSolved,
+  removeAlways, supersedeFailed, useYesForGoal,
 } from './fraim-queue-approve.mjs'
 import { addRule, addWhatsApp, announce, closeThread, putThread, sayInThread } from './fraim-queue-threads.mjs'
 import { describeThread, inboxRows } from './fraim-queue-views.mjs'
@@ -224,11 +223,6 @@ function main(argv) {
       const closed = closeRecovered(args.source)
       return console.log(closed.length ? `closed ${closed.join(' ')}` : 'nothing to close')
     }
-    case 'prio': {
-      if (!id || !args._[1]) usage('prio ID 1|2|3')
-      const item = setPriority(id, args._[1])
-      return console.log(`${item.id} priority ${item.priority}`)
-    }
     case 'url':
       ownerOnly('the page link')
       token()
@@ -246,11 +240,11 @@ function main(argv) {
         process.stderr.write(`fraim-queue: ${err.message}\n`)
         process.exit(1)
       })
-      server.listen(PORT, process.env.FRAIM_QUEUE_BIND || '0.0.0.0', () => process.stderr.write(`fraim-queue: page on port ${PORT}\n`))
+      server.listen(PORT, process.env.FRAIM_QUEUE_BIND || '0.0.0.0', () => process.stderr.write(`fraim-queue: settings page on port ${PORT}\n`))
       return
     }
     default:
-      usage('add | grant --title T | reply tN | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | always ID|list|rm N | expire | solved ID --proof TEXT | recovered --source S | prio ID N | serve | url')
+      usage('add | grant --title T | reply tN | list | show ID | approve ID | reject ID --note TEXT | dismiss ID | always ID|list|rm N | expire | solved ID --proof TEXT | recovered --source S | serve | url')
   }
 }
 

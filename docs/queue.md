@@ -1,6 +1,6 @@
 # Leads, the review queue and the brain
 
-You decide. Agents do the rest. Everything that needs you lands in one ranked list, and every decision you make teaches the agents what you want.
+You decide. Agents do the rest. Everything that needs you comes to you as a question in chat, and every decision you make teaches the agents what you want. There is no queue page or app: the queue is where the questions and your answers are kept.
 
 ```
 lead agents (one per area, on a schedule)      the chief of staff (morning digest + events all day)
@@ -18,14 +18,14 @@ goals (background work) ──── results ────►  REVIEW QUEUE  ◄�
 | Part | Command | Where it lives |
 |---|---|---|
 | Review queue | `fraim-queue` | `~/fraim/queue/qN/item.json` plus `media/` |
-| Queue page | `fraim-queue serve` (started with the workspace) | container port 3109, the space's last preview port |
+| Settings page and API | `fraim-queue serve` (started with the workspace) | container port 3109, the space's last preview port |
 | Goals | `fraim-goal` | `~/fraim/goals/gN/` |
 | Leads | `fraim-lead` | `~/fraim/leads/<name>/`, scheduled by the automation `~/fraim/automations/<name>/` (`lead: <name>`) |
 | Automations | `fraim-auto` | `~/fraim/automations/<name>/`; see [automations.md](automations.md) |
 
 ## How the parts work together
 
-One system, one inbox:
+One system, one place to answer:
 
 - **Leads are automations.** `fraim-lead new` writes an automation with `lead: <name>`. `fraim-auto list` shows leads and automations together; pause, failure alerts, run history and `trigger: after: <lead>` work the same for both. Old `fraim-lead run` crontab lines move into automations when the scheduler starts.
 - **Everything reports to the queue.** Goals put their result there. Leads add ideas and decisions. An automation with `output: queue` (or `queue:decision`, `queue:idea`, `queue:review`) adds its answer as an item.
@@ -79,10 +79,11 @@ Each source is one small plugin that prints plain text. Built-in ones are in `/e
 
 ### Where you review
 
-- **Page:** `fraim queue` on the laptop opens it. Keys: `j`/`k` move, `a` approve, `r` reject, `d` dismiss, `n` write a note, `v` dictate a note, `1` `2` `3` priority. The page is on the tailnet only and needs the link with the token once (the browser then keeps a cookie). `fraim queue keep` makes it always available on a Mac: a launchd agent keeps an SSH tunnel open on `http://localhost:3109` through restarts of the Mac and the server, so a bookmark always works; `fraim queue keep --off` removes it.
 - **WhatsApp:** talk in your own words ("what's waiting for me?", "the export looks good", "no, use the brand green", "drop the blog idea"). The server's Claude finds the item and records your decision, with your words as the note. There are no keywords.
 - **Laptop:** `fraim queue list`, `fraim queue approve q3`, `fraim queue reject q3 "why"`.
-- **Your own screen:** a page or a separate app on the documented API; see [api.md](api.md).
+- **Your own screen:** a page or a separate app on the documented API shows conversations and agents; see [api.md](api.md). Questions are answered in chat.
+
+The queue page, the team page, "Fraim Queue.app" and `fraim queue keep` are gone. `fraim queue keep` or `fraim queue app` on a Mac that still has them removes what is left. `fraim queue open` opens the settings page.
 
 ## Goals feed the queue
 
@@ -250,8 +251,8 @@ A goal that may add its change to the code after your yes does not merge it by i
 The chief can answer the person who wrote a mail or a WhatsApp message. You say yes first, every time.
 
 1. The chief writes the answer with `fraim-queue reply tN`. The code takes the recipient from the conversation; the chief cannot choose an address.
-2. The draft waits in the conversation in your inbox, and you get its full text on WhatsApp, word for word.
-3. You change the text in the inbox if you want, and press **Send**. On WhatsApp you can also say to send it.
+2. You get its full text on WhatsApp, word for word.
+3. Say yes to send it, or tell the chief what to change.
 4. The text you saw goes out once. The reply appears in the conversation. If it fails, the card comes back with the reason.
 
 A yes on a reply covers that one message. It never counts as a yes for other work, and an agent cannot reuse it.

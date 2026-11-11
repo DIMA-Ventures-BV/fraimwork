@@ -53,8 +53,7 @@ Operate
   fraim auto [list | show NAME | runs NAME | run NAME [--dry] | pause NAME | resume NAME | on NAME | check]
                                              automations in ~/fraim/automations (trigger, prompt, output)
   fraim queue [open|url|list|show ID|approve ID [NOTE]|reject ID NOTE|dismiss ID]
-                                             the review queue: goal results, lead ideas, decisions
-  fraim queue keep [--port N] [--off]        keep the queue page open at http://localhost:3109 on this Mac
+                                             questions for you (asked in chat); open/url: the settings page
   fraim lead new NAME [--area TEXT] [--at "CRON"] [--budget N] [--chief|--engineer] [--off] | list | show NAME | run NAME
            | tell NAME -- TEXT | ask [NAME] -- TEXT | events NAME [--off]
                                              lead agents that watch an area; the chief routes work, the engineer builds

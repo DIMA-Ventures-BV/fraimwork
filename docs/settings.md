@@ -1,6 +1,6 @@
 # Settings
 
-Settings is the page in the queue app where you see and change how your employees work. Open it with the Settings link in the inbox.
+Settings is the page where you see and change how your employees work. `fraim queue open` on the laptop opens it.
 
 There are two ways to change something, and they end up in the same files:
 

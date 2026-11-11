@@ -157,7 +157,7 @@ case "$role" in
       done
     ) &
 
-    # herdr-core holds every Claude session (main, goals, coding sessions), the queue page
+    # herdr-core holds every Claude session (main, goals, coding sessions), the settings page
     # and the watcher; the supervisor starts them and restarts what stops (docs/sessions.md).
     as_claude "mkdir -p ~/.local/state/fraim && setsid fraim-herdr supervise </dev/null >>~/.local/state/fraim/herdr.log 2>&1 &"
 

@@ -4,7 +4,7 @@
 # volume, so it reaches the same core through its socket, but it must never start a second
 # core of its own (any hc command starts one when none answers).
 #
-#   fraim-herdr supervise        workspace only: keep the core, main, the queue page and the
+#   fraim-herdr supervise        workspace only: keep the core, main, the settings page and the
 #                                watcher running (started by fraim-entrypoint)
 #   fraim-herdr up               workspace only: start what is missing once
 #   fraim-herdr alive            exit 0 when the core answers (never starts one)

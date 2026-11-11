@@ -127,8 +127,7 @@ var PROMPTS = {
   'brief-engineer': ['New engineer: first job text', 'The job description a new engineer starts with.'],
   'server': ['Every Claude on the server', 'What every session is told. A change takes effect when the WhatsApp chat starts fresh.'],
   'thread-new': ['Inbox: something new came in', 'What the chief is told when a new conversation arrives.'],
-  'thread-owner': ['Inbox: you wrote in a conversation', 'What the chief is told when you reply in the inbox.'],
-  'thread-closed': ['Inbox: a conversation closed', 'What the chief is told when a conversation closes.']
+  'thread-owner': ['Conversation: you wrote in one', 'What the chief is told when you write in a conversation.'],
 }
 function promptTitle(n) { return (PROMPTS[n] || [n.replace(/-/g, ' ').replace(/^./, function (c) { return c.toUpperCase() })])[0].replace('Chief of staff', chiefName) }
 function promptAbout(n) { return (PROMPTS[n] || ['', ''])[1] }
@@ -196,7 +195,7 @@ function nav(r) {
   var on = r.split('/')[0]
   function a(h, label, n, match) { return '<a href="#' + h + '" class="' + ((match || []).concat(h).indexOf(on) >= 0 ? 'on' : '') + '">' + label + '<span>' + (n == null ? '' : n) + '</span></a>' }
   var d = data || { people: [], watchers: [], rules: [], prompts: [], skills: [], services: [], docs: [] }
-  $('#nav').innerHTML = '<a href="/">Back to inbox</a><div class="sec">Your setup</div>' +
+  $('#nav').innerHTML = '<div class="sec">Your setup</div>' +
     a('employees', 'Employees', d.people.length + d.watchers.length, ['employee']) + a('rules', 'Rules', count(d.rules)) +
     a('instructions', 'Instructions', d.prompts.filter(function (p) { return p.source !== 'default' }).length || '', ['instruction']) +
     a('skills', 'Skills', d.skills.length, ['skill']) + a('tools', 'Tools', d.services.length) + a('docs', 'Documentation', d.docs.length, ['doc'])
@@ -230,7 +229,7 @@ var VIEW = {
       (own.length ? own.map(function (s) { return '<div class="h3">' + esc(s.name) + '</div>' + ruleBox(s.rules, '') }).join('') : '<div class="h3">General</div>' + ruleBox([], '')) +
       per.map(function (s) { var n = s.name.slice(5); return '<div class="h3">Only for ' + esc(n) + '</div>' + ruleBox(s.rules, n) }).join('') +
       '<div class="h3">How the chief talks to you</div><p class="hint">One rule per line, starting with a dash.</p>' + noteEd('voice') +
-      '<div class="h3">What stays out of the inbox</div><p class="hint">Senders and examples the mail check skips.</p>' + noteEd('inbox')
+      '<div class="h3">What the mail check skips</div><p class="hint">Senders and examples the mail check skips.</p>' + noteEd('inbox')
   },
   instructions: function () {
     bar([['Instructions']]); setTell('the instructions', 'Tell ' + chiefLower() + ' how an employee should behave')

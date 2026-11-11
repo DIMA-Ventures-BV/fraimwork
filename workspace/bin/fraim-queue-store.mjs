@@ -13,7 +13,6 @@ export const GOALS = process.env.FRAIM_GOALS_DIR || path.join(HOME, 'fraim/goals
 const TOKEN_FILE = path.join(HOME, '.config/fraim/queue-token')
 export const PORT = parseInt(process.env.FRAIM_QUEUE_PORT || '3109', 10)
 export const KINDS = ['review', 'decision', 'idea', 'info', 'failed']
-export const STATES = ['open', 'approved', 'rejected', 'dismissed']
 export const ADVICE = ['approve', 'reject', 'dismiss']
 export const MEDIA_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -130,13 +129,6 @@ export function copyMedia(dir, files, taken = []) {
     names.push(name)
   }
   return names
-}
-
-export function mediaFile(id, name) {
-  const item = readItem(id)
-  if (!item.media.includes(name)) return null
-  const file = path.join(itemDir(item.id), 'media', name)
-  return { file, type: MEDIA_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream', size: fs.statSync(file).size }
 }
 
 export function queueUrl() {

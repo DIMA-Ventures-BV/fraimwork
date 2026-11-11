@@ -58,7 +58,6 @@ Do this only when a `repo` line is on.
 ## Step 6: the workspace (macOS only)
 
 1. Run `<checkout>/bin/fraim-desktop install`, then `<checkout>/bin/fraim-desktop open`.
-2. Run `$F queue app`.
 
 ## Step 7: prove it and finish
 

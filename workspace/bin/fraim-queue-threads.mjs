@@ -2,9 +2,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  HOME, THREADS, allItems, allThreads, fire, newThreadId, now, promptText, readText, readThread, theContact, usage, writeThread,
+  HOME, THREADS, allItems, allThreads, fire, newThreadId, now, promptText, readText, readThread, theContact, usage,
+  writeThread,
 } from './fraim-queue-store.mjs'
-import { decide } from './fraim-queue-approve.mjs'
 
 // One thing, one conversation: the same key (a mail chain, a Linear issue, an error) lands in the
 // same conversation. news is true when there is something new to read; a repeat of an error
@@ -58,11 +58,6 @@ export function addRule(line) {
   return clean
 }
 
-function removeRule(line) {
-  const old = readText(RULES, 200000)
-  if (old) fs.writeFileSync(RULES, old.split('\n').filter((l) => l !== `- ${line}`).join('\n'))
-}
-
 export function neverShow(address) {
   const a = String(address || '').toLowerCase()
   if (!a) return false
@@ -70,22 +65,6 @@ export function neverShow(address) {
     const m = /^- never:\s*(\S+)/i.exec(l)
     return m && (a === m[1].toLowerCase() || (m[1].startsWith('@') && a.endsWith(m[1].toLowerCase())))
   })
-}
-
-// The owner's "Not relevant": gone from the list, questions about it closed, and the mail check learns.
-export function dismissThread(t) {
-  for (const i of allItems().filter((x) => x.thread === t.id && x.state === 'open')) decide(i.id, 'dismissed', 'Not relevant', 'page')
-  const last = t.messages.at(-1)
-  const rule = addRule(`not relevant: ${last?.from || t.who}${last?.address ? ` <${last.address}>` : ''}, "${t.title}"`)
-  t.closed = { by: 'owner', time: now(), rule }
-  writeThread(t)
-  if (t.active) tellContact(t, 'owner', promptText('thread-closed', { title: t.title }))
-}
-
-export function restoreThread(t) {
-  if (t.closed?.rule) removeRule(t.closed.rule)
-  delete t.closed
-  writeThread(t)
 }
 
 // An agent closes what needs no work. What still waits for the owner stays.

@@ -56,7 +56,7 @@ The owner gets a WhatsApp message, written by the chief of staff in plain words 
   the screen to guess a status. `fraim-herdr watch` follows `hc events` and sends the WhatsApp
   messages above.
 - **Labels.** Each terminal has `fraim=main|goal|session|lead|service|shell`; `fraim-herdr ls`
-  shows main, goals, sessions and shells (a lead's run shows on the queue page instead).
+  shows main, goals, sessions and shells.
 
 ### Watch them in the Herdr app
 
@@ -115,7 +115,7 @@ A lead's scheduled run (the chief's too) is a terminal `lead-NAME` when the core
    is refused, as in a `-p` run. The task comes before `--allowedTools`: that option takes every
    word after it, so a task after it would add the tools it names.
 2. waits for the turn to end (`done`), `FRAIM_LEAD_TIMEOUT` at most (default 1800 seconds);
-3. takes the answer from the transcript, which is also the run's live log on the queue page,
+3. takes the answer from the transcript, which is also the run's live log,
    then closes the terminal, so it holds no memory after.
 
 The scheduler starts each lead itself, never as the chief's child: a child ends with its
