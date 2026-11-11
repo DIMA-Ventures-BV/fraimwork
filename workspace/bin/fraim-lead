@@ -318,9 +318,9 @@ lead_message() {
     printf '\nWaiting for your answer:\n%s\n' "$items"
   fi
   if [ "$started" -gt 0 ]; then
-    printf '\nStarted %s task(s) in the background. The results come to your queue.\n' "$started"
+    printf '\nStarted %s task(s) in the background. The results come here.\n' "$started"
   fi
-  printf '\nAnswer here: %s' "$(fraim-queue url 2>/dev/null)"
+  printf '\nAnswer me here.'
 }
 
 # With herdr answering, a run is a terminal the owner can watch in the Herdr app (docs/sessions.md).
@@ -507,9 +507,7 @@ cmd_run() {
       FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "$name routed new work: ${output:0:3500}"
       return 0
     fi
-    FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "${output:0:3500}
-
-$(fraim-queue url 2>/dev/null)"
+    FRAIM_NOTIFY_DIRECT=1 FRAIM_NOTIFY_NO_ALERT=1 fraim-notify "${output:0:3500}"
     return 0
   fi
 

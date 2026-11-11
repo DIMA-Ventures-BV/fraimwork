@@ -8,7 +8,7 @@
 // The workspace publishes container ports 3100-3109 on the server (tailnet only in tailscale
 // mode, 127.0.0.1 in public mode). A dev server usually listens on 127.0.0.1 inside the
 // container, which Docker cannot publish; this forwarder bridges the two.
-// The last port (container 3109) is the review queue page (fraim-queue), so previews get 9.
+// The last port (container 3109) is the settings page and API (fraim-queue), so previews get 9.
 // Exit codes: 0 ok, 1 failure, 2 usage.
 import net from "node:net";
 import fs from "node:fs";

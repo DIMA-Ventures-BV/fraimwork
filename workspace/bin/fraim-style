@@ -2,7 +2,7 @@
 # fraim-style: how Claude writes, per place. One setting per place, one style file per style.
 #
 #   places   whatsapp (chat replies, goal and automation results), queue (queue items and the
-#            chief's briefing on the queue page), default (any other output)
+#            chief's briefing), default (any other output)
 #   styles   adhd (short, action first), detailed (full reasoning), normal (no extra rules),
 #            or any ~/fraim/styles/NAME.md the owner writes (it also overrides a built-in one)
 #

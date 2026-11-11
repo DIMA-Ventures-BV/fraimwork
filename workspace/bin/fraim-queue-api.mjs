@@ -3,10 +3,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  AUTOS, KINDS, QUEUE, Refused, STATES, THREADS, UsageError, allItems, allThreads, promptText, isLead, mediaFile, rank,
-  readChat, readItem, readText, readThread, roleOf, validId, validThread,
+  AUTOS, Refused, THREADS, UsageError, allThreads, promptText, isLead, readChat, readText, readThread, roleOf,
+  validThread,
 } from './fraim-queue-store.mjs'
-import { addItem, decide } from './fraim-queue-approve.mjs'
 import { sayInThread, tellContact } from './fraim-queue-threads.mjs'
 import { active, header, lastStatus, run } from './fraim-queue-views.mjs'
 import { allows, findToken, originListed, stillValid } from './fraim-queue-tokens.mjs'
@@ -86,41 +85,6 @@ function paged(url, key, rows) {
   return { [key]: rows.slice(offset, offset + limit), total: rows.length, limit, offset }
 }
 
-function listItems({ url }) {
-  const state = url.searchParams.get('state')
-  if (state != null && !STATES.includes(state)) throw bad(`state must be one of ${STATES.join(', ')}`)
-  return [200, paged(url, 'items', rank(allItems().filter((i) => !state || i.state === state)))]
-}
-
-// Only what a question for the owner needs. Anything that could start work or count as a yes
-// stays with the owner's own tools, so a write token can ask but never act.
-function createItem({ body, who }) {
-  const links = body.links ?? []
-  if (!Array.isArray(links) || links.length > 20 || links.some((l) => typeof l !== 'string' || !/^https?:\/\//.test(l))) throw bad('links must be at most 20 http or https addresses')
-  const why = body.why ?? []
-  if (!Array.isArray(why) || why.length > 3 || why.some((w) => typeof w !== 'string')) throw bad('why must be at most 3 strings')
-  const title = string(body, 'title', 200).trim()
-  if (!title) throw bad('title is required')
-  const kind = string(body, 'kind', 20) || 'review'
-  if (!KINDS.includes(kind)) throw bad(`kind must be one of ${KINDS.join(', ')}`)
-  const thread = string(body, 'thread', 10)
-  if (thread) readThread(thread)
-  return [201, addItem({
-    title, kind, why, links, thread, priority: body.priority, source: who.source,
-    ask: string(body, 'ask', 300), advise: string(body, 'advise', 20), need: string(body, 'need', 400),
-    ifYes: string(body, 'if_yes', 400), ifNo: string(body, 'if_no', 400), summary: string(body, 'summary', 20000),
-  })]
-}
-
-function media({ params, res }) {
-  let name = ''
-  try { name = decodeURIComponent(params.file) } catch {}
-  const m = mediaFile(params.item, name)
-  if (!m) throw new Problem(404, 'not_found', 'no such file')
-  res.writeHead(200, { 'Content-Type': m.type, 'Content-Length': m.size, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-  fs.createReadStream(m.file).pipe(res)
-}
-
 const lastTouched = (t) => [t.changed, t.active].sort().at(-1) || ''
 
 function listThreads({ url }) {
@@ -131,7 +95,7 @@ function listThreads({ url }) {
 
 function getThread({ params }) {
   const t = readThread(params.thread)
-  return [200, { ...t, chat: readChat(t.id), items: allItems().filter((i) => i.thread === t.id).map((i) => i.id) }]
+  return [200, { ...t, chat: readChat(t.id) }]
 }
 
 // Words from an app are never the owner's own words, whatever its scope: the chief hears who wrote.
@@ -193,7 +157,6 @@ function snapshot() {
       if (stamp.replace(/;/g, '')) out.set(`${kind} ${n}`, stamp)
     }
   }
-  scan(QUEUE, validId, 'item', ['item.json'])
   scan(THREADS, validThread, 'thread', ['thread.json', 'chat.jsonl'])
   return out
 }
@@ -235,11 +198,6 @@ function createHub() {
 
 export const ROUTES = [
   { method: 'GET', path: '/api/v1/schema', scope: 'read', run: () => [200, JSON.parse(fs.readFileSync(SCHEMA, 'utf8'))] },
-  { method: 'GET', path: '/api/v1/items', scope: 'read', run: listItems },
-  { method: 'POST', path: '/api/v1/items', scope: 'write', run: createItem },
-  { method: 'GET', path: '/api/v1/items/{item}', scope: 'read', run: ({ params }) => [200, readItem(params.item)] },
-  { method: 'POST', path: '/api/v1/items/{item}/decide', scope: 'decide', run: ({ params, body, who }) => [200, decide(params.item, body.verdict, body.note, who.via, body.text)] },
-  { method: 'GET', path: '/api/v1/items/{item}/media/{file}', scope: 'read', run: media },
   { method: 'GET', path: '/api/v1/threads', scope: 'read', run: listThreads },
   { method: 'GET', path: '/api/v1/threads/{thread}', scope: 'read', run: getThread },
   { method: 'POST', path: '/api/v1/threads/{thread}/say', scope: 'write', run: say },
@@ -248,15 +206,14 @@ export const ROUTES = [
   { method: 'GET', path: '/api/v1/events', scope: 'read', run: events },
 ]
 
-const PARAM = { item: 'q\\d{1,6}', thread: 't\\d{1,6}', agent: '[a-z0-9][a-z0-9_-]{0,47}', file: '[^/]+' }
+const PARAM = { thread: 't\\d{1,6}', agent: '[a-z0-9][a-z0-9_-]{0,47}' }
 const compiled = ROUTES.map((r) => ({ ...r, re: new RegExp(`^${r.path.replace(/\{(\w+)\}/g, (_, n) => `(?<${n}>${PARAM[n]})`)}$`) }))
 
 function classify(err) {
   if (err instanceof Problem) return [err.status, err.code, err.message]
   if (err instanceof UsageError) return [400, 'bad_request', err.message]
   if (err instanceof Refused) return [403, 'refused', err.message]
-  if (/^no (queue item|conversation)/.test(err.message)) return [404, 'not_found', err.message]
-  if (/is already /.test(err.message)) return [409, 'conflict', err.message]
+  if (/^no conversation/.test(err.message)) return [404, 'not_found', err.message]
   process.stderr.write(`fraim-queue: api: ${err.message}\n`)
   return [500, 'internal', 'internal error']
 }

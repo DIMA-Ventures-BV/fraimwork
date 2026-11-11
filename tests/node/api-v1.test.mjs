@@ -71,69 +71,12 @@ test('tokens: scoped, stored only as a hash, and a run nobody watches cannot man
   assert.equal(s.cliAs({}, 'token', 'new', '--name', 'y', '--scope', 'read', '--origin', 'https://*.example.com').status, 2)
   assert.equal(s.cliAs({}, 'token', 'new', '--name', 'reader', '--scope', 'read').status, 1, 'a name is used once')
 
-  assert.equal((await s.call(reader, '/api/v1/items')).status, 200)
-  assert.equal((await s.call('fq_wrong', '/api/v1/items')).status, 401)
-  assert.equal((await s.call('', '/api/v1/items')).status, 401)
+  assert.equal((await s.call(reader, '/api/v1/threads')).status, 200)
+  assert.equal((await s.call('fq_wrong', '/api/v1/threads')).status, 401)
+  assert.equal((await s.call('', '/api/v1/threads')).status, 401)
   s.cli('token', 'rm', 'reader')
-  assert.equal((await s.call(reader, '/api/v1/items')).status, 401, 'a removed token stops working')
+  assert.equal((await s.call(reader, '/api/v1/threads')).status, 401, 'a removed token stops working')
   assert.equal(s.cliAs({}, 'token', 'rm', 'reader').status, 1)
-})
-
-test('items: pagination, state filter, get, create and decide through the owner path', async (t) => {
-  const s = await setup(t)
-  const reader = newToken(s, 'reader', 'read')
-  const writer = newToken(s, 'writer', 'write')
-  const decider = newToken(s, 'decider', 'decide')
-  for (const title of ['One', 'Two', 'Three']) s.cli('add', '--title', title)
-
-  const page = await (await s.call(reader, '/api/v1/items?limit=2&offset=1')).json()
-  assert.deepEqual([page.total, page.limit, page.offset, page.items.length], [3, 2, 1, 2])
-  assert.equal((await s.call(reader, '/api/v1/items?limit=9999')).status, 400)
-  assert.equal((await s.call(reader, '/api/v1/items?state=maybe')).status, 400)
-  const one = await (await s.call(reader, '/api/v1/items/q1')).json()
-  assert.equal(one.title, 'One')
-  assert.equal((await s.call(reader, '/api/v1/items/q99')).status, 404)
-
-  assert.equal((await s.post(reader, '/api/v1/items', { title: 'No' })).status, 403, 'read cannot write')
-  const created = await s.post(writer, '/api/v1/items', {
-    title: 'From my app', ask: 'Ship it?', if_yes: 'It ships', kind: 'decision', links: ['https://example.com/a'],
-    on_approve: 'rm -rf everything', approved_by: 'q1', approvedBy: 'q1', switch_on: 'x', switchOn: 'x', media: ['/etc/hosts'], source: 'the owner in the chat', reply: { to: 'x' },
-  })
-  assert.equal(created.status, 201)
-  const item = await created.json()
-  assert.equal(item.state, 'open', 'a new item always waits for the owner')
-  assert.equal(item.if_yes, 'It ships')
-  assert.equal(item.on_approve, '', 'a write token cannot plant a next step')
-  assert.equal(item.switch_on, '')
-  assert.deepEqual(item.media, [])
-  assert.equal(item.reply, undefined)
-  assert.equal(item.source, 'app writer')
-  assert.equal((await s.post(writer, '/api/v1/items', { title: 'Bad', links: ['javascript:alert(1)'] })).status, 400)
-  assert.equal((await s.post(writer, '/api/v1/items', {})).status, 400)
-  assert.equal((await s.post(writer, '/api/v1/items', { title: 'x'.repeat(70000) })).status, 413)
-
-  assert.equal((await s.post(writer, '/api/v1/items/q1/decide', { verdict: 'approved' })).status, 403, 'write cannot decide')
-  const decided = await s.post(decider, '/api/v1/items/q1/decide', { verdict: 'approved', note: 'ok' })
-  assert.equal(decided.status, 200)
-  const body = await decided.json()
-  assert.deepEqual([body.state, body.via], ['approved', 'api:decider'])
-  assert.equal((await s.post(decider, '/api/v1/items/q1/decide', { verdict: 'approved' })).status, 409)
-  assert.equal((await s.post(decider, '/api/v1/items/q2/decide', { verdict: 'rejected' })).status, 400, 'reject needs a reason')
-  const open = await (await s.call(reader, '/api/v1/items?state=open')).json()
-  assert.ok(open.items.every((i) => i.state === 'open'))
-  assert.equal(open.total, 3)
-})
-
-test('a run nobody watches cannot approve through the API either', async (t) => {
-  const s = await setup(t, { FRAIM_HEADLESS: '1' })
-  await mkdir(path.join(s.home, '.config/fraim/authority'), { recursive: true })
-  const r = s.cliAs({ FRAIM_HEADLESS: '' }, 'token', 'new', '--name', 'd', '--scope', 'decide')
-  assert.equal(r.status, 0)
-  s.cliAs({ FRAIM_HEADLESS: '' }, 'add', '--title', 'Wait')
-  const refused = await s.post(r.stdout.trim(), '/api/v1/items/q1/decide', { verdict: 'approved' })
-  assert.equal(refused.status, 403)
-  assert.match((await refused.json()).error, /only the owner/)
-  assert.equal(JSON.parse(s.cli('show', 'q1', '--json')).state, 'open')
 })
 
 test('threads and agents: raw fields, say, and a message through fraim-lead tell', async (t) => {
@@ -173,17 +116,18 @@ test('threads and agents: raw fields, say, and a message through fraim-lead tell
 
 test('the page cookie works on v1, needs the header to post, and never gets CORS', async (t) => {
   const s = await setup(t)
-  s.cli('add', '--title', 'One')
+  await writeFile(path.join(s.home, 'put.json'), JSON.stringify({ kind: 'other', key: 'k', title: 'T' }))
+  s.cli('thread', 'put', '--file', path.join(s.home, 'put.json'), '--quiet')
   const login = await fetch(`${s.base}/?t=${s.cli('token')}`, { redirect: 'manual' })
   const cookie = login.headers.get('set-cookie').split(';')[0]
   const origin = 'https://app.example.com'
   newToken(s, 'app', 'read', origin)
-  const read = await s.call('', '/api/v1/items', { headers: { cookie, Origin: origin } })
+  const read = await s.call('', '/api/v1/threads', { headers: { cookie, Origin: origin } })
   assert.equal(read.status, 200)
   assert.equal(read.headers.get('access-control-allow-origin'), null, 'credentialed cookies never get CORS')
-  assert.equal((await s.post('', '/api/v1/items/q1/decide', { verdict: 'approved' }, { cookie })).status, 403, 'no cross-site posts')
-  const ok = await s.post('', '/api/v1/items/q1/decide', { verdict: 'approved' }, { cookie, 'X-Fraim-Queue': '1' })
-  assert.equal((await ok.json()).via, 'page')
+  assert.equal((await s.post('', '/api/v1/threads/t1/say', { text: 'hi' }, { cookie })).status, 403, 'no cross-site posts')
+  const ok = await s.post('', '/api/v1/threads/t1/say', { text: 'hi' }, { cookie, 'X-Fraim-Queue': '1' })
+  assert.equal((await ok.json()).from, 'owner')
 })
 
 test('CORS: only origins a token lists, OPTIONS without auth, no credentials', async (t) => {
@@ -192,20 +136,20 @@ test('CORS: only origins a token lists, OPTIONS without auth, no credentials', a
   const token = newToken(s, 'app', 'read', origin)
   const other = newToken(s, 'other', 'read')
 
-  const preflight = await fetch(`${s.base}/api/v1/items`, { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET' } })
+  const preflight = await fetch(`${s.base}/api/v1/agents`, { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET' } })
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), origin)
   assert.match(preflight.headers.get('access-control-allow-headers'), /authorization/i)
   assert.equal(preflight.headers.get('access-control-allow-credentials'), null)
   assert.equal(preflight.headers.get('vary'), 'Origin')
-  const stranger = await fetch(`${s.base}/api/v1/items`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example.com' } })
+  const stranger = await fetch(`${s.base}/api/v1/agents`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example.com' } })
   assert.equal(stranger.headers.get('access-control-allow-origin'), null)
 
-  const listed = await s.call(token, '/api/v1/items', { headers: { Origin: origin } })
+  const listed = await s.call(token, '/api/v1/agents', { headers: { Origin: origin } })
   assert.equal(listed.headers.get('access-control-allow-origin'), origin)
   assert.equal(listed.headers.get('access-control-allow-credentials'), null)
-  assert.equal((await s.call(other, '/api/v1/items', { headers: { Origin: origin } })).status, 403, 'an origin must be on the token it uses')
-  const noOrigin = await s.call(token, '/api/v1/items')
+  assert.equal((await s.call(other, '/api/v1/agents', { headers: { Origin: origin } })).status, 403, 'an origin must be on the token it uses')
+  const noOrigin = await s.call(token, '/api/v1/agents')
   assert.equal(noOrigin.status, 200, 'a server-side caller sends no Origin')
   assert.equal(noOrigin.headers.get('access-control-allow-origin'), null)
 })
@@ -227,8 +171,6 @@ test('events tell a screen what changed, and stop when the token is removed', as
     return true
   }
   assert.ok(await until(/event: ready/))
-  s.cli('add', '--title', 'New')
-  assert.ok(await until(/event: item\.changed\ndata: \{"id":"q1"\}/))
   await writeFile(path.join(s.home, 'put.json'), JSON.stringify({ kind: 'other', key: 'k', title: 'T' }))
   s.cli('thread', 'put', '--file', path.join(s.home, 'put.json'), '--quiet')
   assert.ok(await until(/event: thread\.changed\ndata: \{"id":"t1"\}/))
@@ -254,14 +196,22 @@ test('the schema is served and matches the real routes', async (t) => {
   }
 })
 
-test('old routes and the shipped page keep working next to v1', async (t) => {
+test('the queue item routes and pages are gone; questions reach the owner in chat', async (t) => {
   const s = await setup(t)
   s.cli('add', '--title', 'One')
+  const reader = newToken(s, 'reader', 'read')
+  const decider = newToken(s, 'decider', 'decide')
   assert.equal((await fetch(`${s.base}/health`)).status, 200)
-  assert.equal((await fetch(`${s.base}/api/items`)).status, 401)
+  assert.equal((await s.call(reader, '/api/v1/items')).status, 404)
+  assert.equal((await s.post(decider, '/api/v1/items/q1/decide', { verdict: 'approved' })).status, 404)
   const login = await fetch(`${s.base}/?t=${s.cli('token')}`, { redirect: 'manual' })
   const cookie = login.headers.get('set-cookie').split(';')[0]
-  assert.equal((await (await fetch(`${s.base}/api/items`, { headers: { cookie } })).json())[0].title, 'One')
+  const home = await fetch(`${s.base}/`, { headers: { cookie }, redirect: 'manual' })
+  assert.equal(home.headers.get('location'), '/settings', 'the address the owner kept opens settings')
+  for (const p of ['/api/items', '/api/team', '/api/active', '/team', '/api/threads']) {
+    assert.equal((await fetch(`${s.base}${p}`, { headers: { cookie } })).status, 404, `${p} is gone`)
+  }
+  assert.equal(JSON.parse(s.cli('show', 'q1', '--json')).state, 'open', 'the question still waits')
 })
 
 test('what a goal is told on approve and rework comes from prompt files the owner can change', async (t) => {

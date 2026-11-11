@@ -46,7 +46,7 @@ The first file that exists is used:
 
 An agent's name: say "call yourself Winston". It is the `display:` line of `lead.md`, set with `fraim-lead display`, and the inbox, chat and WhatsApp use it.
 
-The inbox and every page are yours too. Say "put my mail on the left" or "remove that tab" to the chief: it changes your own copy of the page in `~/fraim/ui`, and an update never overwrites it. See `docs/ui.md`.
+The settings page and every page you add are yours too. Say "make it light" or "rename that button" to the chief: it changes your own copy of the page in `~/fraim/ui`, and an update never overwrites it. See `docs/ui.md`.
 
 Other settings that were already yours: the job of an agent (`~/fraim/leads/NAME/lead.md`), its goal budget (`budget`), extra tools (`tools`), its schedule (`~/fraim/automations/NAME/automation.md`), your rules (`fraim-brain`), how the chief talks to you (`fraim-style voice`), and how often it may message you (`fraim-relay timing gap SECONDS`, `wait SECONDS`).
 

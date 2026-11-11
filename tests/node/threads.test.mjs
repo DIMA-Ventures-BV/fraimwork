@@ -1,4 +1,4 @@
-// The inbox: conversations saved from the source, mail chains, and the agents' chat.
+// Conversations saved from the source, mail chains, and the agents' chat next to them.
 import assert from 'node:assert/strict'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
@@ -113,58 +113,44 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   const get = async (p) => (await fetch(base + p, { headers: { cookie } })).json()
   const post = (p, body) => fetch(base + p, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json', 'X-Fraim-Queue': '1' }, body: JSON.stringify(body) })
 
-  const page = await (await fetch(`${base}/`, { headers: { cookie } })).text()
-  assert.match(page, /Write to the agents/)
-  assert.match(page, /For you/, 'what is for the owner says so')
-  assert.doesNotMatch(page, />(Reply|Forward|Comment)</, 'the middle pane only shows what came in')
-  assert.match(await (await fetch(`${base}/team`, { headers: { cookie } })).text(), /Automations/)
-
   const pageAt = (p) => fetch(`${base}${p}`, { headers: { cookie } })
-  for (const p of ['/', '/team', '/settings']) {
-    for (const [, code] of (await (await pageAt(p)).text()).matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(code)
-  }
+  for (const [, code] of (await (await pageAt('/settings')).text()).matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(code)
   await mkdir(path.join(home, 'fraim/ui'), { recursive: true })
-  await writeFile(path.join(home, 'fraim/ui/inbox.html'), '<html>my inbox</html>')
+  await writeFile(path.join(home, 'fraim/ui/settings.html'), '<html>my settings</html>')
   await writeFile(path.join(home, 'fraim/ui/orders.html'), '<html>my orders</html>')
-  assert.equal(await (await pageAt('/')).text(), '<html>my inbox</html>', 'the owner page wins, without a restart')
-  assert.notEqual(await (await pageAt('/?builtin=1')).text(), '<html>my inbox</html>', 'the default is always one address away')
+  assert.equal(await (await pageAt('/settings')).text(), '<html>my settings</html>', 'the owner page wins, without a restart')
+  assert.notEqual(await (await pageAt('/settings?builtin=1')).text(), '<html>my settings</html>', 'the default is always one address away')
   assert.equal(await (await pageAt('/p/orders')).text(), '<html>my orders</html>', 'a new page of the owner')
   assert.equal((await pageAt('/p/nothing')).status, 404)
   assert.notEqual((await fetch(`${base}/p/orders`, { redirect: 'manual' })).status, 200, 'a page needs the login')
-  await writeFile(path.join(home, 'fraim/ui/inbox.html'), '   ')
-  assert.notEqual((await (await pageAt('/')).text()).trim(), '', 'an empty file falls back to the default')
+  await writeFile(path.join(home, 'fraim/ui/settings.html'), '   ')
+  assert.notEqual((await (await pageAt('/settings')).text()).trim(), '', 'an empty file falls back to the default')
   fs.rmSync(path.join(home, 'fraim/ui'), { recursive: true })
 
-  const chain = await get('/api/threads/t1')
+  const chain = await get('/api/v1/threads/t1')
   assert.equal(chain.url, 'https://mail.google.com/mail/u/owner@example.com/#all/chain0001', 'the link opens the mailbox of this space')
   assert.equal(chain.title, 'Login', 'no Re: in front')
   assert.equal(chain.who, 'Anna de Vries')
   assert.equal(chain.messages.length, 2)
   assert.equal(chain.messages[1].text, 'Yes please.', 'the quote is cut')
   assert.match(chain.messages[1].quoted, /Which book/, 'and kept for the owner')
-  assert.deepEqual(chain.chat.map((c) => [c.from, c.to, c.text ?? c.item.ask]), [
-    ['Chief of staff', 'Platform', 'Can you look at this?'],
-    ['Platform', 'You', 'Shall I send a new link?'],
-  ], 'people names, and no details')
+  assert.deepEqual(chain.chat.map((c) => [c.from, c.to]), [['chief', 'mlv-platform']])
 
-  const fwd = await get('/api/threads/t2')
+  const fwd = await get('/api/v1/threads/t2')
   assert.deepEqual([fwd.messages[0].from, fwd.messages[0].forwardedBy, fwd.messages[0].forwardNote, fwd.messages[0].text], ['Klant Een', 'Daan', 'fyi', 'De link werkt niet.'])
   assert.deepEqual(fwd.messages[0].attachments, [{ name: 'foto.png', type: 'image/png', size: '21.5 KB' }])
 
-  const letter = (await get('/api/threads/t3')).messages[0]
+  const letter = (await get('/api/v1/threads/t3')).messages[0]
   assert.equal(letter.designed, true)
   assert.doesNotMatch(letter.html, /<script|http-equiv/i, 'nothing that can reach outside the frame')
 
-  assert.deepEqual((await get('/api/threads/t5')).stats.count, 5, 'a repeat raises the count')
-  const card = await get(`/api/threads/${loose}`)
-  assert.deepEqual([card.kind, card.title, card.text], ['item', 'Loose review', 'Some text'], 'anything else gets the plain card')
+  assert.deepEqual((await get('/api/v1/threads/t5')).stats.count, 5, 'a repeat raises the count')
 
-  let rows = await get('/api/threads')
-  const row = (id) => rows.find((r) => r.id === id)
-  assert.equal(rows.length, 6)
-  assert.deepEqual([row('t1').state, row('t1').unread, row('t1').snippet], ['need', true, 'Platform: Shall I send a new link?'])
-  assert.equal((await post('/api/threads/t1/seen', {})).status, 200)
-  assert.equal((await post('/api/threads/t1/say', { text: 'Be kind to her' })).status, 200)
+  const rows = () => Object.fromEntries(cli('thread', 'list').split('\n').map((l) => [l.split(/\s+/)[0], l]))
+  assert.equal(Object.keys(rows()).length, 6, 'conversations and the loose question')
+  assert.match(rows().t1, /^t1\s+need\s+Anna de Vries\s+Login$/)
+  assert.ok(rows()[loose], 'a question without a conversation is listed too')
+  assert.equal((await post('/api/v1/threads/t1/say', { text: 'Be kind to her' })).status, 201)
   // The page server does not wait for the tell it starts.
   for (let i = 0; i < 50 && !/Be kind to her/.test(fs.readFileSync(told, 'utf8')); i++) await new Promise((r) => setTimeout(r, 100))
   assert.match(fs.readFileSync(told, 'utf8'), /tell chief --from owner --thread t1 -- The boss says: Be kind to her/, "the owner's own file wins")
@@ -187,19 +173,11 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   assert.equal(fs.readFileSync(asked, 'utf8').trim(), 'chat -- Thanks')
 
   const rules = path.join(home, 'fraim/inbox-rules.md')
-  assert.equal((await post('/api/threads/t3/dismiss', {})).status, 200)
-  let gone = (await get('/api/threads')).find((r) => r.id === 't3')
-  assert.deepEqual([gone.state, gone.closed, gone.unread], ['done', true, false])
-  assert.match(fs.readFileSync(rules, 'utf8'), /^- not relevant: Shop <news@example.com>, "Big news"$/m, 'the mail check learns from it')
-  assert.equal((await post('/api/threads/t3/restore', {})).status, 200)
-  gone = (await get('/api/threads')).find((r) => r.id === 't3')
-  assert.equal(gone.closed, false)
-  assert.doesNotMatch(fs.readFileSync(rules, 'utf8'), /Big news/, 'undo takes the example back')
   assert.throws(() => cli('thread', 'close', 't1', '--from', 'chief'), /--reason/)
   cli('add', '--title', 'Still open', '--ask', 'Yes?', '--kind', 'decision', '--thread', 't2', '--quiet')
   assert.throws(() => execFileSync(process.execPath, [bin, 'thread', 'close', 't2', '--from', 'chief', '--reason', 'done'], { env, stdio: 'pipe' }), /needs the owner/)
   cli('thread', 'close', 't4', '--from', 'chief', '--reason', 'Just a thank-you, nothing to do.')
-  assert.equal((await get('/api/threads')).find((r) => r.id === 't4').closed, true)
+  assert.match(rows().t4, /^t4\s+done\s/)
   assert.match(cli('thread', 'ignore', '--from', '@spam.example'), /never: @spam.example/)
   threads.spam00001 = { text: head('Buy now', 1) + message(1, 'Spam <a@spam.example>', 'Buy.') }
   assert.equal(await mail('spam00001'), 'kept out by inbox-rules.md')
@@ -207,15 +185,11 @@ test('a mail chain is one conversation, shown as it came in, with the agents tal
   cli('thread', 'ignore', 'newsletters about sales')
   assert.match(fs.readFileSync(rules, 'utf8'), /^- not relevant: newsletters about sales$/m)
 
-  const staff = await get('/api/employees')
-  assert.deepEqual(staff.people.map((p) => [p.title, p.does, p.product, p.starts, p.tools]), [
+  const staff = await get('/api/settings')
+  assert.deepEqual(staff.people.filter((p) => p.name === 'mlv-platform').map((p) => [p.title, p.does, p.product, p.starts, p.tools]), [
     ['Platform', 'The whole web app.', 'shop', ['schedule 0 6 * * 1-5'], ['Github', 'Linear']],
   ])
-  assert.equal((await post(`/api/items/${q}/decide`, { verdict: 'approved', note: '' })).status, 200)
-  rows = await get('/api/threads')
-  assert.equal(row('t1').unread, false)
-  assert.equal(row('t1').state, 'work', 'answered and recent')
-  const after = await get('/api/threads/t1')
-  assert.deepEqual(after.chat.at(-1).text, 'Yes, go ahead.')
+  cli('approve', q)
+  assert.match(rows().t1, /^t1\s+work\s/, 'answered and recent')
   assert.match(cli('thread', 'show', 't2'), /forwarded by Daan/)
 })

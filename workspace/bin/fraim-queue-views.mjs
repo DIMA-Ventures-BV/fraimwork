@@ -1,11 +1,11 @@
-// What today's screens show: the team, who works now, inbox rows and the chief's chat. Words
-// on these views are for the shipped pages; the API in fraim-queue-api.mjs has raw fields.
+// What the settings page and the CLI show: the team, who works now, conversations and the
+// chief's chat. The API in fraim-queue-api.mjs has raw fields.
 import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  AUTOS, AUTO_STATE, GOALS, HOME, LEADS, allItems, allThreads, readChat, readItem, readText, readThread,
-  runtimeEnv, theChatAgent, theContact, tool, usage, validId, validThread,
+  AUTOS, AUTO_STATE, GOALS, HOME, LEADS, allItems, allThreads, readChat, readText, readThread, runtimeEnv,
+  theChatAgent, theContact, tool, validId, validThread,
 } from './fraim-queue-store.mjs'
 
 export function header(text) {
@@ -43,15 +43,6 @@ function leadRuns(dir, count) {
   })
 }
 
-function automationRuns(dir, count) {
-  let names = []
-  try { names = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}T/.test(f)).sort().reverse().slice(0, count) } catch {}
-  return names.map((n) => {
-    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})\D?(\d{2})/.exec(n)
-    return { text: readText(path.join(dir, n, 'output.md'), 4000).trim(), time: m ? `${m[1]} ${m[2]}:${m[3]}` : n }
-  })
-}
-
 export function team() {
   const leads = []
   const automations = []
@@ -83,91 +74,6 @@ export function run(cmd, args, timeout = 8000) {
   })
 }
 
-// The steps of a headless run (claude -p --output-format stream-json), as lines a person reads:
-// what Claude wrote and each tool it used, newest last.
-const TOOL_ARG = ['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt', 'skill']
-function transcript(jsonl) {
-  const out = []
-  for (const raw of String(jsonl || '').split('\n')) {
-    let e
-    try { e = JSON.parse(raw) } catch { continue }
-    if (!e || typeof e !== 'object') continue
-    if (e.type === 'assistant') {
-      for (const c of e.message?.content || []) {
-        if (c.type === 'text' && c.text?.trim()) out.push(c.text.trim())
-        if (c.type === 'tool_use') {
-          const i = c.input || {}
-          const k = TOOL_ARG.find((key) => typeof i[key] === 'string' && i[key])
-          const arg = k ? String(i[k]).replace(/\s+/g, ' ').slice(0, 160) : ''
-          out.push(`> ${c.name}${arg ? `: ${arg}` : ''}`)
-        }
-      }
-    } else if (e.type === 'result') {
-      out.push(e.is_error ? `Stopped with an error: ${String(e.result || '').slice(0, 400)}` : `Done.${e.result ? `\n\n${String(e.result).slice(0, 4000)}` : ''}`)
-    }
-  }
-  return out.slice(-120).join('\n\n')
-}
-
-// The live log of a lead or automation run: while it works, the file it writes now; after,
-// the log of its last run.
-function runLog(name) {
-  const h = header(readText(path.join(AUTOS, name, 'automation.md'), 4000))
-  if (!Object.keys(h).length) return null
-  const newest = (dir, re) => { try { return fs.readdirSync(dir).filter((f) => re.test(f)).sort().at(-1) } catch { return undefined } }
-  if (h.lead) {
-    if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(h.lead)) return null
-    const dir = path.join(LEADS, h.lead)
-    const live = path.join(dir, '.running/live.jsonl')
-    if (fs.existsSync(live)) return live
-    const f = newest(path.join(dir, 'runs'), /^\d{8}-\d{6}\.md\.jsonl$/)
-    return f ? path.join(dir, 'runs', f) : ''
-  }
-  const runs = path.join(AUTOS, name, 'runs')
-  const f = newest(runs, /^\d{4}-\d{2}-\d{2}T/)
-  return f && fs.existsSync(path.join(runs, f, 'log.jsonl')) ? path.join(runs, f, 'log.jsonl') : ''
-}
-
-// The steps of a run for the lead page: what Claude said and did, in the words a person uses.
-const TOOL_WORD = { Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Changed', Grep: 'Searched', Glob: 'Looked for', WebFetch: 'Opened', WebSearch: 'Searched the web', Task: 'Asked a helper', Agent: 'Asked a helper', Skill: 'Used skill' }
-function runSteps(jsonl) {
-  const out = []
-  for (const raw of String(jsonl || '').split('\n')) {
-    let e
-    try { e = JSON.parse(raw) } catch { continue }
-    if (e?.type !== 'assistant') continue
-    for (const c of e.message?.content || []) {
-      if (c.type === 'text' && c.text?.trim()) out.push({ say: c.text.trim().slice(0, 600) })
-      if (c.type === 'tool_use') {
-        const i = c.input || {}
-        const k = ['description', ...TOOL_ARG].find((key) => typeof i[key] === 'string' && i[key])
-        out.push({ did: TOOL_WORD[c.name] || `Used ${String(c.name).split('__').at(-1)}`, what: k ? String(i[k]).replace(/\s+/g, ' ').slice(0, 160) : '' })
-      }
-    }
-  }
-  return out
-}
-
-// All the page shows for one lead or automation: what it is for, what it does now, what it found.
-export function member(name) {
-  if (!validAgent(name)) usage('not a lead or automation name')
-  const text = readText(path.join(AUTOS, name, 'automation.md'), 4000)
-  if (!text) return null
-  const h = header(text)
-  const lead = /^[a-z0-9][a-z0-9-]{0,39}$/.test(h.lead || '') ? h.lead : ''
-  const lock = path.join(AUTO_STATE, name, 'lock')
-  const running = fs.existsSync(lock)
-  const log = running ? runLog(name) : ''
-  let since = ''
-  try { since = fs.statSync(lock).mtime.toISOString() } catch {}
-  return {
-    name, running, since,
-    about: (lead && leadArea(lead)) || (h.description || '').replace(/^Lead [a-z0-9-]+:\s*/, ''),
-    steps: log ? runSteps(readText(log, 4000000)).slice(-40).reverse() : [],
-    runs: lead ? leadRuns(path.join(LEADS, lead, 'runs'), 10) : automationRuns(path.join(AUTOS, name, 'runs'), 10),
-  }
-}
-
 export async function active() {
   const out = []
   const herd = await run('fraim-herdr', ['ls', '--json'])
@@ -189,28 +95,6 @@ export async function active() {
   }
   const order = { blocked: 0, working: 1, error: 2, idle: 3, done: 4, none: 5 }
   return out.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name))
-}
-
-const validAgent = (n) => /^[a-z0-9][a-z0-9_-]{0,47}$/.test(n)
-
-export async function agentScreen(name) {
-  if (!validAgent(name)) usage('not an agent name')
-  if (fs.existsSync(path.join(AUTO_STATE, name, 'lock'))) {
-    const log = runLog(name)
-    if (log != null) return { name, text: log ? transcript(readText(log, 4000000)) : '' }
-  }
-  const text = /^g\d+$/.test(name) ? await run('fraim-goal', ['read', name]) : await run('hc', ['read', name, '--lines', '80'])
-  return { name, text: text == null ? '' : text.slice(-20000) }
-}
-
-export async function agentSend(name, text) {
-  if (!validAgent(name)) usage('not an agent name')
-  text = String(text || '').trim()
-  if (!text) usage('write a message first')
-  const r = /^g\d+$/.test(name) ? await run('fraim-goal', ['send', name, text], 15000)
-    : /^s\d+$/.test(name) ? await run('fraim-sessions', ['send', name, text], 15000) : null
-  if (r == null) throw new Error(`could not send to ${name}; only goals (g1) and sessions (s1) take messages`)
-  return { ok: true }
 }
 
 // The name people see is the display: line of the lead's brief; without one, its folder name.
@@ -321,27 +205,6 @@ export function inboxRows() {
 
 function itemOwner(i) {
   return i.lead || (/^automation /.test(i.source) ? i.source.slice(11) : i.source)
-}
-
-const ANSWER = { approved: 'Yes, go ahead.', dismissed: 'No, leave it.', rejected: 'No.' }
-const REPLY_ANSWER = { approved: 'Send it.', dismissed: 'Do not send it.', rejected: 'Not like this.' }
-function itemChat(i) {
-  const ask = { time: i.created, from: displayName(itemOwner(i)), to: 'You', item: { id: i.id, title: i.title, ask: i.ask, need: i.need, if_yes: i.if_yes, advise: i.advise, state: i.state, reply: i.reply } }
-  if (i.state === 'open') return [ask]
-  return [ask, { time: i.decided, from: 'You', to: displayName(itemOwner(i)), text: `${(i.reply ? REPLY_ANSWER : ANSWER)[i.state] || ''}${i.note ? ` ${i.note}` : ''}`.trim() }]
-}
-
-export function threadDetail(id) {
-  if (validId(id)) {
-    const i = readItem(id)
-    return { id: i.id, kind: 'item', title: i.title, who: displayName(itemOwner(i)), text: i.summary, created: i.created, links: i.links, media: i.media, fields: {}, messages: [], comments: [], chat: itemChat(i), working: [] }
-  }
-  const t = readThread(id)
-  const { seen: _seen, ...shown } = t
-  const said = readChat(id).map((c) => ({ time: c.time, from: displayName(c.from), to: c.to ? displayName(c.to) : '', text: spoken(c.text) }))
-  const items = allItems().filter((i) => i.thread === id)
-  const chat = [...said, ...items.flatMap(itemChat)].sort((a, b) => String(a.time).localeCompare(String(b.time)))
-  return { ...shown, links: [], media: [], chat, working: workers()[id] || [] }
 }
 
 export function describeThread(id) {

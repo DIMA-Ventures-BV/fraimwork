@@ -1,6 +1,6 @@
-# Your own inbox
+# Your own pages
 
-Everything in the inbox and the app can change. Tell your chief of staff what you want in your own words: "put my mail on the left", "make it light", "remove that tab", "rename this button", or "add a page with my orders". The chief changes it, and you reload the page.
+The settings page and any page you add can change. Questions for you come in chat, not on a page (docs/queue.md). Tell your chief of staff what you want in your own words: "make it light", "rename this button", or "add a page with my orders". The chief changes it, and you reload the page.
 
 ## How it works
 
@@ -8,8 +8,6 @@ Every page is a file. fraimwork ships the defaults. Your version lives in `~/fra
 
 | Page | Address | File |
 |---|---|---|
-| Inbox | `/` | `inbox.html` |
-| Team | `/team` | `team.html` |
 | Settings | `/settings` | `settings.html` |
 | A page of your own | `/p/NAME` | `NAME.html` |
 
@@ -33,7 +31,7 @@ The chief runs these.
 
 A page can also be an app of its own, on another address. It talks to your server through the API in [api.md](api.md):
 
-1. Ask Claude for a token with the address of your app: `fraim-queue token new --name myapp --scope read --origin https://app.example.com`. Use `write` or `decide` only if the app must change things.
+1. Ask Claude for a token with the address of your app: `fraim-queue token new --name myapp --scope read --origin https://app.example.com`. Use `write` only if the app must write in conversations or to agents.
 2. The app sends `Authorization: Bearer TOKEN` to `/api/v1/...`. Only addresses on a token may call from a browser.
 3. The app listens on `/api/v1/events` instead of polling.
 
@@ -41,12 +39,12 @@ A page in `/p/NAME` needs no token: it uses the page's cookie on the same routes
 
 ## If a page breaks
 
-Add `?builtin=1` to the address, for example `/?builtin=1`. That always shows the default page. Then say "put it back".
+Add `?builtin=1` to the address: `/settings?builtin=1`. That always shows the default page. Then say "put it back".
 
 ## Who may change a page
 
 Only you. The chief changes a page in your chat on WhatsApp or in the app. Goals, leads, automations and the chief's own scheduled runs are refused, so a mail or a web page cannot ask for a change.
 
-This stops the edit tools and `fraim-ui`. It does not stop a shell command in a run nobody watches, because those run as the same Unix user. A page can show anything, including an approve button, so a page changed that way could mislead you. A separate Unix user for those runs closes this gap.
+This stops the edit tools and `fraim-ui`. It does not stop a shell command in a run nobody watches, because those run as the same Unix user. A page can show anything, so a page changed that way could mislead you. A separate Unix user for those runs closes this gap.
 
 When fraimwork improves a default you copied, your page stays. `fraim-ui list` tells you, and `fraim-ui diff` shows what is different.

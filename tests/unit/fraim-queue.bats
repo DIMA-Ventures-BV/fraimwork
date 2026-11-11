@@ -378,11 +378,9 @@ EOF
   [ ! -f "$FRAIM_BRAIN_DIR/log.md" ]
 }
 
-@test "prio changes the priority" {
+@test "prio is gone with the queue page" {
   "$Q" add --quiet --title x
-  "$Q" prio q1 1
-  [ "$(jq -r .priority "$FRAIM_QUEUE_DIR/q1/item.json")" = 1 ]
-  run "$Q" prio q1 9
+  run "$Q" prio q1 1
   [ "$status" -eq 2 ]
 }
 

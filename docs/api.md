@@ -6,7 +6,7 @@ The machine-readable contract is `GET /api/v1/schema` (OpenAPI 3 JSON). A test c
 
 ## Connect
 
-The API is on the same address as your inbox. `fraim queue url` shows the address.
+The API is on the same address as your settings page. `fraim queue url` shows the address.
 
 Make a token. Claude runs this for you:
 
@@ -19,7 +19,7 @@ The token is shown once. Only a hash is kept, in `~/.config/fraim/authority/api-
 Send it with every request:
 
 ```
-curl -H "Authorization: Bearer fq_..." http://SERVER:PORT/api/v1/items?state=open
+curl -H "Authorization: Bearer fq_..." http://SERVER:PORT/api/v1/agents
 ```
 
 Never put a token in a URL or in code that goes to a public place.
@@ -29,14 +29,12 @@ Never put a token in a URL or in code that goes to a public place.
 | Scope | Allows |
 |---|---|
 | `read` | Every `GET` |
-| `write` | `read`, plus adding items, saying something in a conversation and sending a note to an agent |
-| `decide` | `write`, plus approving, rejecting and dismissing items |
+| `write` | `read`, plus saying something in a conversation and sending a note to an agent |
+| `decide` | The same as `write` now. Tokens made with it keep working |
 
 Only you can make, list or remove tokens. A run nobody watches is refused.
 
-**A `decide` token is your own choice.** Whoever holds it can say yes in your name: approve work, switch on automations and send replies to people outside. Give it only to an app you trust, keep it off shared machines, and remove it when you stop using the app. A `decide` approval of a brain change also sends you a message, so you see it happened.
-
-Your inbox page's own cookie also works on `/api/v1`, for pages served from your server (`/p/NAME`). A `POST` with the cookie needs the header `X-Fraim-Queue: 1`.
+Your settings page's own cookie also works on `/api/v1`, for pages served from your server (`/p/NAME`). A `POST` with the cookie needs the header `X-Fraim-Queue: 1`.
 
 ### From a browser on another address
 
@@ -48,13 +46,8 @@ Lists take `limit` (1 to 200, default 50) and `offset`, and answer with `total`,
 
 | Route | Scope | What it does |
 |---|---|---|
-| `GET /api/v1/items?state=` | read | Items, most urgent first. `state`: `open`, `approved`, `rejected`, `dismissed`, or leave it out for all |
-| `POST /api/v1/items` | write | Add a question for you |
-| `GET /api/v1/items/qN` | read | One item |
-| `POST /api/v1/items/qN/decide` | decide | `{ "verdict": "approved", "note": "..." }`. A rejection needs a `note`. `text` changes a reply draft |
-| `GET /api/v1/items/qN/media/FILE` | read | A screenshot or video of an item |
 | `GET /api/v1/threads` | read | Conversations, latest first, without their text |
-| `GET /api/v1/threads/tN` | read | One conversation with its chat and item ids |
+| `GET /api/v1/threads/tN` | read | One conversation with its chat |
 | `POST /api/v1/threads/tN/say` | write | `{ "text": "..." }` adds a line and tells your chief of staff |
 | `GET /api/v1/agents` | read | Leads, automations and what runs now |
 | `POST /api/v1/agents/NAME/messages` | write | `{ "text": "..." }` leaves a note for a lead and wakes it |
@@ -63,10 +56,9 @@ Lists take `limit` (1 to 200, default 50) and `offset`, and answer with `total`,
 
 Good to know:
 
-- A new item always waits for you. It has no step that runs on approve, and it can never count as your yes for something else.
 - Text an app writes in a conversation or to an agent is marked with the app's name. It is never treated as your own words or as a yes.
 - A request body is at most 64 KB. Text you send to a conversation or an agent is at most 4000 characters.
-- The `html` of a mail is what the sender wrote. Show it the way the inbox does: in a sandboxed frame.
+- The `html` of a mail is what the sender wrote. Show it in a sandboxed frame.
 
 Errors look like `{ "error": "what went wrong", "code": "not_found" }`.
 
@@ -76,7 +68,6 @@ Errors look like `{ "error": "what went wrong", "code": "not_found" }`.
 | 401 | No token, or an unknown one |
 | 403 | The token's scope or origin does not allow this |
 | 404 | No such thing |
-| 409 | Already decided |
 | 413 | The body is too large |
 
 ## Live updates
@@ -86,10 +77,9 @@ Errors look like `{ "error": "what went wrong", "code": "not_found" }`.
 | Event | Data |
 |---|---|
 | `ready` | `{}`: the stream is live |
-| `item.changed` | `{ "id": "q7" }` |
 | `thread.changed` | `{ "id": "t3" }` |
 
-Fetch the item or conversation again when you get its id. After a reconnect, fetch your lists again; missed events are not resent.
+Fetch the conversation again when you get its id. After a reconnect, fetch your lists again; missed events are not resent.
 
 A browser's `EventSource` cannot send an `Authorization` header, so read the stream with `fetch`:
 
@@ -114,4 +104,4 @@ for (;;) {
 
 ## Stability
 
-`/api/v1` only grows: new routes and new fields. A change that would break a screen gets a new version next to it. The routes your inbox page uses (`/api/items`, `/api/threads` and so on) are shaped for that page and can change; build on `/api/v1`.
+`/api/v1` grows with new routes and new fields. A change that would break a screen gets a new version next to it, with one exception: the item routes (`/api/v1/items...`) and the `item.changed` event are gone, because questions for you now come in chat (docs/queue.md). The routes the settings page uses (`/api/settings`, `/api/chief`) are shaped for that page and can change; build on `/api/v1`.

@@ -414,9 +414,7 @@ report_done() {
     if [ -s "$dir/queue" ] && command -v fraim-queue >/dev/null; then
       fraim-queue supersede --origin "$(cat "$dir/queue")" --by "$id" >/dev/null 2>>"$dir/log.txt" || true
     fi
-    # A run nobody watches may start this watcher, and it gets no link; the message goes without.
-    summary="$(fraim-prompt render notice-goal-done --set "id=$id" --set "text=${text:0:3500}" \
-      --set "queue=$qid" --set "link=$(fraim-queue url 2>/dev/null)")"
+    summary="$(fraim-prompt render notice-goal-done --set "id=$id" --set "text=${text:0:3500}" --set "queue=$qid")"
   else
     summary="$(fraim-prompt render notice-goal-answered --set "id=$id" --set "text=${text:0:3500}")"
   fi

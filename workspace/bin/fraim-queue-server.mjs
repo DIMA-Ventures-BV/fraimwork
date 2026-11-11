@@ -1,19 +1,13 @@
-// The web server: the shipped pages and the routes they use.
+// The web server: the settings page, the owner's own pages (/p/NAME) and /api/v1.
+// Questions reach the owner in chat, so there is no inbox page.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { createSettings } from './fraim-settings.mjs'
-import {
-  HOME, UsageError, allItems, now, promptText, rank, readText, readThread, runtimeEnv, mediaFile, token, tool, usage,
-  writeThread,
-} from './fraim-queue-store.mjs'
+import { HOME, UsageError, readText, runtimeEnv, token, tool, usage } from './fraim-queue-store.mjs'
 import { createApi, readJson } from './fraim-queue-api.mjs'
-import { decide, setPriority } from './fraim-queue-approve.mjs'
-import { dismissThread, restoreThread, sayInThread, tellContact } from './fraim-queue-threads.mjs'
-import {
-  active, agentScreen, agentSend, askChatAgent, employees, ownerChat, inboxRows, member, team, threadDetail,
-} from './fraim-queue-views.mjs'
+import { askChatAgent, employees, ownerChat, team } from './fraim-queue-views.mjs'
 
 function sameToken(a, b) {
   const x = Buffer.from(String(a || ''))
@@ -42,7 +36,7 @@ export function createServer(secret = token()) {
       if (url.pathname === '/health') return send(res, 200, { ok: true })
       if (url.pathname.startsWith('/api/v1/')) return await api.handle(req, res, url)
       if (url.searchParams.has('t')) {
-        if (!sameToken(url.searchParams.get('t'), secret)) return send(res, 403, 'Wrong link. Ask Claude for the queue link again.', 'text/plain')
+        if (!sameToken(url.searchParams.get('t'), secret)) return send(res, 403, 'Wrong link. Ask the chief for your settings link again.', 'text/plain')
         res.writeHead(303, {
           Location: '/',
           'Set-Cookie': `fraim_queue=${secret}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`,
@@ -50,11 +44,13 @@ export function createServer(secret = token()) {
         return res.end()
       }
       if (!sameToken(cookieToken(req), secret)) {
-        return send(res, 401, 'Open the queue with the link that includes ?t=. Ask Claude: "give me my queue link".', 'text/plain')
+        return send(res, 401, 'Open the settings with the link that includes ?t=. Ask the chief: "give me my settings link".', 'text/plain')
       }
-      if (req.method === 'GET' && url.pathname === '/') return send(res, 200, uiPage('inbox', url.searchParams.has('builtin')), 'text/html; charset=utf-8')
+      if (req.method === 'GET' && url.pathname === '/') {
+        res.writeHead(303, { Location: '/settings' })
+        return res.end()
+      }
       if (await settings.handle(req, res, url)) return
-      if (req.method === 'GET' && url.pathname === '/team') return send(res, 200, uiPage('team', url.searchParams.has('builtin')), 'text/html; charset=utf-8')
       if (req.method === 'GET' && url.pathname === '/settings') return send(res, 200, uiPage('settings', url.searchParams.has('builtin')), 'text/html; charset=utf-8')
       if (req.method === 'GET' && /^\/p\/[a-z0-9][a-z0-9-]{0,39}$/.test(url.pathname)) {
         const extra = uiPage(url.pathname.slice(3))
@@ -67,61 +63,6 @@ export function createServer(secret = token()) {
         if (!text) usage('write a message first')
         askChatAgent(text)
         return send(res, 200, { ok: true })
-      }
-      if (req.method === 'GET' && url.pathname === '/api/employees') return send(res, 200, employees())
-      if (req.method === 'GET' && url.pathname === '/api/threads') return send(res, 200, inboxRows())
-      const conv = /^\/api\/threads\/([tq]\d{1,6})(?:\/(seen|say|dismiss|restore))?$/.exec(url.pathname)
-      if (conv && req.method === 'GET' && !conv[2]) return send(res, 200, threadDetail(conv[1]))
-      if (conv && req.method === 'POST' && conv[2]) {
-        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
-        const t = readThread(conv[1])
-        if (conv[2] === 'dismiss' || conv[2] === 'restore') {
-          if (conv[2] === 'dismiss') dismissThread(t)
-          else restoreThread(t)
-          return send(res, 200, { ok: true })
-        }
-        if (conv[2] === 'seen') {
-          t.seen = now()
-          writeThread(t)
-          return send(res, 200, { ok: true })
-        }
-        const text = String((await readBody(req)).text || '').trim()
-        if (!text) usage('write a message first')
-        sayInThread(t.id, 'owner', '', text)
-        tellContact(t, 'owner', promptText('thread-owner', { text }))
-        return send(res, 200, { ok: true })
-      }
-      if (req.method === 'GET' && url.pathname === '/api/items') {
-        const all = url.searchParams.get('all') === '1'
-        return send(res, 200, rank(allItems().filter((i) => all || i.state === 'open')))
-      }
-      if (req.method === 'GET' && url.pathname === '/api/team') return send(res, 200, team())
-      if (req.method === 'GET' && url.pathname === '/api/active') return send(res, 200, await active())
-      const who = /^\/api\/member\/([a-z0-9][a-z0-9_-]{0,47})$/.exec(url.pathname)
-      if (who && req.method === 'GET') {
-        const m = member(who[1])
-        return m ? send(res, 200, m) : send(res, 404, { error: 'no such lead or automation' })
-      }
-      const agent = /^\/api\/active\/([a-z0-9][a-z0-9_-]{0,47})\/(screen|send)$/.exec(url.pathname)
-      if (agent && req.method === 'GET' && agent[2] === 'screen') return send(res, 200, await agentScreen(agent[1]))
-      if (agent && req.method === 'POST' && agent[2] === 'send') {
-        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
-        return send(res, 200, await agentSend(agent[1], (await readBody(req)).text))
-      }
-      const media = /^\/media\/(q\d{1,6})\/([^/]+)$/.exec(url.pathname)
-      if (req.method === 'GET' && media) {
-        const m = mediaFile(media[1], decodeURIComponent(media[2]))
-        if (!m) return send(res, 404, { error: 'no such file' })
-        res.writeHead(200, { 'Content-Type': m.type, 'Content-Length': m.size, 'Cache-Control': 'private, max-age=3600' })
-        return fs.createReadStream(m.file).pipe(res)
-      }
-      const action = /^\/api\/items\/(q\d{1,6})\/(decide|priority)$/.exec(url.pathname)
-      if (req.method === 'POST' && action) {
-        // A custom header: a form on another site cannot send it, so no cross-site posts.
-        if (req.headers['x-fraim-queue'] !== '1') return send(res, 403, { error: 'missing header' })
-        const body = await readBody(req)
-        if (action[2] === 'priority') return send(res, 200, setPriority(action[1], body.priority))
-        return send(res, 200, decide(action[1], body.verdict, body.note, 'page', body.text))
       }
       return send(res, 404, { error: 'not found' })
     } catch (err) {
