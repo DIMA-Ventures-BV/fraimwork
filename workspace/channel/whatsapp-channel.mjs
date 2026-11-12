@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { sessionCommandArgs } from './goal-command.mjs'
 import { catchUpNote, withContext } from './context.mjs'
 import { Unanswered, lastAnswer } from './unanswered.mjs'
-import { parseVerdict } from './verdict.mjs'
+import { approvalText, parseVerdict } from './verdict.mjs'
 import { startedByMainSession } from './main-session.mjs'
 import { inOrder, withTranscript, withVideo } from './voice.mjs'
 import { withQuote } from './quote.mjs'
@@ -56,6 +56,19 @@ function replyStyle() {
   }
 }
 let sentStyle = replyStyle()
+
+// Open permission prompts sent to the owner (id -> sent at), and the one that is the newest
+// message the owner got, so a plain "yes" can answer it.
+const APPROVAL_TTL_MS = 60 * 60 * 1000
+const LATEST_TTL_MS = 30 * 60 * 1000
+const approvals = new Map()
+let latestApproval = { id: '', at: 0 }
+function openApprovals() {
+  const now = Date.now()
+  for (const [id, at] of approvals) if (now - at > APPROVAL_TTL_MS) approvals.delete(id)
+  const latest = latestApproval.id && now - latestApproval.at <= LATEST_TTL_MS && approvals.has(latestApproval.id) ? latestApproval.id : ''
+  return { pending: [...approvals.keys()], latest }
+}
 
 // The owner can change this text: fraim-prompt own whatsapp.
 function channelInstructions() {
@@ -169,6 +182,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     if (req.params.name === 'reply') {
       await gateway('/send', { chat_id: String(args.chat_id), text: String(args.text) })
+      latestApproval = { id: '', at: 0 }
       unanswered.answered(args.chat_id)
       if (ownerChats.has(String(args.chat_id))) logLine('me', args.chat_id, args.text)
       return { content: [{ type: 'text', text: 'sent' }] }
@@ -176,6 +190,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (req.params.name === 'send_file') {
       const shared = toSharedPath(String(args.path))
       await gateway('/send-file', { chat_id: String(args.chat_id), path: shared, caption: args.caption ?? '' })
+      latestApproval = { id: '', at: 0 }
       unanswered.answered(args.chat_id)
       return { content: [{ type: 'text', text: `sent ${shared}` }] }
     }
@@ -206,16 +221,11 @@ const PermissionRequestSchema = z.object({
 mcp.setNotificationHandler(PermissionRequestSchema, async ({ params }) => {
   if (!OWNER) return
   // Never truncate: the approver must see the whole command. The gateway splits long text.
-  const text = [
-    `*Approval needed:* ${params.tool_name}`,
-    params.description,
-    '',
-    params.input_preview,
-    '',
-    `Reply *yes ${params.request_id}* or *no ${params.request_id}*`,
-  ].join('\n')
+  const text = approvalText(params)
   try {
     await gateway('/send', { to: OWNER, text })
+    approvals.set(params.request_id, Date.now())
+    latestApproval = { id: params.request_id, at: Date.now() }
   } catch (err) {
     log('could not relay permission request:', err.message)
   }
@@ -276,8 +286,10 @@ async function handleEvent(event) {
   }
   if (event.type !== 'message') return
   // A yes or no that waited offline may answer a request that is long gone: it is read as text.
-  const verdict = event.catchup ? null : parseVerdict(event, OWNER)
+  const verdict = event.catchup ? null : parseVerdict(event, OWNER, openApprovals())
   if (verdict) {
+    approvals.delete(verdict.request_id)
+    if (latestApproval.id === verdict.request_id) latestApproval = { id: '', at: 0 }
     await mcp.notification({ method: 'notifications/claude/channel/permission', params: verdict })
     return
   }
@@ -397,7 +409,7 @@ async function listen() {
           try {
             const event = JSON.parse(data)
             // An approval never waits behind a voice message that is being transcribed.
-            if (parseVerdict(event, OWNER)) await handleEvent(event)
+            if (parseVerdict(event, OWNER, openApprovals())) await handleEvent(event)
             else inTurn(() => handleEvent(event))
           } catch (err) {
             log('could not handle event:', err.message)

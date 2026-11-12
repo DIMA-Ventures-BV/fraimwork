@@ -831,8 +831,15 @@ cmd_pause() {
 }
 cmd_resume() {
   auto_file "$1" >/dev/null || exit $?
+  local f lead
+  f="$(auto_file "$1")" || exit $?
   rm -f "$state_root/$1/paused" "$state_root/$1/last_alert"
   sset "$1" streak 0
+  # A lead's own pause flag would make every scheduled run answer "Lead X is paused."
+  lead="$(get "$f" lead)"
+  if [ -n "$lead" ] && [ -f "$leads_dir/$lead/paused" ] && command -v fraim-lead >/dev/null; then
+    fraim-lead resume "$lead" >/dev/null || die "could not resume lead $lead"
+  fi
   echo "Automation $1 runs on its schedule again."
 }
 

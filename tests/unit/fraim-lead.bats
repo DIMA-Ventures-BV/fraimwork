@@ -527,6 +527,15 @@ FAKE
   [[ "$output" == *"web (lead)  [on]"* ]]
 }
 
+@test "fraim-auto resume of a lead's automation resumes the lead too" {
+  fraim-lead new web
+  fraim-lead pause web
+  fraim-auto resume web
+  [ ! -f "$FRAIM_LEADS_DIR/web/paused" ]
+  run fraim-lead run web
+  [[ "$output" != *paused* ]]
+}
+
 @test "the engineer's run gets build tools, never switch-on tools, and what it makes starts off" {
   fraim-lead new chief --chief
   fraim-lead new engineer --engineer

@@ -119,21 +119,33 @@ function counts(before, after) {
   const b = (after ?? '').split('\n')
   const left = new Map()
   for (const l of a) left.set(l, (left.get(l) ?? 0) + 1)
-  let added = 0
+  const lines = []
   for (const l of b) {
     if ((left.get(l) ?? 0) > 0) left.set(l, left.get(l) - 1)
-    else added++
+    else lines.push(l)
   }
   const removed = [...left.values()].reduce((x, y) => x + y, 0)
-  return { added, removed }
+  return { added: lines.length, removed, lines: lines.filter((l) => l.trim()) }
 }
+
+// The owner sees what was added, not a line count: "1 lines added" told them nothing.
+const SHOW_LINES = 2
+const SHOW_CHARS = 200
+const quoteLine = (l) => {
+  const t = l.replace(/^[\s*-]+/, '').trim()
+  return `"${t.length > SHOW_CHARS ? `${t.slice(0, SHOW_CHARS)}...` : t}"`
+}
+const nLines = (n) => `${n} ${n === 1 ? 'line' : 'lines'}`
 
 function describe(ev) {
   if (ev.after === null) return `${label(ev.path)} was deleted`
   if (ev.before === null) return `${label(ev.path)} is new`
   if (ev.after === UNREADABLE) return `${label(ev.path)} can no longer be read`
   const c = counts(snapshot(ev.before), snapshot(ev.after))
-  return `${label(ev.path)} changed (${c.added} lines added, ${c.removed} removed)`
+  if (c.removed === 0 && c.lines.length > 0 && c.lines.length <= SHOW_LINES) {
+    return `${label(ev.path)}: added ${c.lines.map(quoteLine).join(' and ')}`
+  }
+  return `${label(ev.path)} changed (${nLines(c.added)} added, ${c.removed} removed)`
 }
 
 function message(events) {
