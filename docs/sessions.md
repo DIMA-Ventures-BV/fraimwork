@@ -195,7 +195,7 @@ WhatsApp. A new session opens only when the server has memory for one more Claud
 - A server or container restart ends the running programs. herdr does not restore a process;
   main starts again, a goal fails or gets a new watcher (above), and a coding session can be
   reopened with `send`.
-- Memory: on a 4 GB server two extra Claude sessions leave about 850 MB; fraim-michael runs on 8 GB (CX33) since 2026-11-09.
+- Memory: on a 4 GB server two extra Claude sessions leave about 850 MB; fraim-michael runs on 8 GB (CX33) since 2026-11-11.
 - herdr-core is pre-1.0 (protocol generation 1). fraim pins the version and uses only the CLI.
 - The core trusts every process of user claude (no separate API password).
 - Phone access is WhatsApp and the Claude app for main; there is no terminal on the phone.

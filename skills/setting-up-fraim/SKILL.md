@@ -90,7 +90,7 @@ One list for every case. A step marked *(skip when ...)* is skipped in that case
    4. Auth key: "Open https://login.tailscale.com/admin/settings/keys, click Generate auth key, turn on Tags and choose tag:fraim, click Generate, copy the key, and tell me 'copied'." Read it with `pbpaste` straight into the `--ts-authkey` flag in step 6. Never show it.
 4. **Hetzner server**, human step *(skip when existing server)*, once the account check is done. Give it in one message, and copy the key to the clipboard right before you send it: `pbcopy < ~/.ssh/id_ed25519.pub`.
    1. Open https://console.hetzner.cloud, click "New project", name it `fraim`, open it.
-   2. Click "Add server". Location: any in Europe (Falkenstein is fine). Image: Ubuntu 24.04. Type: Shared vCPU, CX23 (x86); when sold out, CAX21 (Arm).
+   2. Click "Add server". Location: any in Europe (Falkenstein is fine). Image: Ubuntu 24.04. Type: Shared vCPU, CX33 (x86, 8 GB); when sold out, CAX21 (Arm, 8 GB). A 4 GB type (CX23) is too small once goals build code: one typecheck of a web app uses about 1.5 GB, and the memory guard then stops a Claude halfway.
    3. Under "SSH keys": "Add SSH key", paste (it is on your clipboard), name it `laptop`. (When `laptop` already exists, just tick it.)
    4. Under "Backups": tick it (recommended: a copy of the whole server every day, kept 7 days, about 20 percent extra).
    5. Leave the rest. Click "Create & Buy now". When it shows "Running", copy the IPv4 address and give it to me.

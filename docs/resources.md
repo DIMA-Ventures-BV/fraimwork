@@ -32,6 +32,8 @@ server, which on the server starts a useless extra copy per Claude:
 - `fraim exec -- fraim-capacity status` shows free memory and whether one more Claude fits.
 - `~/.local/state/fraim/capacity.log` lists what was closed to free memory, and runs that
   waited too long.
+- Goals that build code need 8 GB (Hetzner CX33 or CAX21). A typecheck of a web app uses about 1.5 GB by itself; on 4 GB, `earlyoom` then stops a Claude in the middle of its work (a goal that ends after about half an hour with "the Claude session ended").
+- `fraim-goal prune` (every night) removes installed packages and build output from the checkouts of goals that ended more than a day ago (`FRAIM_GOAL_PRUNE_DAYS`); each can hold over a gigabyte, and a full disk makes an update roll back.
 - `fraim status` has the check `memory-headroom` (free memory above the reserve). When it
   fails often, the server is too small for the work it is given: a bigger server type is the
   fix, and the limits follow it on the next update.

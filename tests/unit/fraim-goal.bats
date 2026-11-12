@@ -271,6 +271,24 @@ EOF
   "$GOAL" stop g1
 }
 
+@test "reconcile reopens the conversation of a goal whose terminal came back as a bare shell" {
+  mkdir -p "$FRAIM_GOALS_DIR/g1"
+  echo "goal g1" > "$FRAIM_GOALS_DIR/g1/goal.md"
+  echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  echo "sid-g1" > "$FRAIM_GOALS_DIR/g1/session-id"
+  touch -t 202601010000 "$FRAIM_GOALS_DIR/g1/heartbeat"
+  mkdir -p "$HC_FAKE"
+  jq -n '{address: "g1", name: "g1", agent: "bash", labels: {fraim: "goal"}, state: "live", turn: 0}' > "$HC_FAKE/t-g1.json"
+  run "$GOAL" reconcile
+  [ "$status" -eq 0 ]
+  grep -q 'came back as a shell' "$FRAIM_GOALS_DIR/g1/log.txt"
+  [ "$(cat "$FRAIM_GOALS_DIR/g1/restarts")" = 1 ]
+  for _ in $(seq 30); do grep -q 'server restarted' "$HC_FAKE/g1.sent" 2>/dev/null && break; sleep 0.1; done
+  grep -q 'server restarted' "$HC_FAKE/g1.sent"
+  grep -q -- '--resume' "$HC_FAKE/g1.argv"
+  "$GOAL" stop g1
+}
+
 @test "reconcile starts a vanished goal without a conversation from the start, and fails it after 2 restarts" {
   export PATH="$T/bin:$BATS_TEST_DIRNAME/../../workspace/bin:$PATH" FRAIM_QUEUE_DIR="$T/home/fraim/queue"
   mkdir -p "$FRAIM_GOALS_DIR/g1" "$FRAIM_GOALS_DIR/g2"
@@ -567,6 +585,23 @@ EOF
   "$GOAL" stop g1
 }
 
+@test "the reviewer sees the checks a goal ran on the server, for a repo without checks on the pull request" {
+  ready_goal
+  cat > "$T/bin/say-ready" <<'EOF'
+#!/usr/bin/env bash
+[ ! -e "$HC_FAKE/ready-once" ] || exit 0
+touch "$HC_FAKE/ready-once"
+printf 'commit abc123\n== typecheck: ok\n== test: ok\n' > "$FRAIM_GOALS_DIR/g1/checks.txt"
+printf 'https://example.com/pr/7' > "$FRAIM_GOALS_DIR/g1/ready-to-merge"
+EOF
+  CHECK_VERDICT=PASS "$GOAL" start -- fix the button
+  wait_state g1 done
+  grep -q 'ran the repo.s checks on the server' "$CLAUDE_ARGS"
+  grep -q '== test: ok' "$CLAUDE_ARGS"
+  [ ! -e "$FRAIM_GOALS_DIR/g1/checks.txt" ]
+  "$GOAL" stop g1
+}
+
 @test "a check that keeps failing sends the goal back once, then the owner decides" {
   ready_goal
   CHECK_VERDICT="FAIL: the button is still missing" "$GOAL" start -- fix the button
@@ -619,4 +654,34 @@ EOF
   [ "$status" -eq 1 ]
   run "$GOAL" list
   [ "$output" = "No goals yet." ]
+}
+
+@test "prune frees the packages of an ended goal's checkout and keeps the code and running goals" {
+  code="$T/home/code"; export FRAIM_CODE_DIR="$code"
+  for g in g1 g2; do
+    mkdir -p "$FRAIM_GOALS_DIR/$g" "$code/shop-$g/.git" "$code/shop-$g/node_modules/x" "$code/shop-$g/.next" "$code/shop-$g/src"
+    echo code > "$code/shop-$g/src/app.ts"
+  done
+  echo "done 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  echo "running 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g2/state"
+  touch -t 202601010000 "$FRAIM_GOALS_DIR/g1/state" "$FRAIM_GOALS_DIR/g2/state"
+  mkdir -p "$code/shop/node_modules"
+  run "$GOAL" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"of 1 ended goal"* ]]
+  [ ! -d "$code/shop-g1/node_modules" ]
+  [ ! -d "$code/shop-g1/.next" ]
+  [ -f "$code/shop-g1/src/app.ts" ]
+  [ -d "$code/shop-g2/node_modules" ]
+  [ -d "$code/shop/node_modules" ]
+}
+
+@test "prune leaves a goal that ended less than a day ago alone" {
+  code="$T/home/code"; export FRAIM_CODE_DIR="$code"
+  mkdir -p "$FRAIM_GOALS_DIR/g1" "$code/shop-g1/.git" "$code/shop-g1/node_modules"
+  echo "done 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  run "$GOAL" prune
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ -d "$code/shop-g1/node_modules" ]
 }

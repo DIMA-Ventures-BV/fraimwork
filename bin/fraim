@@ -680,6 +680,12 @@ cmd_update() {
     say "Updated to $target. No new problems after the update."
     # Old images and build cache pile up with every update; a 40 GB disk fills over time.
     ADMIN_TIMEOUT=600 admin "docker image prune -f >/dev/null 2>&1; docker builder prune -f --filter until=168h >/dev/null 2>&1" || true
+    # A linked Herdr app keeps fraim's mod from the last link: give it this release's mod too,
+    # or the chief column can point at a terminal that no longer exists.
+    if [ -d "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/fraim" ]; then
+      load_group herdr
+      herdr_look "$(herdr_machine)" || true
+    fi
     return
   fi
   if [ -z "$current" ] || [ "$current" = "$target_commit" ]; then
