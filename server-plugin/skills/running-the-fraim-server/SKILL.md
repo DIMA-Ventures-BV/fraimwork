@@ -73,7 +73,7 @@ A dashboard is one JSON file `~/fraim/dashboards/NAME.json` (lowercase name with
 
 - `tone` is `good`, `warn` or `bad`, or left out. At most 8 tiles, 12 bars, 10 notes. `value` in bars is a number.
 - Only real numbers from a source you read; never invent or round a gap away.
-- To keep a dashboard current, an automation writes it: give that automation `Write(~/fraim/dashboards/NAME.json)` in its `tools:` and the exact shape in its prompt (the `daily-brief` automation does this for `sales.json`).
+- To keep a dashboard current, an automation writes it: give that automation both `Edit(~/fraim/dashboards/NAME.json)` and `Write(~/fraim/dashboards/NAME.json)` in its `tools:` (with `Write` alone, Claude may not write the file) and the exact shape in its prompt (the `daily-brief` automation does this for `sales.json`).
 - Remove a dashboard by deleting its file.
 
 ## An automation failed
