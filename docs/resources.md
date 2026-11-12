@@ -33,7 +33,10 @@ server, which on the server starts a useless extra copy per Claude:
 - `~/.local/state/fraim/capacity.log` lists what was closed to free memory, and runs that
   waited too long.
 - Goals that build code need 8 GB (Hetzner CX33 or CAX21). A typecheck of a web app uses about 1.5 GB by itself; on 4 GB, `earlyoom` then stops a Claude in the middle of its work (a goal that ends after about half an hour with "the Claude session ended").
-- `fraim-goal prune` (every night) removes installed packages and build output from the checkouts of goals that ended more than a day ago (`FRAIM_GOAL_PRUNE_DAYS`); each can hold over a gigabyte, and a full disk makes an update roll back.
+- `fraim-goal prune` (every night) cleans up after ended goals; each checkout can hold over a gigabyte, and a full disk makes an update roll back.
+  - After a day (`FRAIM_GOAL_PRUNE_DAYS`): the checkout loses its installed packages and build output, and the goal's terminal closes (a message to the goal reopens its conversation).
+  - After a week (`FRAIM_GOAL_KEEP_DAYS`): the checkout goes when nothing in it would be lost (a clean tree whose commit is on a remote branch); otherwise it stays and the run says so. The goal folder loses its `work` and `tools` folders; the task, log, result and report stay.
+- `npm cache clean` (every Sunday night) empties the npm download cache that goals fill.
 - `fraim status` has the check `memory-headroom` (free memory above the reserve). When it
   fails often, the server is too small for the work it is given: a bigger server type is the
   fix, and the limits follow it on the next update.

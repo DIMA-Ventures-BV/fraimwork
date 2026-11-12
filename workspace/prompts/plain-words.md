@@ -10,4 +10,5 @@ Plain words, always (every style). The owner reads this and must understand it w
 - Translate developer words: merge/"gemerged" = "added to the code, not live yet"; deploy = "put live"; pull request/PR = "a proposed change"; built switched off = "ready, but not running yet"; dry run = "a test run"; repo = the product's name; dependency/package = what the tool does.
 - Write in the language of the owner's latest message. In Dutch, say "je", never "u".
 - Every yes gets its result: say what happens now and when the owner hears back. Never ask for a yes the owner already gave.
+- Ask the owner only before something goes live, costs money, reaches customers or other people, or deletes data. The owner's request is their yes for every step inside it (adding a change to the code when that puts nothing live, tests, a retry, a restart, a fix the work turned out to need): do it and say what came of it; never ask "shall I ...?" for such a step.
 - When the owner says a message was unclear, do not ask which part. Write it again from the start in plain words: what they asked or answered, what happened, what still waits for them.

@@ -715,29 +715,84 @@ restart_goal() {
   spawn_watcher "$id" run
 }
 
-# Goals work in their own checkout, ~/code/<repo>-g<N>, and each keeps its installed packages
-# (often over a gigabyte). Once the goal has ended for a day, its packages and build output go;
-# the checkout, its branch and every change stay.
+# Every night (system crontab) the server cleans up after goals that ended, so the disk never
+# fills up with old work:
+# - after FRAIM_GOAL_PRUNE_DAYS (1): the checkout ~/code/<repo>-g<N> loses its installed
+#   packages and build output, and the goal's terminal closes (a message reopens it);
+# - after FRAIM_GOAL_KEEP_DAYS (7): the checkout itself goes, but only when nothing in it is
+#   lost (no uncommitted or untracked files, and its commit is on GitHub), and the goal folder
+#   loses its work and tools folders. The goal's task, log, result and report stay.
+ended_for() { [ -n "$(find "$1/state" -mmin +"$(( $2 * 1440 ))" 2>/dev/null)" ]; }
+
+# Nothing is lost when the checkout goes: a clean tree whose commit a remote branch holds.
+saved_on_remote() {
+  git -C "$1" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 1
+  [ -z "$(git -C "$1" status --porcelain 2>/dev/null)" ] || return 1
+  git -C "$1" fetch -q 2>/dev/null || true
+  [ -n "$(git -C "$1" branch -r --contains HEAD 2>/dev/null)" ]
+}
+
+drop_checkout() {
+  local d="$1" common
+  if [ -f "$d/.git" ]; then
+    common="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    git --git-dir="$common" worktree remove --force "$d" 2>/dev/null || return 1
+    git --git-dir="$common" worktree prune 2>/dev/null || true
+  else
+    rm -rf "${d:?}"
+  fi
+}
+
 cmd_prune() {
-  local code="${FRAIM_CODE_DIR:-$HOME/code}" mins=$(( ${FRAIM_GOAL_PRUNE_DAYS:-1} * 1440 ))
-  local d n gdir sub hit freed=0
-  [ -d "$code" ] || return 0
-  for d in "$code"/*-g[0-9]*; do
-    [ -d "$d" ] && [ -e "$d/.git" ] || continue
-    n="${d##*-g}"
-    case "$n" in ''|*[!0-9]*) continue ;; esac
-    gdir="$goals/g$n"
-    [ -f "$gdir/state" ] || continue
-    [ "$(state_of "$gdir")" != running ] || continue
-    [ -n "$(find "$gdir/state" -mmin +"$mins" 2>/dev/null)" ] || continue
-    hit=0
-    for sub in node_modules .next; do
-      [ -d "$d/$sub" ] || continue
-      rm -rf "${d:?}/$sub" && hit=1
+  local code="${FRAIM_CODE_DIR:-$HOME/code}" soon="${FRAIM_GOAL_PRUNE_DAYS:-1}" late="${FRAIM_GOAL_KEEP_DAYS:-7}"
+  local d n gdir sub hit freed=0 gone=0 kept=0 closed=0 emptied=0
+  if [ -d "$code" ]; then
+    for d in "$code"/*-g[0-9]*; do
+      [ -d "$d" ] && [ -e "$d/.git" ] || continue
+      n="${d##*-g}"
+      case "$n" in ''|*[!0-9]*) continue ;; esac
+      gdir="$goals/g$n"
+      [ -f "$gdir/state" ] || continue
+      [ "$(state_of "$gdir")" != running ] || continue
+      ended_for "$gdir" "$soon" || continue
+      if ended_for "$gdir" "$late"; then
+        if saved_on_remote "$d" && drop_checkout "$d"; then gone=$((gone + 1)); continue; fi
+        kept=$((kept + 1))
+      fi
+      hit=0
+      for sub in node_modules .next; do
+        [ -d "$d/$sub" ] || continue
+        rm -rf "${d:?}/$sub" && hit=1
+      done
+      freed=$((freed + hit))
     done
-    freed=$((freed + hit))
-  done
+  fi
+  if [ -d "$goals" ]; then
+    for gdir in "$goals"/g*/; do
+      gdir="${gdir%/}"
+      n="$(basename "$gdir")"
+      valid_id "$n" && [ -f "$gdir/state" ] || continue
+      [ "$(state_of "$gdir")" != running ] || continue
+      ended_for "$gdir" "$soon" || continue
+      if term_get "$n" >/dev/null 2>&1; then
+        hc kill "$n" >/dev/null 2>&1 || true
+        hc rm "$n" >/dev/null 2>&1 && closed=$((closed + 1))
+      fi
+      ended_for "$gdir" "$late" || continue
+      hit=0
+      for sub in work tools; do
+        [ -d "$gdir/$sub" ] || continue
+        rm -rf "${gdir:?}/$sub" && hit=1
+      done
+      emptied=$((emptied + hit))
+    done
+  fi
   [ "$freed" -eq 0 ] || echo "Removed packages and build output from the checkouts of $freed ended goal(s)."
+  [ "$gone" -eq 0 ] || echo "Removed the checkouts of $gone goal(s) that ended over $late days ago; their work is on GitHub."
+  [ "$kept" -eq 0 ] || echo "Kept $kept old checkout(s): they hold work that is not on GitHub."
+  [ "$closed" -eq 0 ] || echo "Closed the terminals of $closed ended goal(s)."
+  [ "$emptied" -eq 0 ] || echo "Removed the work folders of $emptied goal(s) that ended over $late days ago."
+  return 0
 }
 
 action="${1:-}"

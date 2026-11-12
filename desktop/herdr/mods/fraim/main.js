@@ -11,7 +11,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { exec, hc, readTextFile, terminals, agents, spaces, machines, run, props, shared, setShared, notify, openOverlay, closeOverlay, layout } from "herdr";
+import { exec, hc, readTextFile, terminals, agents, spaces, machines, run, props, shared, setShared, notify, openOverlay, closeOverlay, layout, appHome } from "herdr";
 
 const C = {
   bg: "#0b0b0c", side: "#0b0b0c", panel: "#101012", hover: "#17171a", sel: "#1c1d23",
@@ -204,6 +204,25 @@ function nextRun(cron, short) {
 
 const fraimSpace = () => spaces().find((s) => s.machine && s.name === "fraim");
 const machine = () => fraimSpace()?.machine ?? "fraim";
+
+// The server updates itself; this mod follows the version it runs, so the owner's Herdr app
+// changes with a server update and needs no laptop update. refresh.sh installs only a release
+// signed with the key the laptop already holds, and the app reloads on the new main.js.
+const modDir = () => `${appHome()}/mods/fraim`;
+const SERVER_VERSION = '. /etc/fraim/runtime.env 2>/dev/null; printf %s "${FRAIM_VERSION:-}"';
+async function followServer() {
+  const r = await exec("bash", ["-lc", SERVER_VERSION], { on: machine(), timeout: 20000 });
+  const want = (r.stdout ?? "").trim();
+  if (r.code !== 0 || !/^v\d+\.\d+\.\d+$/.test(want)) return;
+  const have = ((await readTextFile(`${modDir()}/version`)) ?? "").trim();
+  if (have === want) return;
+  const u = await exec("sh", [`${modDir()}/refresh.sh`, want, modDir()], { timeout: 180000 });
+  if (u.code === 0 || warned === want) return;
+  warned = want;
+  console.log(`fraim: could not follow the server to ${want}: ${(u.stderr ?? "").trim()}`);
+  notify({ title: "fraim", body: `Herdr's fraim look could not update to ${want}. Ask Claude on this laptop: "fraim herdr link".`, level: "warning" });
+}
+let warned = "";
 const data = () => shared("fraim.data") ?? { leads: [], reports: [], autos: [], boards: [], error: "", loaded: false };
 const chiefName = () => data().chief || "Chief of staff";
 const sel = () => shared("fraim.sel") ?? "chief";
@@ -327,6 +346,9 @@ export default class FraimChat extends View {
     if (this.role === "sidebar") {
       cx.timer.every(60000, (cx) => this.refresh(cx));
       this.refresh(cx);
+      const follow = () => cx.spawn(async () => { try { await followServer(); } catch {} });
+      follow();
+      cx.timer.every(3600000, () => follow());
     }
     if (this.role === "dashboard" && /^[a-z0-9-]+$/.test(p.name ?? "")) {
       this.loadBoard(cx);
