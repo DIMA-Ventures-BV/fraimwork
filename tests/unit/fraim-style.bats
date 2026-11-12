@@ -16,7 +16,7 @@ setup() {
   [[ "$output" == *"queue     adhd"* ]]
   run fraim-style prompt whatsapp
   [[ "$output" == "Writing style for whatsapp (adhd)."* ]]
-  [[ "$output" == *"At most 5 short lines"* ]]
+  [[ "$output" == *"At most 3 short lines"* ]]
 }
 
 @test "set changes one place, all changes every place" {
