@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
+  addressesMe,
   allowedSender,
+  groupSender,
   guardConsole,
   parseAllowlist,
+  parseGroups,
   resolveChat,
   resolveSharedPath,
 } from '../../whatsapp/lib.mjs'
@@ -92,4 +95,32 @@ test('a permission answer must be exactly yes/no plus a request id', () => {
   for (const text of ['yes', 'yes abcdef', 'yes abcd', 'yes abcle', 'sure abcde', 'yes abcde please', 'yesabcde']) {
     assert.equal(parseVerdict({ sender: OWNER, text }, OWNER), null, text)
   }
+})
+
+const GROUP = '120363012345@g.us'
+
+test('groups stay closed until listed, and only allowed members reach Claude there', () => {
+  const open = parseGroups(` ${GROUP}, nonsense`)
+  assert.equal(groupSender({ remoteJid: GROUP, participant: jid(OWNER) }, allow, parseGroups('')), '')
+  assert.equal(groupSender({ remoteJid: GROUP, participant: jid(OWNER) }, allow, open), OWNER)
+  assert.equal(groupSender({ remoteJid: GROUP, participant: '999@lid', participantAlt: jid('447700900123') }, allow, open), '447700900123')
+  assert.equal(groupSender({ remoteJid: GROUP, participant: jid('31699999999') }, allow, open), '')
+  assert.equal(groupSender({ remoteJid: GROUP, participant: jid(OWNER), fromMe: true }, allow, open), '')
+  assert.equal(groupSender({ remoteJid: '1203639999@g.us', participant: jid(OWNER) }, allow, open), '')
+  assert.equal(groupSender({ remoteJid: '1203639999@g.us', participant: jid(OWNER) }, allow, parseGroups('all')), OWNER)
+  assert.equal(groupSender({ remoteJid: 'status@broadcast', participant: jid(OWNER) }, allow, parseGroups('all')), '')
+})
+
+test('a group message is addressed when it mentions the server or replies to it', () => {
+  const me = ['31600000000:4@s.whatsapp.net', '555:4@lid']
+  assert.equal(addressesMe({ extendedTextMessage: { contextInfo: { mentionedJid: ['555@lid'] } } }, me), true)
+  assert.equal(addressesMe({ extendedTextMessage: { contextInfo: { mentionedJid: [jid(OWNER)] } } }, me), false)
+  assert.equal(addressesMe({ conversation: 'hi' }, me, { from: 'server' }), true)
+  assert.equal(addressesMe({ conversation: 'hi' }, me), false)
+})
+
+test('replies may go to an open group, never to a closed one', () => {
+  assert.equal(resolveChat({ chat_id: GROUP }, new Set(), allow, parseGroups(GROUP)), GROUP)
+  assert.equal(resolveChat({ chat_id: '1203639999@g.us' }, new Set(), allow, parseGroups('all')), '1203639999@g.us')
+  assert.throws(() => resolveChat({ chat_id: '1203639999@g.us' }, new Set(), allow, parseGroups(GROUP)), { status: 403 })
 })

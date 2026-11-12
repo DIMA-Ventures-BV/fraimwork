@@ -34,6 +34,30 @@ cmd_whatsapp() {
       admin "docker compose stop whatsapp && docker compose run --rm --no-deps --entrypoint sh whatsapp -c 'rm -rf /data/auth/* /data/qr.png' && docker compose up -d whatsapp"
       say "WhatsApp session removed. Run: fraim whatsapp link --number <agent number>"
       ;;
+    groups)
+      status="$(workspace_ssh 'fraim-gateway GET /groups')" || rc=$?
+      [ "$rc" != 2 ] || usage "$off_hint"
+      [ "$rc" = 0 ] || die "could not list the groups (exit $rc): $status"
+      jq -r 'if length == 0 then "The agent number is in no group yet. Add it to a group in WhatsApp first." else .[] | "\(if .open then "listens " else "closed  " end) \(.id)  \(.name)" end' <<<"$status"
+      ;;
+    listen)
+      local target="${POSITIONAL[1]:-}" current next
+      [ -n "$target" ] || usage "fraim whatsapp listen GROUP_ID | all | off   (fraim whatsapp groups shows the ids)"
+      case "$target" in
+        all | off) next="$target" ;;
+        *@g.us)
+          current="$(remote_env WHATSAPP_GROUPS)"
+          next="$(printf '%s' "${current},${target}" | tr ',' '\n' | grep -E '@g\.us$' | sort -u | paste -sd, -)"
+          ;;
+        *) usage "a group id ends in @g.us; fraim whatsapp groups shows them" ;;
+      esac
+      [ "$next" != off ] || next=""
+      if [ "$FRAIM_ACCESS" = local ]; then env_set WHATSAPP_GROUPS "$next"; else
+        admin "if grep -q '^WHATSAPP_GROUPS=' $REMOTE_ENV; then sed -i 's|^WHATSAPP_GROUPS=.*|WHATSAPP_GROUPS=$next|' $REMOTE_ENV; else echo 'WHATSAPP_GROUPS=$next' >> $REMOTE_ENV; fi"
+      fi
+      admin "docker compose up -d whatsapp" >/dev/null
+      say "WhatsApp now listens in: ${next:-no group}. Allowed numbers in those groups reach Claude, and its answers go back to the group."
+      ;;
     test) workspace_ssh "fraim-notify 'fraim test message: WhatsApp works.'" && say "Test message sent to the owner." ;;
     check)
       local tries=0
@@ -44,6 +68,6 @@ cmd_whatsapp() {
       done
       say "WhatsApp is linked, Claude listens, and no message waits."
       ;;
-    *) usage "fraim whatsapp status | link [--number N] | relink | test | check" ;;
+    *) usage "fraim whatsapp status | link [--number N] | relink | groups | listen GROUP_ID|all|off | test | check" ;;
   esac
 }

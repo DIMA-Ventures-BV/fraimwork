@@ -44,6 +44,14 @@ The service needs `POST /reply` with the `REPLY_TOKEN`. An inbound one also need
 - Messages that arrived while it was away are read for 12 hours back (`WHATSAPP_CATCHUP_HOURS`). They carry a note with the time they were sent. A `yes abcde` that waited is read as plain text and approves nothing.
 - A failed reconnect tries again, up to once a minute. After 5 minutes down the gateway restarts itself, unless it waits for a QR code or the phone logged it out.
 
+### Groups
+
+- Groups are closed by default. `WHATSAPP_GROUPS` lists the group ids the server listens in (`1203630...@g.us`, comma separated), or `all`. On the laptop: `fraim whatsapp groups` lists the groups the agent number is in, and `fraim whatsapp listen GROUP_ID|all|off` sets the list and restarts the gateway.
+- In an open group, only members on the allowlist (`WHATSAPP_OWNER`, `WHATSAPP_ALLOW`) reach Claude. Other members stay unheard.
+- A group message has `chat_id` set to the group, plus `group` (its name) and `addressed` (true when it @mentions the agent number or replies to it). Claude answers in the group, and a goal started from it sends its result there.
+- Claude stays quiet when people in the group talk to each other. Only an addressed message gets the reminders when it stays unanswered.
+- The owner's private-chat context (the conversation log, waiting decisions) and `session_command` stay with the owner's private chat. A yes in a group is still the owner's yes when the owner wrote it.
+
 ## New mail
 
 `google/fraim-mail-watch` asks Gmail what changed and writes the id and sender's address of each new mail to `mail-events.jsonl`. Mail in Promotions, Social and Forums is left out.
@@ -91,6 +99,7 @@ Every route except `GET /health` needs `Authorization: Bearer TOKEN` and answers
 | `GET /health` | | `200 {"ok": true}` when the service runs, connected or not. No token. |
 | `GET /status` | | `200 {"connected": true, "me": "ID", "queued": 0, "listeners": 1}` |
 | `GET /events` | | A stream of server-sent events, see below. |
+| `GET /groups` | | `200 [{"id": "1203630@g.us", "name": "Team", "open": true}]`, WhatsApp only |
 | `POST /send` | `{"chat_id": "ID", "text": "hi"}` or `{"to": "ADDRESS", "text": "hi"}` | `200 {"ok": true}` |
 | `POST /send-file` | `{"chat_id": "ID", "path": "fraim/report.pdf", "caption": "..."}`, or `to` instead of `chat_id` | `200 {"ok": true}` |
 

@@ -282,10 +282,11 @@ async function handleEvent(event) {
     return
   }
   event = await readable(event)
+  const inGroup = String(event.chat_id || '').endsWith('@g.us')
   const fromOwner = Boolean(OWNER) && event.sender === OWNER
-  if (fromOwner) ownerChats.add(event.chat_id)
-  let content = [catchUpNote(event), event.text || '(empty message)'].filter(Boolean).join('\n')
-  if (fromOwner) {
+  if (fromOwner && !inGroup) ownerChats.add(event.chat_id)
+  let content = [catchUpNote(event), groupNote(event), event.text || '(empty message)'].filter(Boolean).join('\n')
+  if (fromOwner && !inGroup) {
     content = withContext(content, ownerContext())
     logLine('owner', event.chat_id, event.text || '(empty message)')
   }
@@ -304,10 +305,11 @@ async function handleEvent(event) {
         name: event.name || '',
         message_id: event.id,
         owner: event.sender === OWNER ? 'yes' : 'no',
+        ...(inGroup ? { group: event.group || 'a group', addressed: event.addressed ? 'yes' : 'no' } : {}),
       },
     },
   })
-  unanswered.received(event.chat_id, event.text, event.name)
+  if (!inGroup || event.addressed) unanswered.received(event.chat_id, event.text, event.name)
 }
 
 // The herdr terminal of the always-on session, the only one that reads messages.
@@ -359,6 +361,14 @@ setInterval(async () => {
     checking = false
   }
 }, 15000).unref()
+
+// A group message says where it was written, so the answer goes back to that group.
+function groupNote(event) {
+  if (!String(event.chat_id || '').endsWith('@g.us')) return ''
+  const who = event.name || event.sender
+  const where = event.group ? `the group "${event.group}"` : 'a group'
+  return `(${who} wrote this in ${where}${event.addressed ? ', to you' : ''}. Answer in this group with its chat_id.)`
+}
 
 const inTurn = inOrder((err) => log('could not handle event:', err.message))
 

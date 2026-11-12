@@ -220,15 +220,49 @@ export function contactChat(to, contacts) {
   return `${phone}@s.whatsapp.net`
 }
 
-// The chat a reply goes to. Only chats an allowed sender wrote from, or allowed numbers.
-export function resolveChat(body, knownChats, allow) {
+// The chat a reply goes to. Only chats an allowed sender wrote from, allowed numbers, or groups
+// the owner opened (WHATSAPP_GROUPS).
+export function resolveChat(body, knownChats, allow, groups = parseGroups('')) {
   const jid = body.chat_id ? String(body.chat_id) : body.to ? `${digits(body.to)}@s.whatsapp.net` : ''
   if (!jid) throw httpError(400, 'chat_id or to is required')
   const phone = phoneOf(jid)
-  if (!knownChats.has(jid) && !(phone && allow.has(phone))) {
+  if (!knownChats.has(jid) && !(phone && allow.has(phone)) && !groupOpen(jid, groups)) {
     throw httpError(403, 'recipient is not on the allowlist')
   }
   return jid
+}
+
+// WHATSAPP_GROUPS: group ids (1203630...@g.us) the server listens in, or "all" for every group
+// it is a member of. Empty: no group reaches Claude.
+export function parseGroups(value) {
+  const parts = String(value || '').split(',').map((p) => p.trim()).filter(Boolean)
+  return {
+    all: parts.some((p) => p.toLowerCase() === 'all'),
+    ids: new Set(parts.filter((p) => p.endsWith('@g.us'))),
+  }
+}
+
+export const groupOpen = (jid, groups) =>
+  String(jid || '').endsWith('@g.us') && (groups.all || groups.ids.has(String(jid)))
+
+// The sender's phone when a group message may reach Claude: an open group, and a member who is
+// on the allowlist. Everyone else in the group stays unheard.
+export function groupSender(key, allow, groups) {
+  if (!key || key.fromMe || !groupOpen(key.remoteJid, groups)) return ''
+  for (const jid of [key.participant, key.participantAlt, key.senderPn]) {
+    const phone = phoneOf(jid)
+    if (phone) return allow.has(phone) ? phone : ''
+  }
+  return ''
+}
+
+// True when a group message is meant for the server: it @mentions the server, or it replies to
+// something the server wrote.
+export function addressesMe(inner, me, quote) {
+  if (quote?.from === 'server') return true
+  const mine = new Set(me.filter(Boolean).map(userOf))
+  const mentioned = Object.values(inner).flatMap((part) => part?.contextInfo?.mentionedJid || [])
+  return mentioned.some((jid) => mine.has(userOf(jid)))
 }
 
 // Maps "fraim/..." or "pc/..." to a real file inside one of the roots. Symlinks and ".."

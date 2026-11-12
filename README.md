@@ -55,6 +55,7 @@ Never paste passwords or tokens into the chat. Claude asks you to copy them and 
 
 - Your server is private. With Tailscale, nothing on it is reachable from the internet, and the server can never connect to your laptop or phone.
 - Everyone on your WhatsApp allowlist can ask your agent to do anything you could. Only add people you fully trust. Only you can approve risky actions.
+- Add your agent's number to a WhatsApp group and ask Claude to "listen in that group": allowed people in the group can then talk to it there, and it answers in the group. Groups are closed until you open one.
 - Websites you log in to in the server's browser stay logged in, and your agent can use them. Only log in where it needs access.
 - Keep production passwords and company secrets off the server.
 - API keys you give your agent stay in a separate container. The agent can use them but never sees them (see `docs/secrets.md`).

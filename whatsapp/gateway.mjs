@@ -2,6 +2,7 @@
 // token-protected HTTP API on the internal Docker network.
 //   GET  /health            no auth, for Docker
 //   GET  /status            { connected, waitingForQr, me, queued, listeners }
+//   GET  /groups            [{ id, name, open }] the groups this number is a member of
 //   GET  /events            SSE stream of allowed inbound messages
 //   POST /send              { chat_id | to, text }
 //   POST /send-file         { chat_id | to, path: "fraim/..." | "pc/...", caption }
@@ -27,6 +28,7 @@ import QRCode from 'qrcode'
 import qrcode from 'qrcode-terminal'
 import {
   MAX_FILE_MB,
+  addressesMe,
   SavedQueue,
   allowedSender,
   contactChat,
@@ -34,6 +36,8 @@ import {
   describeShare,
   digits,
   givesUp,
+  groupOpen,
+  groupSender,
   guardConsole,
   httpError,
   isGroupOrBroadcast,
@@ -41,6 +45,7 @@ import {
   mediaOf,
   parseAllowlist,
   parseContacts,
+  parseGroups,
   quotedOf,
   readsUpsert,
   reconnectDelay,
@@ -69,6 +74,7 @@ const GIVE_UP_MS = 5 * 60 * 1000
 const OWNER = digits(process.env.WHATSAPP_OWNER)
 const ALLOW = parseAllowlist(OWNER, process.env.WHATSAPP_ALLOW)
 const CONTACTS = parseContacts(process.env.WHATSAPP_CONTACTS)
+const GROUPS = parseGroups(process.env.WHATSAPP_GROUPS)
 const REPLY_TOKEN = process.env.REPLY_TOKEN || ''
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
@@ -108,7 +114,15 @@ function emit(event) {
   return true
 }
 
-const resolveChat = (body) => resolveChatFor(body, knownChats, ALLOW)
+const resolveChat = (body) => resolveChatFor(body, knownChats, ALLOW, GROUPS)
+
+const groupNames = new Map()
+async function groupName(jid) {
+  if (groupNames.has(jid)) return groupNames.get(jid)
+  const name = await sock.groupMetadata(jid).then((m) => m.subject || '').catch(() => '')
+  if (name) groupNames.set(jid, name)
+  return name
+}
 
 async function sendText(jid, text) {
   if (!connected) throw httpError(503, 'WhatsApp is not connected')
@@ -198,7 +212,9 @@ async function readContent(msg, inner) {
 async function onMessage(msg, catchup = false) {
   const key = msg.key || {}
   const late = catchup ? { catchup: true } : {}
-  if (key.fromMe || !key.remoteJid || isGroupOrBroadcast(key.remoteJid)) return
+  if (key.fromMe || !key.remoteJid) return
+  if (groupOpen(key.remoteJid, GROUPS)) return onGroupMessage(msg, late)
+  if (isGroupOrBroadcast(key.remoteJid)) return
 
   const contact = contactSender(key, ALLOW, CONTACTS)
   if (contact) {
@@ -245,6 +261,30 @@ async function onMessage(msg, catchup = false) {
       await sendText(key.remoteJid, 'Claude is not running right now. Your message is queued and will be handled when it is back.').catch(() => {})
     }
   }
+}
+
+// A message in an open group from an allowed member. It goes to Claude with the group's name,
+// and `addressed` says whether it @mentions the server or replies to it.
+async function onGroupMessage(msg, late) {
+  const key = msg.key
+  const phone = groupSender(key, ALLOW, GROUPS)
+  if (!phone) return
+  const inner = normalizeMessageContent(msg.message) || {}
+  const content = await readContent(msg, inner)
+  if (!content.text && !content.voice && !content.video) return
+  await sock.readMessages([key]).catch(() => {})
+  emit({
+    type: 'message',
+    id: key.id,
+    chat_id: key.remoteJid,
+    sender: phone,
+    name: msg.pushName || '',
+    group: await groupName(key.remoteJid),
+    addressed: addressesMe(inner, [sock.user?.id, sock.user?.lid], content.quote),
+    ...content,
+    ...late,
+    ts: Number(msg.messageTimestamp || 0),
+  })
 }
 
 function scheduleReconnect() {
@@ -350,6 +390,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/status') {
       return reply(200, { connected, waitingForQr, me: sock?.user?.id || null, queued: queue.length, listeners: listeners.size })
     }
+    if (req.method === 'GET' && url.pathname === '/groups') {
+      if (!connected) throw httpError(503, 'WhatsApp is not connected')
+      const all = await sock.groupFetchAllParticipating()
+      return reply(200, Object.values(all).map((g) => ({ id: g.id, name: g.subject || '', open: groupOpen(g.id, GROUPS) })))
+    }
     if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
       res.write(': connected\n\n')
@@ -396,7 +441,7 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, '0.0.0.0', () => logger.info({ port: PORT, allowlist: ALLOW.size }, 'gateway listening'))
+server.listen(PORT, '0.0.0.0', () => logger.info({ port: PORT, allowlist: ALLOW.size, groups: GROUPS.all ? 'all' : GROUPS.ids.size }, 'gateway listening'))
 connect().catch((err) => {
   logger.fatal({ err: err.message }, 'could not start WhatsApp')
   process.exit(1)
