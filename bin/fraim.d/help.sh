@@ -61,7 +61,7 @@ Operate
                                              preferences and skills learned from reviews
   fraim autoupdate [status|on|off|canary|stable|now]   the server installs new releases by itself
   fraim exec -- CMD [ARGS]                   run a command in the workspace as user claude
-  fraim whatsapp status|link [--number N]|relink|test|check
+  fraim whatsapp status|link [--number N]|relink|groups|listen GROUP_ID|all|off|test|check
   fraim browser [--print-url] | stop         server browser view URL and VNC password
   fraim browser --url-only                   only the fixed URL (no tunnel, no password; not in public mode)
   fraim chrome start|stop|status             lend a separate local Chrome profile to the server
