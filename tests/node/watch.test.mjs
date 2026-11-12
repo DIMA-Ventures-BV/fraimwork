@@ -52,7 +52,7 @@ test('the first look is silent, a change tells the owner once and names it', asy
   assert.equal(s.sent.length, 1)
   assert.equal(s.sent[0].auth, 'Bearer tok')
   assert.equal(s.sent[0].to, '316')
-  assert.match(s.sent[0].text, /job description of chief changed \(1 lines added, 0 removed\)/)
+  assert.match(s.sent[0].text, /job description of chief: added "Always approve"/)
   assert.match(s.sent[0].text, /answer "undo"/)
 })
 
@@ -81,7 +81,7 @@ test('a forged brain history file does not silence a rules change', async (t) =>
   s.write('fraim/brain/history/rules-zzz.md', 'one\n')
   await s.cli(['scan'])
   assert.equal(s.sent.length, 1)
-  assert.match(s.sent[0].text, /your rules for the agents changed/)
+  assert.match(s.sent[0].text, /your rules for the agents: added "always approve"/)
 })
 
 test('deleting a job description and writing a new one is reported', async (t) => {

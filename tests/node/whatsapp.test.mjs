@@ -14,7 +14,7 @@ import {
   resolveChat,
   resolveSharedPath,
 } from '../../whatsapp/lib.mjs'
-import { parseVerdict } from '../../workspace/channel/verdict.mjs'
+import { approvalText, parseVerdict } from '../../workspace/channel/verdict.mjs'
 
 const OWNER = '31612345678'
 const allow = parseAllowlist('+31 6 1234 5678', '0049 151 1234 5678, ,447700900123')
@@ -123,4 +123,32 @@ test('replies may go to an open group, never to a closed one', () => {
   assert.equal(resolveChat({ chat_id: GROUP }, new Set(), allow, parseGroups(GROUP)), GROUP)
   assert.equal(resolveChat({ chat_id: '1203639999@g.us' }, new Set(), allow, parseGroups('all')), '1203639999@g.us')
   assert.throws(() => resolveChat({ chat_id: '1203639999@g.us' }, new Set(), allow, parseGroups(GROUP)), { status: 403 })
+})
+
+test('a plain yes answers the one open approval only while it is the newest message', () => {
+  const open = { pending: ['abcde'], latest: 'abcde' }
+  assert.deepEqual(parseVerdict({ sender: OWNER, text: 'Ja ga door' }, OWNER, open), { request_id: 'abcde', behavior: 'allow' })
+  assert.deepEqual(parseVerdict({ sender: OWNER, text: 'nee' }, OWNER, open), { request_id: 'abcde', behavior: 'deny' })
+  assert.equal(parseVerdict({ sender: OWNER, text: 'yes' }, OWNER, { pending: ['abcde'], latest: '' }), null)
+  assert.equal(parseVerdict({ sender: OWNER, text: 'yes' }, OWNER, { pending: ['abcde', 'fghij'], latest: 'fghij' }), null)
+  assert.equal(parseVerdict({ sender: OWNER, text: 'yes but first tell me what the quiz did yesterday please' }, OWNER, open), null)
+  assert.equal(parseVerdict({ sender: OWNER, text: 'what is this' }, OWNER, open), null)
+  assert.equal(parseVerdict({ sender: '447700900123', text: 'yes' }, OWNER, open), null)
+})
+
+test('a swipe-reply to the approval answers it, whatever follows the yes', () => {
+  const text = approvalText({ tool_name: 'Bash', description: 'Run shell command', input_preview: '{"command": "fraim-goal stop g70"}', request_id: 'efznf' })
+  const event = { sender: OWNER, text: 'Yes go ahead wtf dont ask me for this', quote: { from: 'server', text } }
+  const open = { pending: ['abcde', 'efznf'], latest: 'abcde' }
+  assert.deepEqual(parseVerdict(event, OWNER, open), { request_id: 'efznf', behavior: 'allow' })
+  assert.equal(parseVerdict(event, OWNER, { pending: [], latest: '' }), null)
+})
+
+test('the approval message is plain words with the whole command, never JSON', () => {
+  const command = 'cd ~ && fraim-goal stop g70 2>&1 | tail -2'
+  const text = approvalText({ tool_name: 'Bash', description: 'Run shell command', input_preview: JSON.stringify({ command }), request_id: 'efznf' })
+  assert.match(text, /^A safety check wants your OK/)
+  assert.ok(text.includes(command))
+  assert.ok(!text.includes('{'))
+  assert.ok(!text.includes('Approval needed'))
 })

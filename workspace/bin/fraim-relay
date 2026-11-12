@@ -28,6 +28,9 @@
 set -uo pipefail
 # shellcheck source=/dev/null
 [ ! -f "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}" ] || . "${FRAIM_RUNTIME_ENV:-/etc/fraim/runtime.env}"
+# The WhatsApp channel starts this without TZ in its environment: unexported, the owner's lines
+# got UTC times and the chief's local ones, so the conversation read out of order.
+[ -z "${TZ:-}" ] || export TZ
 
 files="${FRAIM_FILES_DIR:-$HOME/fraim}"
 relay="${FRAIM_RELAY_DIR:-$files/relay}"

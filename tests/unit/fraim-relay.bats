@@ -279,3 +279,9 @@ EOF
   run fraim-relay context
   [[ "$output" != *"can still undo"* ]]
 }
+
+@test "the owner's lines get the server's time zone even when the caller has no TZ" {
+  printf 'FRAIM_MODULES=whatsapp\nTZ=Asia/Tokyo\n' > "$T/runtime.env"
+  env -u TZ fraim-relay log owner --chat 212@lid -- "Hoi"
+  [ "$(jq -r .time "$FRAIM_RELAY_DIR/conversation.jsonl")" = "$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')" ]
+}
