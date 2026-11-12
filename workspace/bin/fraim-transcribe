@@ -20,7 +20,7 @@ esac
 [ -n "${FRAIM_WHISPER_PYTHON:-}" ] || [ -d "${FRAIM_WHISPER_MODEL:-/opt/fraim/whisper/model}" ] \
   || { echo "fraim-transcribe: voice is not installed on this server" >&2; exit 1; }
 
-# The engine takes about 500 MB, like one more Claude.
+# The engine (model small) takes about 1 GB at its peak, like two more Claudes.
 fraim-capacity wait --max 120 >/dev/null || { echo "fraim-transcribe: not enough free memory" >&2; exit 1; }
 
 exec nice -n 10 "${FRAIM_WHISPER_PYTHON:-/opt/fraim/whisper/venv/bin/python}" \

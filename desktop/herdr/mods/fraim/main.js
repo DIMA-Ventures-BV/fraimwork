@@ -1,6 +1,6 @@
 // fraim in Herdr, in the Linear/GitHub dark style. One mod, drawn by role (props().role):
 //   top        the title bar strip
-//   sidebar    the chief of staff, dashboards, who works now, the team and the automations.
+//   sidebar    the chief of staff, dashboards, who works now, the team and the automations as lists.
 //              It loads everything from the fraim machine once a minute (shared "fraim.data").
 //   today      the activity column: one line per report, newest first (can be hidden)
 //   thread     the header over the work column (a running agent, the team, a dashboard)
@@ -411,6 +411,7 @@ export default class FraimChat extends View {
     const team = d.leads.filter((l) => l.name !== "chief");
     const boards = d.boards ?? [];
     const autos = d.autos ?? [];
+    const member = shared("fraim.member");
     return v_flex().size_full().bg(C.side)
       .child(header([div().text_size(13).font_semibold().text_color(C.strong).child("fraim")]))
       .child(v_flex().id("fc-side").flex_1().min_h(0).overflow_y_scrollbar().pt(8).pb(16)
@@ -418,11 +419,18 @@ export default class FraimChat extends View {
           icon: status(main?.status === "working" ? "working" : main?.status === "blocked" ? "blocked" : "chief"),
           name: chiefName(), active: s === "chief", onClick: () => this.showChief(),
         }))
-        .child(this.row("fc-team", {
-          icon: div().size(12).flex_shrink(0).rounded(3).border(2).border_color(C.muted),
-          name: "Team", active: s === "team", meta: String(team.length + autos.length + 1),
-          onClick: () => { setShared("fraim.member", null); openTeam(); },
-        }))
+        .when(team.length > 0, (e) => e.child(this.group("Team", team.length)).children(team.map((l) =>
+          this.row(`fc-l-${l.name}`, {
+            icon: status(l.sched === "paused" ? "paused" : "idle"), name: l.disp,
+            active: s === "team" && member?.kind === "lead" && member?.name === l.name,
+            onClick: () => openTeam({ kind: "lead", name: l.name }),
+          }))))
+        .when(autos.length > 0, (e) => e.child(this.group("Automations", autos.length)).children(autos.map((a) =>
+          this.row(`fc-a-${a.name}`, {
+            icon: status(a.state !== "on" ? "paused" : "idle"), name: titleCase(a.name),
+            active: s === "team" && member?.kind === "auto" && member?.name === a.name,
+            onClick: () => openTeam({ kind: "auto", name: a.name }),
+          }))))
         .when(boards.length > 0, (e) => e.child(this.group("Dashboards", boards.length)).children(boards.map((b) =>
           this.row(`fc-d-${b.name}`, { icon: status("board"), name: b.title, active: s === `board:${b.name}`, onClick: () => openBoard(b) }))))
         .when(others.length > 0, (e) => e.child(this.group("Working now", others.length)).children(others.map((a) =>
@@ -654,87 +662,10 @@ export default class FraimChat extends View {
       .child(v_flex().px(14).py(10).rounded(6).border(1).border_color(C.line).bg(C.panel).text_size(13).text_color(C.text).child(content));
   }
 
-  // The team as an org chart: the chief on top, the team members under it, the automations
-  // below. A card opens that agent's rules and activity.
-  orgChart() {
-    const d = data();
-    const leads = d.leads ?? [];
-    const autos = d.autos ?? [];
-    const all = live();
-    const chief = leads.find((l) => l.name === "chief");
-    const team = leads.filter((l) => l.name !== "chief");
-    const pick = (kind, name) => setShared("fraim.member", { kind, name });
-    const stateOf = (l) => {
-      const a = all.find((x) => x.tname === `lead-${l.name}`);
-      if (a) return a.status === "blocked" ? ["blocked", "Needs you"] : ["working", "Working now"];
-      if (l.sched === "paused") return ["paused", "Paused"];
-      if (l.last && !/^(ok|never)/.test(l.last)) return ["failed", "Last check-in failed"];
-      return ["idle", plainSchedule(l.sched).split("  ·")[0]];
-    };
-    const card = (id, { name, sub, state, width, strong, onClick }) => v_flex().id(id).w(width).p(14).gap(6).rounded(8).cursor_pointer()
-      .bg(C.panel).border(1).border_color(strong ? C.accent : C.line)
-      .hover((s) => s.border_color(C.muted)).on_click(onClick)
-      .child(h_flex().gap(8).items_center()
-        .child(status(state[0]))
-        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(C.strong).child(name)))
-      .when(!!sub, (e) => e.child(div().h(34).overflow_hidden().text_size(12).text_color(C.muted).child(sub)))
-      .child(div().text_size(11).text_color(state[0] === "failed" ? C.red : state[0] === "blocked" ? C.yellow : C.faint).child(state[1]));
-    const line = (w, h) => div().w(w).h(h).bg(C.line2).flex_shrink(0);
-
-    const chiefCard = card("oc-chief", {
-      name: chiefName(), sub: "Talks to you, keeps the queue short and tells you once a day what matters.",
-      state: chief ? (stateOf(chief)[0] === "idle" ? ["chief", stateOf(chief)[1]] : stateOf(chief)) : ["chief", ""],
-      width: 300, strong: true, onClick: () => pick("lead", "chief"),
-    });
-    // Groups: the `team:` line in a lead's brief, else a guess from its role and name.
-    const groupOf = (l) => l.team
-      || (l.kind === "engineer" ? "Builder"
-        : /^mlv-/.test(l.name) ? "Mijn Levensverhalen"
-        : /market|content|advert|ads|seo|social/i.test(`${l.name} ${l.disp}`) ? "Marketing"
-        : "Operations");
-    const groups = new Map();
-    for (const l of team) {
-      const g = groupOf(l);
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(l);
-    }
-    // One group under the other (fits any column width and scrolls up and down): a line from
-    // the chief, the group's name, its members in a grid.
-    const groupRows = [...groups.entries()].map(([g, members]) => v_flex().id(`og-${g}`).w_full().items_center()
-      .child(line(1, 22))
-      .child(h_flex().px(12).h(28).gap(8).items_center().rounded(14).border(1).border_color(C.line2).bg(C.bg)
-        .child(div().text_size(12).font_semibold().text_color(C.text).child(g))
-        .child(div().text_size(11).text_color(C.faint).child(String(members.length))))
-      .child(line(1, 12))
-      .child(h_flex().w_full().flex_wrap().justify_center().gap(12).p(12).rounded(10).border(1).border_color(C.line)
-        .children(members.map((l) => card(`oc-${l.name}`, { name: l.disp, sub: firstSentence(l.area), state: stateOf(l), width: 220, onClick: () => pick("lead", l.name) })))));
-    const autoCards = autos.map((a) => {
-      const failed = !/^(ok|silent|never|skipped)/.test(a.last);
-      const every = /^every (\S+)/.exec(a.trigger);
-      const cron = /^schedule (.+)$/.exec(a.trigger)?.[1];
-      const when = a.state !== "on" ? "Off" : failed ? "Last run failed" : every ? `Every ${every[1]}` : cron ? plainSchedule(cron).split("  ·")[0] : "When something happens";
-      return card(`oc-a-${a.name}`, {
-        name: titleCase(a.name), state: [a.state !== "on" ? "paused" : failed ? "failed" : "idle", when], width: 220,
-        onClick: () => pick("auto", a.name),
-      });
-    });
-
-    return v_flex().size_full().bg(C.bg)
-      .child(v_flex().id("oc-body").flex_1().min_h(0).overflow_y_scrollbar().px(24).py(28).items_center()
-        .child(chiefCard)
-        .children(groupRows)
-        .when(autoCards.length > 0, (e) => e
-          .child(h_flex().w_full().max_w(1200).pt(36).pb(10).gap(10).items_center()
-            .child(div().text_size(12).font_semibold().text_color(C.muted).child("Automations"))
-            .child(div().text_size(12).text_color(C.faint).child("run by themselves on a schedule, no judgement"))
-            .child(div().flex_1().h(1).bg(C.line)))
-          .child(h_flex().w_full().max_w(1200).flex_wrap().justify_center().gap(14).children(autoCards))));
-  }
-
   team(cx) {
     const d = data();
     const m = shared("fraim.member");
-    if (!m) return this.orgChart();
+    if (!m) return v_flex().size_full().bg(C.bg).p(24).child(div().text_size(13).text_color(C.faint).child("Pick someone under Team on the left."));
     if (this.memberKey !== `${m.kind}:${m.name}`) this.loadMember(cx, m);
     if (this.brain === undefined) { this.brain = null; this.loadBrain(cx); }
     const leads = d.leads ?? [];
@@ -789,11 +720,8 @@ export default class FraimChat extends View {
     }
     if (this.view === "Rules" && this.brain) body.push(this.block("Shared rules · apply to every agent", TextView.markdown("tm-brain", this.brain).selectable(true)));
 
-    const back = h_flex().id("tm-back").pb(8).cursor_pointer().on_click(() => setShared("fraim.member", null))
-      .child(div().text_size(12).text_color(C.muted).hover((s) => s.text_color(C.strong)).child("← Team"));
     const detail = v_flex().size_full().min_w(0)
       .child(v_flex().px(24).pt(14).pb(12).gap(6).border_b(1).border_color(C.line)
-        .child(back)
         .child(h_flex().gap(10).items_center()
           .child(div().flex_1().text_size(16).font_semibold().text_color(C.strong).child(title))
           .when(!!lead || !!auto, (e) => e.child(btn("tm-run", "Run now", () => this.runNow(auto ? "auto" : "lead", auto ?? lead, machine(), null), true))))

@@ -74,7 +74,7 @@ COPY channel/whatsapp-channel.mjs channel/main-session.mjs channel/verdict.mjs c
 # Pillow, with PyAV from faster-whisper, makes still pictures from videos (fraim-frames).
 ARG VOICE=on
 ARG FASTER_WHISPER_VERSION=1.2.1
-ARG WHISPER_MODEL=base
+ARG WHISPER_MODEL=small
 ARG PILLOW_VERSION=11.3.0
 RUN python3 -m venv /opt/fraim/whisper/venv \
  && if [ "${VOICE}" = on ]; then \
