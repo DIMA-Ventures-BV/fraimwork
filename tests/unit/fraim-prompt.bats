@@ -171,6 +171,6 @@ setup() {
   [[ "$out" == *"e1 said"*"At most 300 characters"*'"ops"'* ]]
   out="$(fraim-prompt render brain-review --set 'chats=OWNER: hi' --set max_items=5)"
   [[ "$out" == *"OWNER: hi"*"Return at most 5 items"*'"items"'* ]]
-  [[ "$(fraim-prompt render style-adhd)" == *"At most 5 short lines"* ]]
+  [[ "$(fraim-prompt render style-adhd)" == *"At most 3 short lines"* ]]
   [[ "$(fraim-prompt render style-detailed)" == *"Give the reasoning"* ]]
 }
