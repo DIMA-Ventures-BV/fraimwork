@@ -685,3 +685,48 @@ EOF
   [ -z "$output" ]
   [ -d "$code/shop-g1/node_modules" ]
 }
+
+@test "prune removes a week-old checkout whose work is on GitHub and keeps one with unpushed work" {
+  code="$T/home/code"; export FRAIM_CODE_DIR="$code"
+  git init -q --bare "$T/remote.git"
+  git init -q "$code/shop"
+  git -C "$code/shop" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
+  git -C "$code/shop" remote add origin "$T/remote.git"
+  git -C "$code/shop" push -q origin HEAD:main
+  git -C "$code/shop" fetch -q origin
+  git -C "$code/shop" worktree add -q -b g1 "$code/shop-g1" origin/main
+  git -C "$code/shop" worktree add -q -b g2 "$code/shop-g2" origin/main
+  git -C "$code/shop-g2" -c user.email=a@b -c user.name=a commit -q --allow-empty -m "not pushed"
+  for g in g1 g2; do
+    mkdir -p "$FRAIM_GOALS_DIR/$g" "$code/shop-$g/node_modules"
+    echo "done 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/$g/state"
+    touch -t 202601010000 "$FRAIM_GOALS_DIR/$g/state"
+  done
+  printf 'node_modules\n' > "$code/shop/.git/info/exclude"
+  run "$GOAL" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"checkouts of 1 goal(s) that ended over 7 days ago"* ]]
+  [[ "$output" == *"Kept 1 old checkout"* ]]
+  [ ! -d "$code/shop-g1" ]
+  [ -d "$code/shop-g2" ]
+  [ ! -d "$code/shop-g2/node_modules" ]
+  [ -z "$(git -C "$code/shop" worktree list | grep shop-g1)" ]
+}
+
+@test "prune empties the work folders of week-old goals, keeps their report, and closes ended goals' terminals" {
+  mkdir -p "$FRAIM_GOALS_DIR/g1/work/big" "$FRAIM_GOALS_DIR/g1/tools" "$FRAIM_GOALS_DIR/g2/work"
+  echo report > "$FRAIM_GOALS_DIR/g1/result.md"
+  echo "done 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g1/state"
+  touch -t 202601010000 "$FRAIM_GOALS_DIR/g1/state"
+  echo "done 2026-01-01 10:00" > "$FRAIM_GOALS_DIR/g2/state"
+  touch -d '-2 days' "$FRAIM_GOALS_DIR/g2/state" 2>/dev/null || touch -A -480000 "$FRAIM_GOALS_DIR/g2/state"
+  hc run --name g2 -- claude >/dev/null
+  run "$GOAL" prune
+  [ "$status" -eq 0 ]
+  [ ! -d "$FRAIM_GOALS_DIR/g1/work" ]
+  [ ! -d "$FRAIM_GOALS_DIR/g1/tools" ]
+  [ -f "$FRAIM_GOALS_DIR/g1/result.md" ]
+  [ -d "$FRAIM_GOALS_DIR/g2/work" ]
+  grep -qx 'kill g2' "$HC_FAKE/calls"
+  [[ "$output" == *"Closed the terminals of 1 ended goal"* ]]
+}

@@ -34,6 +34,10 @@ herdr_look() {
   mkdir -p "$home/mods" "$home/layouts"
   rm -rf "$home/mods/fraim"
   cp -R "$src/mods/fraim" "$home/mods/fraim"
+  # From here the mod follows the server's version by itself (refresh.sh): it trusts only
+  # releases signed with this key, taken from the laptop's own checkout.
+  cp "$REPO/config/release-signers" "$home/mods/fraim/release-signers"
+  repo_version > "$home/mods/fraim/version"
   layout="$(jq --arg t "$machine/main" '(.. | objects | select(.id? == "chief-term") | .content.terminal) = $t' "$src/layouts/fraim.json")" \
     || die "could not prepare fraim's Herdr layout"
   if [ -f "$home/layouts/fraim.json" ] && [ "$(cat "$home/layouts/fraim.json")" != "$layout" ]; then

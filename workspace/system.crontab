@@ -23,5 +23,10 @@
 # Every Monday: tell the owner once when a new fraimwork release is available.
 0 10 * * 1 fraim-version-check --notify
 
-# Every night: ended goals' checkouts in ~/code lose their installed packages (the code stays).
+# Every night: clean up after ended goals. After a day their checkouts lose installed packages
+# and their terminals close; after a week checkouts whose work is on GitHub go, and so do the
+# goals' work folders (the report stays).
 15 4 * * * fraim-goal prune
+
+# Every Sunday night: empty the npm download cache (goals refill it; it grows by gigabytes).
+45 4 * * 0 npm cache clean --force >/dev/null 2>&1

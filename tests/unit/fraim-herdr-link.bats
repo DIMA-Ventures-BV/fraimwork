@@ -69,6 +69,9 @@ EOF
   "$FRAIM" herdr link
   [ -f "$HOME/.config/herdr-app/mods/fraim/main.js" ]
   [ -f "$HOME/.config/herdr-app/mods/fraim/mod.json" ]
+  [ -x "$HOME/.config/herdr-app/mods/fraim/refresh.sh" ]
+  cmp "$HOME/.config/herdr-app/mods/fraim/release-signers" "$BATS_TEST_DIRNAME/../../config/release-signers"
+  [ -s "$HOME/.config/herdr-app/mods/fraim/version" ]
   jq -e '.. | objects | select(.id? == "chief-term") | .content.terminal == "fraim/main"' "$HOME/.config/herdr-app/layouts/fraim.json"
   grep -q 'herdr-app do layout.switch --name fraim' "$HERDR_LOG"
 }

@@ -135,9 +135,10 @@ make_chief() {
 
 @test "when the chief cannot run, the notice goes out as it is" {
   make_chief
-  FAKE_FAIL=1 run fraim-notify "Lead web failed: exit 1."
+  FAKE_FAIL=1 run fraim-notify "Lead web failed: exit 1. Details: ~/fraim/automations/web/runs/2026-11-10T200001"
   [ "$status" -eq 0 ]
   grep -q 'Lead web failed: exit 1.' "$SENT"
+  ! grep -q 'Details' "$SENT"
   grep -q 'nobody could write it' "$FRAIM_RELAY_DIR/said.md"
   touch "$FRAIM_LEADS_DIR/chief/paused"
   rm -f "$SENT" "$CLAUDE_CALLS"

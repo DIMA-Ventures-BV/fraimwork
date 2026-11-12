@@ -231,7 +231,9 @@ relay_chat() {
   fi
   # Nobody could write it: the owner gets the notices as they are.
   local raw
-  raw="$(cat "$batch"/*.json | jq -rs --arg chat "$chat" 'map(select(.chat == $chat)) | sort_by(.time) | map(.text) | join("\n\n")')"
+  # File paths ("Details: ~/fraim/...") help Claude on the laptop, not the owner on a phone;
+  # the alerts file keeps them.
+  raw="$(cat "$batch"/*.json | jq -rs --arg chat "$chat" 'map(select(.chat == $chat)) | sort_by(.time) | map(.text | gsub(" ?Details: ~/[^ \n]*"; "")) | join("\n\n")')"
   send "$chat" "${raw:0:3500}" && { date +%s > "$relay/last-sent"; add_line me "$chat" "$(about_of "$notices")" "$raw"; }
   remember "$chat" "(sent as it was; nobody could write it)
 $raw" "$notices"
