@@ -13,6 +13,7 @@
 #   fraim-goal read ID [LINES]                    the goal's screen, plus LINES of history
 #   fraim-goal attach ID                          humans: take over the goal's terminal
 #   fraim-goal reconcile                          give running goals a watcher again
+#   fraim-goal prune                              free the disk space of ended goals' checkouts
 #                                                 (fraim-herdr supervise runs it)
 #
 # A goal is an interactive Claude Code session in the herdr terminal named after its id
@@ -374,6 +375,11 @@ check_change() {
   [ -s "$dir/ready-to-merge" ] || return 1
   change="$(head -c 500 "$dir/ready-to-merge")"
   rm -f "$dir/ready-to-merge"
+  [ ! -s "$dir/checks.txt" ] || change="$change
+
+The goal ran the repo's checks on the server (they do not run on the pull request). The end of that run:
+$(tail -n 40 "$dir/checks.txt")"
+  rm -f "$dir/checks.txt"
   printf '%s\n' "$change" > "$dir/change"
   n=$(( $(cat "$dir/checks" 2>/dev/null || echo 0) + 1 ))
   echo "$n" > "$dir/checks"
@@ -661,6 +667,13 @@ cmd_reconcile() {
     st="$(state_of "$dir")"
     case "$st" in running|done) ;; *) continue ;; esac
     alive "$dir" && continue
+    # After a restart the core can bring a terminal back as a bare shell: Claude is gone, so
+    # following it would wait forever. Close it; the goal then restarts like a vanished one.
+    if [ "$(term_get "$id" | jq -r '.agent // ""' 2>/dev/null)" = bash ]; then
+      echo "the terminal came back as a shell after a restart; reopening the conversation" >> "$dir/log.txt"
+      hc kill "$id" >/dev/null 2>&1 || true
+      hc rm "$id" >/dev/null 2>&1 || true
+    fi
     case "$(term_state "$id")" in
       live)
         if [ -s "$dir/session-id" ]; then
@@ -702,6 +715,31 @@ restart_goal() {
   spawn_watcher "$id" run
 }
 
+# Goals work in their own checkout, ~/code/<repo>-g<N>, and each keeps its installed packages
+# (often over a gigabyte). Once the goal has ended for a day, its packages and build output go;
+# the checkout, its branch and every change stay.
+cmd_prune() {
+  local code="${FRAIM_CODE_DIR:-$HOME/code}" mins=$(( ${FRAIM_GOAL_PRUNE_DAYS:-1} * 1440 ))
+  local d n gdir sub hit freed=0
+  [ -d "$code" ] || return 0
+  for d in "$code"/*-g[0-9]*; do
+    [ -d "$d" ] && [ -e "$d/.git" ] || continue
+    n="${d##*-g}"
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    gdir="$goals/g$n"
+    [ -f "$gdir/state" ] || continue
+    [ "$(state_of "$gdir")" != running ] || continue
+    [ -n "$(find "$gdir/state" -mmin +"$mins" 2>/dev/null)" ] || continue
+    hit=0
+    for sub in node_modules .next; do
+      [ -d "$d/$sub" ] || continue
+      rm -rf "${d:?}/$sub" && hit=1
+    done
+    freed=$((freed + hit))
+  done
+  [ "$freed" -eq 0 ] || echo "Removed packages and build output from the checkouts of $freed ended goal(s)."
+}
+
 action="${1:-}"
 [ $# -eq 0 ] || shift
 case "$action" in
@@ -714,5 +752,6 @@ case "$action" in
   read) [ $# -ge 1 ] && [ $# -le 2 ] || usage "read ID [LINES]"; cmd_read "$@" ;;
   attach) [ $# -eq 1 ] || usage "attach ID"; cmd_attach "$1" ;;
   reconcile) cmd_reconcile ;;
-  *) usage 'start [--chat CHAT_ID] "what to do" | list | show ID | stop ID | send ID "message" | read ID [LINES] | attach ID' ;;
+  prune) cmd_prune ;;
+  *) usage 'start [--chat CHAT_ID] "what to do" | list | show ID | stop ID | send ID "message" | read ID [LINES] | attach ID | prune' ;;
 esac

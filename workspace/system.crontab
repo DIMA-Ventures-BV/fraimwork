@@ -22,3 +22,6 @@
 
 # Every Monday: tell the owner once when a new fraimwork release is available.
 0 10 * * 1 fraim-version-check --notify
+
+# Every night: ended goals' checkouts in ~/code lose their installed packages (the code stays).
+15 4 * * * fraim-goal prune

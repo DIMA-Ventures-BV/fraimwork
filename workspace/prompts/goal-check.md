@@ -11,7 +11,7 @@ The change to review: {{change}}
 3. Fail it when any of these is true:
    - It does not do what the task asked, or only part of it.
    - It does something the task did not ask for that could harm the owner, the customers or the site.
-   - Its checks failed or did not run.
+   - Its checks failed or did not run. When the change text includes the end of a checks run on the server, that run counts: check that it passed and ran on the pull request's newest commit.
    - You find a clear bug in what it changed.
    - Adding it to the code would put something live.
 4. Do not fail it for style or for things you would have done differently.
