@@ -776,10 +776,12 @@ cmd_deploy() {
   parse_flags "$@"
   local target="${POSITIONAL[0]:-}"
   [ -n "$target" ] || human "Create an Ubuntu 24.04 server (Hetzner Cloud: type CX23, or CAX21 if CX is sold out; 4 GB RAM minimum; add the SSH key from ~/.ssh/id_ed25519.pub; turn on 'Backups' so a dead server can be restored) and give Claude its IP address."
-  [ -f "$REPO/.env" ] || usage "no .env; run 'fraim init' first"
+  [ -f "$ENV_FILE" ] || usage "no .env; run 'fraim init' first"
+  # A customer deploy keeps its own target; every other deploy becomes the default target.
+  local customer="${FRAIM_CUSTOMER:-}"
+  if [ -z "$customer" ]; then FRAIM_TARGET=default; CONFIG="$CONFIG_DIR/config"; fi
   # Deploying is consent to a (possibly rebuilt) server: forget the old host keys for it.
-  FRAIM_TARGET=default
-  KNOWN_HOSTS="$STATE_DIR/known_hosts-default"
+  KNOWN_HOSTS="$STATE_DIR/known_hosts-$FRAIM_TARGET"
   rm -f "$KNOWN_HOSTS"
   SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
   use_ssh_key "$(find_ssh_key)"
@@ -791,7 +793,7 @@ cmd_deploy() {
     --exclude .git --exclude node_modules --include .env.example --exclude .env --exclude '.env.*' --exclude '*.bak' --exclude .update-lock --exclude .public-ssh-locked \
     "$REPO/" "$target:$REMOTE_DIR/"
   if [ -n "$(flag force-env)" ] || ! ssh "${SSH_BASE[@]}" "$target" "test -f $REMOTE_DIR/.env"; then
-    scp -q "${SSH_BASE[@]}" "$REPO/.env" "$target:$REMOTE_DIR/.env"
+    scp -q "${SSH_BASE[@]}" "$ENV_FILE" "$target:$REMOTE_DIR/.env"
   fi
   # shellcheck disable=SC2046
   ssh "${SSH_BASE[@]}" "$target" "cd $REMOTE_DIR && $(stamp_command)"
@@ -816,10 +818,9 @@ cmd_deploy() {
     FRAIM_PUBLIC_HOST="${target#*@}"
     FRAIM_ADMIN="$target"
   fi
-  CONFIG="$CONFIG_DIR/config"
   FRAIM_SSH_KEY="$(find_ssh_key)"
   save_config
-  set_current default
+  [ -n "$customer" ] || set_current default
   [ "$FRAIM_ACCESS" != tailscale ] || cmd_lock
   wait_for_workspace || die "deployed, but the Claude workspace does not answer after 60 seconds; check: fraim logs workspace"
   say "Deployed. fraim commands now target $FRAIM_HOST."
@@ -868,6 +869,9 @@ cmd_tailscale() {
       [ -z "$(flag email)" ] || again="--email $(flag email)"
       [ -z "$(flag email-2)" ] || again="$again --email-2 $(flag email-2)"
       ts_apply "$again"
+      ;;
+    customers)
+      TS_MERGE=ts_merge_customers TS_AGAIN="fraim tailscale customers" ts_apply ""
       ;;
     reach)
       # Let fraim servers reach one other tailnet device or tag (production, a build box).
@@ -950,6 +954,48 @@ ts_merge_reach() {
     if any(.grants[]?; same(.src; ["tag:fraim"]) and same(.dst; [$dst]))
     then .grants |= map(if same(.src; ["tag:fraim"]) and same(.dst; [$dst]) then .ip = ((.ip // []) + ([$ip] - (.ip // []))) else . end)
     else .grants = ((.grants // []) + [{src: ["tag:fraim"], dst: [$dst], ip: [$ip]}]) end'
+}
+
+# Customer servers get their own tag: operators reach them, and no grant has this tag as
+# source, so a customer server reaches nothing, also not what `fraim tailscale reach` opens
+# for tag:fraim.
+TS_CUSTOMER_TAG=tag:fraim-customer
+ts_merge_customers() {
+  jq --arg tag "$TS_CUSTOMER_TAG" --argjson ports "$TS_FRAIM_PORTS" '
+    def same($a; $b): ($a | sort) == ($b | sort);
+    def admins: ["group:fraim-admins"];
+    if ((.groups["group:fraim-admins"] // []) | length) == 0
+    then error("the policy has no group:fraim-admins; run fraim tailscale apply --email ADDRESS first") else . end
+    | .tagOwners = (.tagOwners // {})
+    | .tagOwners[$tag] = (.tagOwners[$tag] // admins)
+    | ($ports + ["tcp:22"]) as $ip
+    | if any(.grants[]?; same(.src; admins) and same(.dst; [$tag]))
+      then .grants |= map(if same(.src; admins) and same(.dst; [$tag]) then .ip = ((.ip // []) + ($ip - (.ip // []))) else . end)
+      else .grants = ((.grants // []) + [{src: admins, dst: [$tag], ip: $ip}]) end
+    | if any(.grants[]?; same(.src; ["autogroup:shared"]) and same(.dst; [$tag]))
+      then . else .grants = ((.grants // []) + [{src: ["autogroup:shared"], dst: [$tag], ip: $ports}]) end
+    | if any(.ssh[]?; .action == "accept" and same(.src; admins) and same(.dst; [$tag]))
+      then . else .ssh = ((.ssh // []) + [{action: "accept", src: admins, dst: [$tag], users: ["root"]}]) end'
+}
+
+ts_customers_ready() {
+  local out
+  out="$(ts_curl -H 'Accept: application/json' "$TS_API/tailnet/-/acl")" || die "could not read the Tailscale policy: $out"
+  jq -e --arg tag "$TS_CUSTOMER_TAG" '.tagOwners[$tag] != null' <<<"$out" >/dev/null
+}
+
+# A one-time, pre-approved auth key that can only create a server with the customer tag.
+ts_auth_key() {  # NAME
+  local tmp key
+  tmp="$(mktemp -d)"
+  jq -n --arg tag "$TS_CUSTOMER_TAG" --arg d "fraim customer $1" \
+    '{description: $d, expirySeconds: 7200, capabilities: {devices: {create: {reusable: false, ephemeral: false, preauthorized: true, tags: [$tag]}}}}' > "$tmp/body.json"
+  ts_curl -X POST -H 'Content-Type: application/json' --data-binary @"$tmp/body.json" "$TS_API/tailnet/-/keys" -o "$tmp/key.json" \
+    || { local why; why="$(jq -r '.message // empty' "$tmp/key.json" 2>/dev/null || true)"; rm -rf "$tmp"; die "Tailscale refused to make an auth key: $why"; }
+  key="$(jq -r '.key // empty' "$tmp/key.json")"
+  rm -rf "$tmp"
+  [ -n "$key" ] || die "Tailscale returned no auth key"
+  printf '%s' "$key"
 }
 
 ts_apply() {
@@ -1235,13 +1281,11 @@ login_from_space() {
 # setup-token only gives model access. The sign-in runs in a tmux session on the server;
 # the human opens the link and passes the code with `fraim login --code` in their own
 # Terminal, so the code never shows up in a chat.
-login_full_start() {
-  local link="" space_flag=""
-  [ "$FRAIM_SPACE" = main ] || space_flag=" --space $FRAIM_SPACE"
-  if workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; then
-    say "Space $FRAIM_SPACE already has a full Claude login (Remote Control and claude.ai connectors work)."
-    return
-  fi
+full_login_done() { workspace_ssh 'test -f ~/.config/fraim/full-login && test -s ~/.claude/.credentials.json'; }
+
+# Prints the sign-in link of the running sign-in, or starts a new sign-in.
+login_full_link() {
+  local link=""
   # A sign-in that already waits keeps its link: starting a new one would invalidate the
   # link the human may have open right now. --restart starts over anyway.
   if [ -z "$(flag restart)" ]; then
@@ -1252,6 +1296,17 @@ login_full_start() {
     workspace_ssh 'f=~/.claude/.credentials.json; if [ -s "$f" ]; then mv "$f" "$f.before-fraim-login"; fi' || true
     link="$(workspace_ssh 'fraim-tty start login -- claude auth login')" || die "could not start the Claude sign-in on the server"
   fi
+  printf '%s' "$link"
+}
+
+login_full_start() {
+  local link="" space_flag=""
+  [ "$FRAIM_SPACE" = main ] || space_flag=" --space $FRAIM_SPACE"
+  if full_login_done; then
+    say "Space $FRAIM_SPACE already has a full Claude login (Remote Control and claude.ai connectors work)."
+    return
+  fi
+  link="$(login_full_link)"
   # In the human's own terminal: one command opens the page and then asks for the code.
   if is_tty; then
     open_url "$link"
@@ -2574,6 +2629,156 @@ cmd_setup() {
   say "Setup of space $FRAIM_SPACE is complete."
 }
 
+# --- customers ---------------------------------------------------------------------
+# Servers we run for other people. The person never touches Tailscale or the server: they
+# approve a Claude sign-in and type a WhatsApp code. docs/customers.md explains the model.
+CUSTOMER_DIR="$CONFIG_DIR/customers"
+CUSTOMER_USAGE="fraim customer add NAME --owner N [--bot N] --hcloud-context CTX [--provider hetzner] [--size S] [--region R] [--tz Z] [--yes] | list | update [NAME]"
+
+customer_names() {
+  local f
+  for f in "$CUSTOMER_DIR"/*.env; do
+    [ -f "$f" ] || continue
+    basename "$f" .env
+  done
+}
+
+# Sets the target, so this run cannot touch the operator's own server or .env.
+customer_target() {  # NAME
+  FRAIM_CUSTOMER="$1"
+  FRAIM_TARGET="$1"
+  CONFIG="$CONFIG_DIR/$1.config"
+  ENV_FILE="$CUSTOMER_DIR/$1.env"
+  KNOWN_HOSTS="$STATE_DIR/known_hosts-$1"
+  SSH_BASE=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$KNOWN_HOSTS" -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o LogLevel=ERROR)
+}
+
+customer_write_env() {  # NAME OWNER
+  mkdir -p "$CUSTOMER_DIR"
+  chmod 700 "$CUSTOMER_DIR"
+  [ -f "$ENV_FILE" ] || cp "$REPO/.env.example" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  env_set FRAIM_HOSTNAME "fraim-$1"
+  env_set ACCESS_MODE tailscale
+  env_set TS_TAG "$TS_CUSTOMER_TAG"
+  env_set COMPOSE_PROFILES browser,whatsapp,scheduler
+  env_set WHATSAPP_OWNER "$2"
+  env_set WHATSAPP_ALLOW ""
+  [ -z "$(flag tz)" ] || env_set TZ "$(flag tz)"
+}
+
+# Prints root@IP. Without --yes, fraim-cloud shows the plan and the cost and exits 2.
+customer_server() {  # NAME
+  local cloud="${FRAIM_CLOUD_BIN:-$REPO/bin/fraim-cloud}" provider out rc=0
+  local state="$CONFIG_DIR/cloud/fraim-$1.env"
+  if [ -f "$state" ]; then
+    printf 'root@%s' "$(grep '^IP=' "$state" | cut -d= -f2-)"
+    return
+  fi
+  provider="$(flag provider)"; provider="${provider:-hetzner}"
+  local args=(create --provider "$provider" --name "fraim-$1" --access tailscale)
+  [ -z "$(flag size)" ] || args+=(--size "$(flag size)")
+  [ -z "$(flag region)" ] || args+=(--region "$(flag region)")
+  [ -z "$(flag yes)" ] || args+=(--yes)
+  out="$("$cloud" "${args[@]}")" || rc=$?
+  if [ "$rc" != 0 ]; then printf '%s\n' "$out"; exit "$rc"; fi
+  if [ "$provider" = hetzner ]; then
+    hcloud server enable-backup "fraim-$1" >/dev/null 2>&1 || printf 'fraim: could not turn on backups for fraim-%s\n' "$1" >&2
+  fi
+  printf '%s' "$out" | tail -1
+}
+
+customer_add() {
+  local name="${POSITIONAL[1]:-}" owner bot="" target
+  [ -n "$name" ] && [ -n "$(flag owner)" ] || usage "$CUSTOMER_USAGE"
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9-]{0,30}$' || usage "the customer name must be lowercase letters, digits and dashes"
+  case "$name" in default|local|current|config) usage "'$name' is a reserved name" ;; esac
+  owner="$(normalize_phone "$(flag owner)")" || exit 2
+  if [ -n "$(flag bot)" ]; then bot="$(normalize_phone "$(flag bot)")" || exit 2; fi
+  [ "$owner" != "$bot" ] || usage "the bot needs its own second number; --owner and --bot are the same"
+  customer_target "$name"
+
+  if [ -f "$CUSTOMER_DIR/$name.done" ]; then say "$name is already set up."; return; fi
+
+  if [ ! -f "$CONFIG" ]; then
+    setup_step "Server"
+    # The server lands in whatever Hetzner project is active: the operator names it each time.
+    if [ "$(flag provider)" = hetzner ] || [ -z "$(flag provider)" ]; then
+      [ -n "$(flag hcloud-context)" ] || [ -f "$CONFIG_DIR/cloud/fraim-$name.env" ] || usage "name the Hetzner project with --hcloud-context (the active one is $(hcloud context active 2>/dev/null || echo unknown))"
+      if [ -n "$(flag hcloud-context)" ]; then
+        HCLOUD_CONTEXT="$(flag hcloud-context)"
+        export HCLOUD_CONTEXT
+      fi
+    fi
+    [ -n "$(ts_key)" ] || human "$TS_KEY_STEP"
+    ts_customers_ready || human "The Tailscale policy has no customer servers yet. Claude runs: fraim tailscale customers"
+    customer_write_env "$name" "$owner"
+    target="$(customer_server "$name")"
+    local key
+    key="$(find_ssh_key)"
+    [ -n "$key" ] || human "Create an SSH key on this computer: run ssh-keygen -t ed25519 and press Enter at every question."
+    add_authorized_key "$key"
+    env_set TS_AUTHKEY "$(ts_auth_key "$name")"
+    setup_step "Install on $target (5 to 10 minutes)"
+    cmd_deploy "$target" --force-env --take-over
+  fi
+
+  load_config
+  setup_step "Claude login"
+  if full_login_done; then
+    say "ok"
+  else
+    # Never cmd_login or login_full_start here: the first reuses the operator's Keychain
+    # token and the second opens the sign-in page in the operator's own browser.
+    human "Send $name this link and ask them to sign in with their own Claude account: $(login_full_link)  They send back the code from the page. Then run in your own Terminal: FRAIM_TARGET=$name fraim login --code  and tell Claude 'done'."
+  fi
+
+  setup_step "WhatsApp"
+  [ -n "$bot" ] || human "$name needs a second phone number registered in WhatsApp Business for the bot. Give it to Claude; Claude runs this command again with --bot N."
+  cmd_whatsapp link --number "$bot"
+  cmd_whatsapp test
+  : > "$CUSTOMER_DIR/$name.done"
+  say "$name is ready. They can message the bot on WhatsApp now."
+}
+
+customer_list() {
+  local n json rc state
+  for n in $(customer_names); do
+    rc=0
+    json="$(FRAIM_TARGET="$n" "$REPO/bin/fraim" status --json 2>/dev/null)" || rc=$?
+    if ! jq -e '.health.checks' <<<"$json" >/dev/null 2>&1; then
+      state="unreachable"
+    elif [ "$rc" = 0 ]; then
+      state="ok"
+    else
+      state="failing: $(jq -r '[.health.checks[] | select(.ok == false) | .name] | join(", ")' <<<"$json")"
+    fi
+    [ -f "$CUSTOMER_DIR/$n.done" ] || state="$state (setup not finished)"
+    printf '%s\t%s\n' "$n" "$state"
+  done
+}
+
+# One failing server does not stop the others; the exit code says whether any failed.
+customer_update() {
+  local n failed="" names="${POSITIONAL[1]:-$(customer_names)}"
+  for n in $names; do
+    [ -f "$CUSTOMER_DIR/$n.env" ] || usage "no customer named $n"
+    setup_step "Update $n"
+    FRAIM_TARGET="$n" "$REPO/bin/fraim" update || failed="$failed $n"
+  done
+  [ -z "$failed" ] || die "update failed for:$failed"
+}
+
+cmd_customer() {
+  parse_flags "$@"
+  case "${POSITIONAL[0]:-}" in
+    add) customer_add ;;
+    list) customer_list ;;
+    update) customer_update ;;
+    *) usage "$CUSTOMER_USAGE" ;;
+  esac
+}
+
 cmd_whatsapp() {
   parse_flags "$@"
   load_config
@@ -2724,6 +2929,11 @@ Real server
   fraim tailscale key [--stdin]              save a Tailscale API token on this computer (Keychain)
   fraim tailscale apply [--email ADDR] [--yes]   merge the fraim rules into the tailnet policy via the API
   fraim tailscale reach tag:NAME|100.x.y.z [--port 22] [--yes]   let fraim servers reach that device
+  fraim tailscale customers [--yes]          add the separate tag for servers we run for other people
+  fraim customer add NAME --owner N [--bot N] --hcloud-context CTX [--size S] [--region R] [--tz Z] [--yes]
+                                             create and install a server for someone else; rerun after each human step
+  fraim customer list | update [NAME]        health of every customer server | update them
+  fraim cloud create|prepare|destroy|list    create or delete a server at Hetzner, DigitalOcean or AWS
   fraim deploy root@IP [--force-env] [--take-over]   installs, then closes public SSH once Tailscale works
                                              (--take-over replaces a stale update lock)
   fraim lock                                 close public SSH (tailscale mode; checks access first)
@@ -2842,6 +3052,8 @@ main() {
       say "fraim now targets: $1"
       ;;
     config) exec "$REPO/bin/fraim-config" "$@" ;;
+    cloud) exec "$REPO/bin/fraim-cloud" "$@" ;;
+    customer|customers) cmd_customer "$@" ;;
     secret) cmd_secret "$@" ;;
     space) cmd_space "$@" ;;
     repo) cmd_repo "$@" ;;

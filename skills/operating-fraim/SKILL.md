@@ -155,9 +155,20 @@ Confirm first: "This deletes your fraim server and everything on it, after a bac
 3. Local stack, if any: `$F local down --wipe`.
 4. Laptop: `$F config uninstall` removes the fraim plugin links. `~/fraim` and the backup stay; delete them only when the user asks.
 
+## Servers for other people
+
+Use this when the user says "set up fraim for <someone>", "add a customer" or "how are my customers". The operator runs everything; `docs/customers.md` has the model.
+
+1. Ask for the person's name, their own WhatsApp number and the bot's second number, with country codes. Tell the user the person must accept that the operator has root on their server.
+2. Run `$F customer add NAME --owner N --bot N --hcloud-context CTX` and show the plan and cost. Ask which Hetzner project; never assume the active one. On yes, add `--yes`.
+3. On exit 3, pass the HUMAN STEP on and run the same command again after it. The sign-in code goes through `FRAIM_TARGET=NAME $F login --code` in the user's own Terminal. The WhatsApp code works for about 1 minute, so first check that the person has the phone in their hand.
+4. Health: `$F customer list`. Update: `$F customer update`. Any other command: prefix `FRAIM_TARGET=NAME`.
+
+Never run `$F login` or `$F setup` against a customer server: they use the operator's own Claude token.
+
 ## Ask first
 
-`$F local down --wipe` (deletes the stack with every file inside it, its volumes and env file; keeps the laptop's `~/fraim/claude` and `secrets.env`. When the stack was the user's only fraim, also run `$F config uninstall`), `$F whatsapp relink`, `$F deploy` to a server that already runs fraim (`--force-env`), `$F reset-workspace` while a job runs.
+`$F customer add ... --yes` (costs money), `$F tailscale customers --yes` (changes the tailnet policy), `$F local down --wipe` (deletes the stack with every file inside it, its volumes and env file; keeps the laptop's `~/fraim/claude` and `secrets.env`. When the stack was the user's only fraim, also run `$F config uninstall`), `$F whatsapp relink`, `$F deploy` to a server that already runs fraim (`--force-env`), `$F reset-workspace` while a job runs.
 
 ## Never
 

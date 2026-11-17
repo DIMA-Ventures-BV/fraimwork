@@ -182,7 +182,8 @@ if [ "$mode" = tailscale ]; then
   if ! tailscale ip -4 >/dev/null 2>&1; then
     key="$(get_env TS_AUTHKEY)"
     [ -n "$key" ] || die "TS_AUTHKEY is empty; create a tagged one-time key in the Tailscale admin console"
-    tailscale up --auth-key="$key" --hostname="$(get_env FRAIM_HOSTNAME)" --advertise-tags=tag:fraim --ssh
+    ts_tag="$(get_env TS_TAG)"
+    tailscale up --auth-key="$key" --hostname="$(get_env FRAIM_HOSTNAME)" --advertise-tags="${ts_tag:-tag:fraim}" --ssh
   fi
   set_env TS_AUTHKEY ""
   ts_ip="$(tailscale ip -4 | head -1)"

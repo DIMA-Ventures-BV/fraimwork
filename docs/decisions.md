@@ -11,7 +11,7 @@
 | Updates | Release tags `vX.Y.Z`. `fraim update` installs the latest tag, checks health, and rolls back on failure. |
 | Sandbox | No Claude Code sandbox inside the container. The container is the boundary. |
 | Central heartbeat | Not built. |
-| Tailnets | One tailnet per person. Everyone in `group:fraim-users` can reach every `tag:fraim` server on a tailnet. |
+| Tailnets | One tailnet per person. Everyone in `group:fraim-users` can reach every `tag:fraim` server on a tailnet. Servers run for other people are the exception: only operators are on the tailnet, and those servers get `tag:fraim-customer`, which reaches nothing (`docs/customers.md`). |
 | Untrusted input isolation | The browser (uid 1100) and the WhatsApp gateway only get their own drop folder (`downloads`, `inbox` volumes), never the rest of `~/fraim`, and each has its own network with the workspace. Secrets (`~/.config/fraim`, Claude credentials, `/etc/fraim`) are denied to Claude's Read tool; WebFetch is never pre-approved. Tested 2026-11-07. |
 | Lock-out recovery (tailscale mode) | No root password is set at deploy. If Tailscale breaks after public SSH is closed: Hetzner Cloud > server > Rescue > "Reset root password", then Console, log in as root, run `tailscale up --ssh` (or `ufw allow OpenSSH`). The operating-fraim skill guides this. |
 | Update rollback | Restores code and rebuilds; data in Docker volumes is not rolled back. A release that migrates volume data needs its own migration notes. |

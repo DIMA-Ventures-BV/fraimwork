@@ -1,0 +1,14 @@
+#cloud-config
+# fraimwork user data. Works on any provider that supports cloud-init (Hetzner, DigitalOcean,
+# AWS, Google Cloud, Vultr, Linode, OVH, Scaleway, ...). Paste it into the "user data" or
+# "cloud config" field when you create the server. `fraim cloud create` passes it for you.
+#
+# disable_root: false gives root the same SSH key as the default user (ubuntu, admin, debian).
+# fraim deploy needs root; install.sh then turns off password logins.
+disable_root: false
+ssh_pwauth: false
+package_update: true
+packages:
+  - rsync
+  - curl
+  - ca-certificates
