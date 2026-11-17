@@ -73,7 +73,8 @@ if command -v fraim-prompt >/dev/null; then
   fi
 fi
 [ -s "$server_prompt" ] || server_prompt="${FRAIM_PROMPT_DEFAULTS:-/etc/fraim/prompts}/server.md"
-[ ! -s "$server_prompt" ] || set -- "$@" --append-system-prompt-file "$server_prompt"
+# An agent run (fraim-agent) brings its own system prompt and memory files.
+[ "${FRAIM_AGENT:-}" = 1 ] || [ ! -s "$server_prompt" ] || set -- "$@" --append-system-prompt-file "$server_prompt"
 # Runs nobody watches may not rewrite instructions or their own tool list with the edit tools.
 # A goal has a full shell and runs as the same Unix user, so this does not stop it (docs/prompts.md).
 if [ "${FRAIM_HEADLESS:-}" = 1 ]; then
