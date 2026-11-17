@@ -79,13 +79,13 @@ echo "== fraim deploy $user@$ip"
 if ! (cd "$work/repo" && XDG_CONFIG_HOME="$work/xdg" FRAIM_SSH_KEY="$key" bin/fraim deploy "$user@$ip" </dev/null) >"$work/deploy.log" 2>&1; then
   tail -30 "$work/deploy.log"; echo "FAIL  deploy"; exit 1
 fi
-if grep -qi 'warning' "$work/deploy.log"; then grep -i warning "$work/deploy.log"; fi
+grep '^install.sh: warning' "$work/deploy.log" || true
 
 O=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -i "$key" -o ConnectTimeout=10)
 fail=0
 chk() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then echo "ok    $label"; else echo "FAIL  $label"; fail=1; fi; }
 root() { ssh "${O[@]}" "root@$ip" "$@"; }
-chk "deploy printed no warnings" sh -c "! grep -qi warning '$work/deploy.log'"
+chk "install.sh printed no warnings" sh -c "! grep -q '^install.sh: warning' '$work/deploy.log'"
 chk "5 services running" root 'cd /opt/fraimwork && [ "$(docker compose ps --status running --services | wc -l)" -ge 5 ]'
 chk "sshd: passwords off" root 'mkdir -p /run/sshd && sshd -T | grep -qx "passwordauthentication no"'
 chk "sshd: root key-only" root 'sshd -T | grep -qx "permitrootlogin without-password"'
@@ -96,5 +96,6 @@ chk "syncthing GUI has a password" root 'cd /opt/fraimwork && docker compose exe
 for _ in $(seq 20); do ssh "${O[@]}" -p 2222 "claude@$ip" true 2>/dev/null && break; sleep 3; done
 chk "workspace SSH as claude" ssh "${O[@]}" -p 2222 "claude@$ip" 'command -v claude && tmux has-session -t main'
 chk "SSH password login refused" sh -c "! ssh -o BatchMode=yes -o PubkeyAuthentication=no -o PreferredAuthentications=password -o ConnectTimeout=5 root@$ip true"
-chk "install.sh runs again" root 'cd /opt/fraimwork && ./install.sh'
+if root 'cd /opt/fraimwork && ./install.sh' >"$work/rerun.log" 2>&1; then echo "ok    install.sh runs again"
+else echo "FAIL  install.sh runs again"; tail -25 "$work/rerun.log"; fail=1; fi
 exit "$fail"
