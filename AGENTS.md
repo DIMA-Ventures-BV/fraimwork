@@ -18,15 +18,15 @@ Read `README.md` (its "For developers" table maps the layout) and `docs/decision
 
 | Command | What | Time |
 |---|---|---|
-| `make check` | lint + bats + node tests, what CI runs | ~1 min |
-| `make check-linux` | the same on Ubuntu in Docker | ~3 min |
+| `make check` | lint + bats + node tests (`.github/local-checks.sh`) | ~1 min |
+| `make check-linux` | the same on Ubuntu in Docker; `fraim-release` runs it | ~3 min |
 | `make lint` | shellcheck, `node --check`, JSON, compose, hadolint, actionlint, plugin and SKILL.md checks | fast |
 | `make test-unit` / `make test-node` | bats / `node --test` only | fast |
 | `make test-secrets` | secrets proxy in Docker with a fake API | ~1 min |
 | `make e2e` / `make e2e-spaces` | full local stack / two spaces, needs Docker | 10-20 / ~5 min |
 | `make e2e-update` | update and rollback on a real Ubuntu VM | ~40 min |
 
-Run `make check` before every PR. Run e2e only when a change touches compose, containers, install or update; use the dev box for it if you have one.
+Run `make check` before every PR. CI does not run on push or PR; `/ship` and `/merge` run `.github/local-checks.sh` and `bin/fraim-release` runs `make check-linux`. Run e2e only when a change touches compose, containers, install or update; use the dev box for it if you have one.
 
 ## Traps
 
@@ -34,7 +34,7 @@ Run `make check` before every PR. Run e2e only when a change touches compose, co
 - **Readers are non-technical.** README, skills and anything an owner sees on WhatsApp are plain words: no jargon, no file paths in alerts, no links in chief messages.
 - **Prompts are owner-overridable defaults.** Edit `workspace/prompts/*.md`, never hard-code agent instructions in scripts; the owner's copy wins (`docs/prompts.md`).
 - **Isolation is a decision, not an accident.** The browser and WhatsApp gateway only get their own drop folders and networks; secrets stay in the secrets container and are denied to Claude's Read tool. Do not widen mounts, networks or permissions without a line in `docs/decisions.md`.
-- **Releases are signed.** Only `bin/fraim-release vX.Y.Z` from a clean, pushed, green `main`. Never tag by hand. Rollback restores code, not volume data: a release that migrates data needs migration notes.
+- **Releases are signed.** Only `bin/fraim-release vX.Y.Z` from a clean, pushed `main`; it runs `make check-linux` on that commit before signing. Never tag by hand. Rollback restores code, not volume data: a release that migrates data needs migration notes.
 - **Lint checks more than syntax.** A SKILL.md `name` must match its folder and have a description of 20+ characters. A Node script without `.mjs`/`.js` must be added to the `node --check` list in `tests/lint.sh`. JSON must parse with `jq`.
 - **`tailscale/policy.hujson` is merged into an owner's policy,** never a replacement for it.
 - **Public repo.** No secrets, personal paths, phone numbers or owner data in code, tests or docs. `.env*` (except `.env.example`) stays local.

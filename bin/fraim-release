@@ -4,7 +4,7 @@
 #
 #   fraim-release vX.Y.Z [--dry-run]    --dry-run builds and verifies, and publishes nothing
 #
-# The commit must be main, pushed, clean, and green in CI.
+# The commit must be main, pushed and clean; it must pass `make check` on Ubuntu (run here).
 # FRAIM_RELEASE_KEY: the private signing key (default ~/.config/fraim/release-key). It must
 # match config/release-signers, the public key every server trusts.
 # Exit codes: 0 ok, 1 refused or failed, 2 usage.
@@ -34,9 +34,11 @@ if [ -n "$highest" ] && [ "$(printf '%s\n%s\n' "$highest" "$version" | sort -V |
   die "$version is not above the newest release $highest"
 fi
 [ -f "$KEY" ] || die "no signing key at $KEY"
-if [ -z "$dry" ]; then
-  ci="$(gh run list --branch main --commit "$commit" --json conclusion --jq 'map(.conclusion) | unique | join(",")')" || die "could not read CI"
-  [ "$ci" = success ] || die "CI on this commit is '${ci:-not finished}', not success"
+# The checks run here, on the exact commit being released, the way CI would (Ubuntu in
+# Docker). Pull-request checks run locally too, so there is no CI run to read.
+# FRAIM_RELEASE_SKIP_CHECKS=1 skips them (only when the same commit just passed them).
+if [ -z "$dry" ] && [ "${FRAIM_RELEASE_SKIP_CHECKS:-}" != 1 ]; then
+  tests/check-linux.sh || die "make check failed on this commit; nothing was released"
 fi
 
 work="$(mktemp -d)" || die "no temp folder"
