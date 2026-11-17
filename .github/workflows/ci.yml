@@ -1,9 +1,11 @@
 name: ci
 
+# By hand only: `gh workflow run ci.yml --ref <branch>`.
+# Pull-request checks run locally (.github/local-checks.sh, posted as the
+# `local-checks` commit status by /ship and /merge); bin/fraim-release runs
+# tests/check-linux.sh itself before it signs a release.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

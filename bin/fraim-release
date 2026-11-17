@@ -4,7 +4,7 @@
 #
 #   fraim-release vX.Y.Z [--dry-run]    --dry-run builds and verifies, and publishes nothing
 #
-# The commit must be main, pushed, clean, and green in CI.
+# The commit must be main, pushed and clean; it must pass `make check` on Ubuntu (run here).
 # FRAIM_RELEASE_KEY: the private signing key (default ~/.config/fraim/release-key). It must
 # match config/release-signers, the public key every server trusts.
 # Exit codes: 0 ok, 1 refused or failed, 2 usage.
@@ -34,15 +34,19 @@ if [ -n "$highest" ] && [ "$(printf '%s\n%s\n' "$highest" "$version" | sort -V |
   die "$version is not above the newest release $highest"
 fi
 [ -f "$KEY" ] || die "no signing key at $KEY"
+# The checks run here, on the exact commit being released, the way CI would (Ubuntu in
+# Docker). Pull-request checks run locally too, so there is no CI run to read.
 if [ -z "$dry" ]; then
-  ci="$(gh run list --branch main --commit "$commit" --json conclusion --jq 'map(.conclusion) | unique | join(",")')" || die "could not read CI"
-  [ "$ci" = success ] || die "CI on this commit is '${ci:-not finished}', not success"
+  tests/check-linux.sh || die "make check failed on this commit; nothing was released"
+  # The checks take minutes: refuse if the checkout moved or changed meanwhile.
+  [ "$(git rev-parse HEAD)" = "$commit" ] && [ -z "$(git status --porcelain)" ] \
+    || die "the checkout changed while the checks ran; run fraim-release again"
 fi
 
 work="$(mktemp -d)" || die "no temp folder"
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/tree"
-git archive HEAD | tar -xf - -C "$work/tree" || die "could not export the commit"
+git archive "$commit" | tar -xf - -C "$work/tree" || die "could not export the commit"
 printf 'version=%s\ncommit=%s\n' "$version" "$commit" > "$work/tree/RELEASE"
 tar_file="$work/fraimwork-$version.tar.gz"
 tar -czf "$tar_file" -C "$work/tree" . || die "could not pack the release"
@@ -54,7 +58,7 @@ if [ -n "$dry" ]; then
   echo "$version is ready: signed and verified, nothing published."
   exit 0
 fi
-git tag -a "$version" -m "$version" || die "could not create the tag"
+git tag -a "$version" -m "$version" "$commit" || die "could not create the tag"
 git push --quiet origin "refs/tags/$version" || die "could not push the tag $version"
 gh release create "$version" "$tar_file" "$tar_file.sig" --verify-tag --title "$version" --generate-notes \
   || die "the tag $version is pushed but the release was not created; run: gh release create $version"

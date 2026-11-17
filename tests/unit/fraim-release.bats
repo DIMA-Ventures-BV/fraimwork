@@ -9,8 +9,10 @@ setup() {
   git init -q --bare -b main "$T/origin.git"
   git init -q -b main "$T/repo"
   cd "$T/repo" || exit 1
-  mkdir -p bin config
+  mkdir -p bin config tests
   cp "$SRC/bin/fraim-release" bin/
+  printf '#!/usr/bin/env bash\n[ "$(cat "$T/checks")" = pass ]\n' > tests/check-linux.sh
+  chmod +x tests/check-linux.sh
   ssh-keygen -q -t ed25519 -N '' -C test -f "$T/key"
   printf 'fraim-release %s\n' "$(cut -d' ' -f1,2 "$T/key.pub")" > config/release-signers
   echo code > code.txt
@@ -23,13 +25,12 @@ setup() {
   cat > "$T/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "run list") cat "$T/ci" ;;
   "release create") printf '%s\n' "$*" > "$T/gh.log"; for a in "$@"; do case "$a" in *.tar.gz|*.sig) cp "$a" "$T/pub-$(basename "$a")" ;; esac; done ;;
 esac
 EOF
   chmod +x "$T/bin/gh"
   export PATH="$T/bin:$PATH"
-  echo success > "$T/ci"
+  echo pass > "$T/checks"
 }
 
 @test "a good run signs, tags and publishes a release the updater accepts" {
@@ -95,11 +96,28 @@ EOF
   ! git rev-parse -q --verify refs/tags/v1.0.0
 }
 
-@test "CI that is not green is refused" {
-  echo failure > "$T/ci"
+@test "--dry-run does not run the checks" {
+  echo fail > "$T/checks"
+  run bin/fraim-release v1.0.0 --dry-run
+  [ "$status" -eq 0 ]
+  [ ! -e "$T/gh.log" ]
+}
+
+@test "a checkout that moves while the checks run is refused" {
+  printf '#!/usr/bin/env bash\necho moved > "$PWD/code.txt"\n' > tests/check-linux.sh
+  git commit -qam "checks that touch the checkout"
+  git push -q origin main
   run bin/fraim-release v1.0.0
   [ "$status" -eq 1 ]
-  [[ "$output" == *CI* ]]
+  [[ "$output" == *"changed while the checks ran"* ]]
+  ! git rev-parse -q --verify refs/tags/v1.0.0
+}
+
+@test "a commit that fails make check is refused" {
+  echo fail > "$T/checks"
+  run bin/fraim-release v1.0.0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"make check failed"* ]]
   ! git rev-parse -q --verify refs/tags/v1.0.0
 }
 
