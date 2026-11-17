@@ -96,6 +96,13 @@ EOF
   ! git rev-parse -q --verify refs/tags/v1.0.0
 }
 
+@test "--dry-run does not run the checks" {
+  echo fail > "$T/checks"
+  run bin/fraim-release v1.0.0 --dry-run
+  [ "$status" -eq 0 ]
+  [ ! -e "$T/gh.log" ]
+}
+
 @test "a commit that fails make check is refused" {
   echo fail > "$T/checks"
   run bin/fraim-release v1.0.0
