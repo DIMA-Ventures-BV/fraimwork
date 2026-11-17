@@ -103,6 +103,16 @@ EOF
   [ ! -e "$T/gh.log" ]
 }
 
+@test "a checkout that moves while the checks run is refused" {
+  printf '#!/usr/bin/env bash\necho moved > "$PWD/code.txt"\n' > tests/check-linux.sh
+  git commit -qam "checks that touch the checkout"
+  git push -q origin main
+  run bin/fraim-release v1.0.0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"changed while the checks ran"* ]]
+  ! git rev-parse -q --verify refs/tags/v1.0.0
+}
+
 @test "a commit that fails make check is refused" {
   echo fail > "$T/checks"
   run bin/fraim-release v1.0.0
