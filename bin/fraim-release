@@ -36,8 +36,7 @@ fi
 [ -f "$KEY" ] || die "no signing key at $KEY"
 # The checks run here, on the exact commit being released, the way CI would (Ubuntu in
 # Docker). Pull-request checks run locally too, so there is no CI run to read.
-# FRAIM_RELEASE_SKIP_CHECKS=1 skips them (only when the same commit just passed them).
-if [ -z "$dry" ] && [ "${FRAIM_RELEASE_SKIP_CHECKS:-}" != 1 ]; then
+if [ -z "$dry" ]; then
   tests/check-linux.sh || die "make check failed on this commit; nothing was released"
 fi
 
